@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<!--
+    MAREJ · АКТИВАЦИЯ
+    Полноценный экран в той же дизайн-системе, что и основная панель.
+    Структура:
+      1. Логотип + заголовок
+      2. Одношаговая форма: HWID → ввод ключа → активировать
+      3. Пояснение процесса активации
+    Логика:
+      - HWID — read-only, кнопка «копировать»
+      - Кнопка активации: idle / loading / success / error
+      - При успехе — redirect на /
+      - При ошибке — inline-объяснение, без перезагрузки
+-->
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0a0b10">
+    <title>Marej — Активация</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-app:        #0a0b10;
+            --bg-elev-1:     #11141c;
+            --bg-elev-2:     #161a25;
+            --bg-elev-3:     #1d2331;
+            --bg-input:      #0e111a;
+            --border-subtle: #181d28;
+            --border:        #232a3a;
+            --border-strong: #36405a;
+            --text-1:        #e8ecf4;
+            --text-2:        #a4adc1;
+            --text-3:        #6c768c;
+            --text-mute:     #4a5266;
+            --accent:        #6b8aff;
+            --accent-hover:  #5879ee;
+            --accent-soft:   rgba(107, 138, 255, 0.10);
+            --accent-ring:   rgba(107, 138, 255, 0.22);
+            --success:       #2dc88a;
+            --success-soft:  rgba(45, 200, 138, 0.10);
+            --danger:        #e26b7d;
+            --danger-soft:   rgba(226, 107, 125, 0.10);
+            --warn:          #d99c3a;
+            --warn-soft:     rgba(217, 156, 58, 0.10);
+            --r-sm: 6px;
+            --r-md: 8px;
+            --r-lg: 12px;
+            --r-xl: 16px;
+            --t-fast: 140ms;
+            --t-base: 220ms;
+            --ease: cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            font-family: 'Inter', -apple-system, system-ui, 'Segoe UI', Tahoma, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            color: var(--text-1);
+            background: var(--bg-app);
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            min-height: 100vh;
+        }
+        .activate-shell {
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            gap: 28px;
+            animation: shellIn 0.4s var(--ease);
+        }
+        @keyframes shellIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+        .activate-head { text-align: center; }
+        .activate-logo {
+            width: 56px; height: 56px;
+            margin: 0 auto 16px;
+            border-radius: var(--r-lg);
+            object-fit: contain;
+            display: block;
+        }
+        .activate-eyebrow {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.10em;
+            color: var(--accent);
+            margin-bottom: 8px;
+        }
+        .activate-title {
+            font-size: 22px;
+            font-weight: 600;
+            color: var(--text-1);
+            margin: 0 0 6px 0;
+            letter-spacing: -0.015em;
+            line-height: 1.25;
+        }
+        .activate-desc {
+            font-size: 13.5px;
+            color: var(--text-2);
+            margin: 0;
+            line-height: 1.55;
+        }
+
+        .activate-card {
+            background: var(--bg-elev-1);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--r-xl);
+            overflow: hidden;
+        }
+        .activate-section {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .activate-section:last-child { border-bottom: none; }
+        .activate-section-label {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-3);
+            margin-bottom: 8px;
+        }
+        .activate-section-label .step-num {
+            width: 18px; height: 18px;
+            border-radius: 50%;
+            display: inline-flex; align-items: center; justify-content: center;
+            background: var(--bg-elev-3);
+            color: var(--text-2);
+            font-size: 10px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .activate-section-hint {
+            font-size: 12px;
+            color: var(--text-3);
+            margin: 0;
+            line-height: 1.5;
+        }
+
+        .hwid-row {
+            display: flex;
+            align-items: stretch;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .hwid-value {
+            flex: 1;
+            padding: 10px 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--r-sm);
+            color: var(--text-1);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            letter-spacing: -0.01em;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .copy-btn {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 0 12px;
+            background: var(--bg-elev-2);
+            border: 1px solid var(--border);
+            color: var(--text-2);
+            border-radius: var(--r-sm);
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all var(--t-fast) var(--ease);
+        }
+        .copy-btn:hover { color: var(--text-1); border-color: var(--border-strong); background: var(--bg-elev-3); }
+        .copy-btn.copied { color: var(--success); border-color: rgba(45, 200, 138, 0.3); background: var(--success-soft); }
+        .copy-btn svg { width: 12px; height: 12px; }
+
+        .license-input {
+            width: 100%;
+            padding: 10px 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            color: var(--text-1);
+            border-radius: var(--r-sm);
+            font-size: 13px;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 0.04em;
+            transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+            margin-top: 12px;
+        }
+        .license-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-ring);
+        }
+        .license-input::placeholder { color: var(--text-mute); font-family: 'Inter', sans-serif; letter-spacing: 0; }
+
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            height: 44px;
+            padding: 0 20px;
+            border-radius: var(--r-sm);
+            font-size: 13.5px;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all var(--t-fast) var(--ease);
+            width: 100%;
+        }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.10);
+        }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-hover); transform: translateY(-1px); }
+        .btn-primary:active:not(:disabled) { transform: translateY(0); }
+        .btn-primary[data-state="loading"] { color: transparent; pointer-events: none; }
+        .btn-primary[data-state="loading"]::after {
+            content: ''; position: absolute;
+            width: 16px; height: 16px;
+            border: 2px solid currentColor;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: btnSpin 0.7s linear infinite;
+        }
+        .btn-primary { position: relative; }
+        @keyframes btnSpin { to { transform: rotate(360deg); } }
+        .btn-primary[data-state="success"] { background: var(--success) !important; color: #062a1f !important; }
+        .btn-primary[data-state="error"]   { background: var(--danger)  !important; color: #fff      !important; }
+
+        .activate-error {
+            display: none;
+            padding: 12px 14px;
+            margin-top: 14px;
+            background: var(--danger-soft);
+            border: 1px solid rgba(226, 107, 125, 0.3);
+            border-radius: var(--r-md);
+            color: var(--danger);
+            font-size: 12.5px;
+            line-height: 1.5;
+        }
+        .activate-error.visible { display: flex; gap: 8px; align-items: flex-start; }
+        .activate-error svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 2px; }
+
+        .activate-foot {
+            text-align: center;
+            font-size: 11.5px;
+            color: var(--text-mute);
+            line-height: 1.5;
+        }
+        .activate-foot a { color: var(--text-3); text-decoration: none; transition: color var(--t-fast) var(--ease); }
+        .activate-foot a:hover { color: var(--accent); }
+
+        @media (max-width: 540px) {
+            body { padding: 16px; }
+            .activate-shell { gap: 20px; }
+            .activate-title { font-size: 19px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="activate-shell">
+        <div class="activate-head">
+            <img class="activate-logo"
+                 src="brand-logo.webp"
+                 srcset="brand-logo.webp 1x, brand-logo@2x.webp 2x"
+                 type="image/webp"
+                 alt="Marej"
+                 onerror="this.onerror=null;this.src='brand-logo.png';this.srcset='brand-logo.png 1x, brand-logo@2x.png 2x';">
+            <div class="activate-eyebrow">Активация</div>
+            <h1 class="activate-title">Введите лицензионный ключ</h1>
+            <p class="activate-desc">Два шага: скопируйте идентификатор компьютера и введите ключ, который выдаст разработчик.</p>
+        </div>
+
+        <form class="activate-card" id="activateForm" method="post" action="/activate" autocomplete="off">
+            <div class="activate-section">
+                <div class="activate-section-label">
+                    <span class="step-num">1</span>
+                    <span>Идентификатор компьютера (HWID)</span>
+                </div>
+                <p class="activate-section-hint">Отправьте это значение разработчику для получения ключа активации.</p>
+                <div class="hwid-row">
+                    <div class="hwid-value" id="hwidValue">{HWID}</div>
+                    <button type="button" class="copy-btn" id="copyBtn" title="Скопировать HWID">
+                        <svg id="copyIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        <span id="copyLabel">Скопировать</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="activate-section">
+                <div class="activate-section-label">
+                    <span class="step-num">2</span>
+                    <span>Лицензионный ключ</span>
+                </div>
+                <p class="activate-section-hint">Вставьте ключ, который выдал разработчик. Ключ чувствителен к регистру.</p>
+                <input class="license-input" type="text" name="license_key" id="licenseKey"
+                       placeholder="XXXX-XXXX-XXXX-XXXX"
+                       required autocomplete="off" maxlength="64"
+                       style="text-transform: uppercase;">
+            </div>
+
+            <div class="activate-section">
+                <button type="submit" class="btn btn-primary" id="activateBtn">Активировать</button>
+                <div class="activate-error" id="activateError">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    <span id="activateErrorText">Ключ не подходит. Проверьте правильность ввода.</span>
+                </div>
+            </div>
+        </form>
+
+        <div class="activate-foot">
+            После активации откроется панель управления. Все настройки хранятся локально.
+        </div>
+    </div>
+
+    <script>
+        // Copy HWID
+        const copyBtn = document.getElementById('copyBtn');
+        const copyLabel = document.getElementById('copyLabel');
+        const hwidValue = document.getElementById('hwidValue');
+        copyBtn.addEventListener('click', async () => {
+            const text = hwidValue.textContent.trim();
+            try {
+                await navigator.clipboard.writeText(text);
+                copyBtn.classList.add('copied');
+                copyLabel.textContent = 'Скопировано';
+                setTimeout(() => {
+                    copyBtn.classList.remove('copied');
+                    copyLabel.textContent = 'Скопировать';
+                }, 1800);
+            } catch (e) {
+                // Fallback: select text
+                const range = document.createRange();
+                range.selectNode(hwidValue);
+                window.getSelection().removeAllRanges();
+                window.getSelection().addRange(range);
+            }
+        });
+
+        // Form submission: prevent default, send via fetch, handle states
+        const form = document.getElementById('activateForm');
+        const btn = document.getElementById('activateBtn');
+        const errBox = document.getElementById('activateError');
+        const errText = document.getElementById('activateErrorText');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errBox.classList.remove('visible');
+            btn.dataset.state = 'loading';
+            btn.disabled = true;
+            const fd = new FormData(form);
+            try {
+                const res = await fetch('/activate', {
+                    method: 'POST',
+                    body: fd,
+                    redirect: 'manual',
+                });
+                // 303 redirect to / → reload
+                if (res.status === 0 || res.status === 200 || res.status === 303) {
+                    btn.dataset.state = 'success';
+                    btn.textContent = 'Активировано';
+                    setTimeout(() => { window.location.href = '/'; }, 700);
+                    return;
+                }
+                if (res.status === 200) {
+                    // Server returned the inline error page
+                    const html = await res.text();
+                    if (html.includes('Неверный ключ')) {
+                        throw new Error('Ключ не подходит для этого HWID. Проверьте правильность ввода или запросите новый ключ у разработчика.');
+                    }
+                    throw new Error('Не удалось активировать. Попробуйте ещё раз.');
+                }
+                throw new Error('Сервер недоступен. Повторите попытку.');
+            } catch (err) {
+                btn.dataset.state = 'error';
+                btn.disabled = false;
+                errText.textContent = err.message;
+                errBox.classList.add('visible');
+                setTimeout(() => {
+                    if (btn.dataset.state === 'error') {
+                        delete btn.dataset.state;
+                        btn.textContent = 'Активировать';
+                    }
+                }, 2200);
+            }
+        });
+
+        // Auto-uppercase as user types
+        const keyInput = document.getElementById('licenseKey');
+        keyInput.addEventListener('input', (e) => {
+            const pos = e.target.selectionStart;
+            e.target.value = e.target.value.toUpperCase();
+            e.target.setSelectionRange(pos, pos);
+        });
+    </script>
+</body>
+</html>
