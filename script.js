@@ -17,6 +17,94 @@
     return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  // ─── САЛЮТ ───────────────────────────────────────────────────────────────────
+  function launchFireworks(x, y) {
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = [
+      'position:fixed', 'inset:0', 'width:100%', 'height:100%',
+      'pointer-events:none', 'z-index:99999'
+    ].join(';');
+    document.body.appendChild(canvas);
+
+    const ctx = canvas.getContext('2d');
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const COLORS = [
+      '#ff4d6d','#ff9f1c','#ffbe0b','#06d6a0',
+      '#118ab2','#a855f7','#ec4899','#22d3ee'
+    ];
+
+    const particles = [];
+    const BURST_COUNT = 6;
+    const PER_BURST   = 28;
+
+    for (let b = 0; b < BURST_COUNT; b++) {
+      const bx = x + (Math.random() - 0.5) * 280;
+      const by = y + (Math.random() - 0.5) * 200;
+      const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+      const delay = b * 80;
+
+      for (let i = 0; i < PER_BURST; i++) {
+        const angle  = (Math.PI * 2 * i) / PER_BURST + Math.random() * 0.3;
+        const speed  = 2.5 + Math.random() * 4;
+        particles.push({
+          x: bx, y: by,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed - 1.5,
+          alpha: 1,
+          color,
+          size: 3 + Math.random() * 3,
+          gravity: 0.08 + Math.random() * 0.04,
+          delay,
+          born: false
+        });
+      }
+    }
+
+    let start = null;
+    const DURATION = 1800;
+
+    function frame(ts) {
+      if (!start) start = ts;
+      const elapsed = ts - start;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      let alive = false;
+      for (const p of particles) {
+        if (elapsed < p.delay) { alive = true; continue; }
+        if (!p.born) p.born = true;
+
+        p.x  += p.vx;
+        p.y  += p.vy;
+        p.vy += p.gravity;
+        p.vx *= 0.97;
+        p.alpha -= 0.018;
+
+        if (p.alpha <= 0) continue;
+        alive = true;
+
+        ctx.globalAlpha = Math.max(0, p.alpha);
+        ctx.fillStyle   = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 1;
+
+      if (alive && elapsed < DURATION) {
+        requestAnimationFrame(frame);
+      } else {
+        canvas.remove();
+      }
+    }
+
+    requestAnimationFrame(frame);
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+
   function openModal(id) {
     const m = document.getElementById(id);
     if (!m) return;
@@ -38,7 +126,6 @@
     if (!m) return;
     m.classList.remove('active');
     m.setAttribute('aria-hidden', 'true');
-    // если все модалки закрыты — возвращаем прокрутку
     const anyOpen = document.querySelector('.modal.active');
     if (!anyOpen) {
       delete document.body.dataset.modalOpen;
@@ -305,6 +392,8 @@
         const id = nav.getAttribute('href').slice(1);
         const s = document.getElementById(id);
         if (s) s.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // 🎆 Салют при переходе между секциями
+        launchFireworks(e.clientX, e.clientY);
         return;
       }
 
