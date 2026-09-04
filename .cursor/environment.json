@@ -1,0 +1,16 @@
+{
+  "name": "MaryJane Parser",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "app",
+      "command": "BROWSER_OPEN_ON_START=0 API_LOG_LEVEL=info .venv/bin/python main.py"
+    }
+  ],
+  "ports": [
+    {
+      "name": "admin",
+      "port": 8000
+    }
+  ]
+}

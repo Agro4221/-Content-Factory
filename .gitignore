@@ -1,0 +1,14 @@
+# Python virtual environment (created by .cursor/install.sh / deps.py)
+.venv/
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# Local secrets / runtime data
+.env
+temp_media/
+
+# SQLite runtime sidecar files
+*.db-shm
+*.db-wal
