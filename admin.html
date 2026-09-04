@@ -1822,10 +1822,6 @@ const NAV_CONFIG = {
             'posts/logs':     { title: 'Консоль (логи)',             crumb: 'Консоль (логи)' },
             'posts/faq':      { title: 'Инструкция и FAQ',           crumb: 'Инструкция и FAQ' },
         }
-    },
-        }
-    },
-        }
     }
 };
 
@@ -1964,7 +1960,7 @@ function navigate(route) {
 
     // Модульные дашборды — подтягиваем данные при входе
     if (route === 'posts/dashboard') {
-        const mod = route.startsWith('posts') ? 'posts' : route.startsWith() ? : ;
+        const mod = 'posts';
         if (typeof renderModuleDashboard === 'function') renderModuleDashboard(mod);
     }
 
@@ -2850,42 +2846,6 @@ async function refreshBotStatus() {
     const posts = getModuleRuntime('posts');
     _dashCache.bot = posts.status;
     renderDashboardFromCache();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-            body: JSON.stringify({ lines }),
-        });
-        if (res.status === 403) {
-            toast({ type: 'warn', title: 'Лицензия', text: 'Сначала активируйте лицензию!' });
-            return;
-        }
-        const data = await res.json();
-        toast({
-            type: 'success',
-            title: 'Импорт аккаунтов',
-            text: `Создано: ${data.created || 0}, пропущено: ${data.skipped || 0}`,
-        });
-        input.value = '';
-        refreshReviewsStatus();
-        renderModuleDashboard();
-    } catch (e) {
-        toast({ type: 'danger', title: 'Ошибка', text: 'Не удалось импортировать аккаунты.' });
-    }
 }
 
 /* ============================================================
@@ -3790,8 +3750,6 @@ async function renderModuleDashboard(module) {
         if (r.ok) logs = await r.json();
     } catch (e) {}
     if (module === 'posts')     renderPostsDashboard(stats, logs);
-    else if (module === ) renderBehaviorDashboard(stats, logs);
-    else if (module === )  renderReviewsDashboard(stats, logs);
 }
 
 /* ============================================================
@@ -3811,7 +3769,7 @@ async function renderModuleHealthForRoute(route) {
     // Подтягиваем stats для модуля (best-effort, GET — без проверки лицензии)
     let stats = {};
     try {
-        const url = module === 'posts'     ? '/api/stats/posts'
+        const url = module === 'posts' ? '/api/stats/posts' : null;
         if (url) {
             const res = await fetch(url);
             if (res.ok) stats = await res.json();
@@ -3848,34 +3806,6 @@ function renderModuleHealth(module, stats) {
         _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
         if ((stats.sources_count || 0) > 0) _setHealthItem('sources', `${stats.sources_count} каналов`, `${stats.active_sources_24h || 0} активных за 24ч`, 'ok');
         else                                 _setHealthItem('sources', 'не заданы', 'добавьте в настройках парсинга', 'err');
-    } else if (module === ) {
-        if (stats.proxy_status) applyProxyStatusUI(stats.proxy_status);
-        const proxyDisplay = getProxyDisplayStatus(_dashCache.settings || {});
-        if (stats.implemented === false) {
-            _setHealthItem('bot',  'В разработке', 'бэкенд не подключён', 'dev');
-            _setHealthItem('ai',   '—',           'настройки преконфигурированы', 'dev');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources','настройки', 'URL и ключевые слова', 'warn');
-        } else {
-            _setHealthItem('bot', stats.running ? 'Работает' : 'Остановлен', stats.running ? 'сценарии выполняются' : 'запустите модуль', stats.running ? 'ok' : 'warn');
-            _setHealthItem('ai', `${stats.sessions_today || 0} за сегодня`, 'поведенческие сессии', (stats.sessions_today || 0) > 0 ? 'ok' : 'warn');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources', `${stats.targets_count || 0} целей`, (stats.last_session_at ? `последняя: ${formatLogTime(stats.last_session_at)}` : 'сессий пока нет'), (stats.targets_count || 0) > 0 ? 'ok' : 'warn');
-        }
-    } else if (module === ) {
-        if (stats.proxy_status) applyProxyStatusUI(stats.proxy_status);
-        const proxyDisplay = getProxyDisplayStatus(_dashCache.settings || {});
-        if (stats.implemented === false) {
-            _setHealthItem('bot',  'В разработке', 'бэкенд не подключён', 'dev');
-            _setHealthItem('ai',   '—',           'шаблоны и модели заданы', 'dev');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources','аккаунты',  'Google-аккаунты, пул', 'warn');
-        } else {
-            _setHealthItem('bot', stats.running ? 'Работает' : 'Остановлен', stats.running ? 'очередь в обработке' : 'запустите модуль', stats.running ? 'ok' : 'warn');
-            _setHealthItem('ai', `${stats.accounts_active || 0} активных`, 'аккаунты готовы к публикации', (stats.accounts_active || 0) > 0 ? 'ok' : 'warn');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources', `${stats.queue_pending || 0} в очереди`, stats.last_publish_at ? `последняя публикация ${formatLogTime(stats.last_publish_at)}` : 'публикаций пока нет', (stats.queue_pending || 0) > 0 ? 'ok' : 'warn');
-        }
     }
 }
 
@@ -4516,8 +4446,6 @@ window.addEventListener('DOMContentLoaded', () => {
         ['form-ai', 'form-parsing', 'form-proxy'].forEach(renderSaveMeta);
     });
     refreshPostsStats();
-    refreshBehaviorStatus();
-    refreshReviewsStatus();
     fetchProxyStatus();
     startSaveMetaTicker();
     startPollingTimers();
