@@ -1,127 +1,196 @@
-# MaryJane Parser
+# 🏭 MaryJane Parser — Content Factory
 
-> **RU:** Локальный Telegram-парсер и публикатор с FastAPI-панелью, AI-рерайтом, SQLite и поддержкой прокси. Проект создаётся в процессе обучения программированию, поэтому здесь честно показаны и готовые части, и незавершённые.
+> Локальный конвейер для сбора Telegram-контента, его фильтрации и AI-рерайта с последующей публикацией в целевые каналы.
 >
-> **EN:** A local Telegram parser/publisher with a FastAPI admin panel, AI rewriting, SQLite storage and proxy support. I am building this project while learning software engineering, so the repository intentionally shows both finished parts and work in progress.
+> Проект вырос из практической задачи и постепенно превращается в более структурированный content pipeline с FastAPI-панелью, SQLite, прокси и несколькими режимами AI.
 
-## 🚦 Status / Статус
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-panel-009688?logo=fastapi&logoColor=white)
+![Telegram](https://img.shields.io/badge/Telegram-Telethon%20%2B%20aiogram-26A5E4?logo=telegram&logoColor=white)
+![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)
+![AI](https://img.shields.io/badge/AI-OpenAI--compatible-412991)
+![Proxy](https://img.shields.io/badge/Proxy-HTTP%20%2F%20SOCKS%20%2F%20MTProto-555555)
 
-**Working prototype / Рабочий прототип**
+> ⚠️ **Статус:** **Working Prototype / Рабочий прототип**
+>
+> Основной pipeline уже работает, но часть старых и инфраструктурных возможностей всё ещё находится в доработке. Проект не позиционируется как законченный production-сервис.
 
-| Component | Status | Notes |
-|---|---|---|
-| Telegram parsing | ✅ | Reads recent messages from configured sources |
-| Deduplication | ✅ | Persistent SQLite state |
-| Ad filtering | ✅ | Configurable keyword filter |
-| AI rewriting | ✅ | Local or remote OpenAI-compatible endpoint |
-| Publishing | ✅ | Text and media via Telegram Bot API |
-| FastAPI panel | ✅ | Settings, status, logs and proxy diagnostics |
-| HTTP / SOCKS / MTProto | ✅ | Proxy checks and runtime support |
-| Headless Telegram session | 🟡 | Requires a prepared session |
-| Legacy licensing | 🟡 | Compatibility layer, not a complete licensing product |
-| Payments | ❌ | Checkout is a stub |
-| Production web auth | ❌ | Panel is intended for local use |
-| CI release pipeline | ❌ | Build spec exists, release automation does not |
+## ✨ Что умеет
 
-## 🧩 Architecture / Архитектура
+| Возможность | Статус |
+|---|---|
+| 📥 Telegram parsing | ✅ |
+| 🧹 Фильтрация рекламы | ✅ |
+| ♻️ Защита от дублей | ✅ |
+| 🤖 AI-рерайт | ✅ |
+| 📝 Структурированный разбор результата AI | ✅ |
+| 🖼️ Обработка и публикация медиа | ✅ |
+| 📤 Публикация через Telegram Bot API | ✅ |
+| 🖥️ FastAPI admin panel | ✅ |
+| 🌐 HTTP / SOCKS4 / SOCKS5 / MTProto | ✅ |
+| 💾 SQLite + миграции | ✅ |
+| 🧰 PyInstaller build configuration | ✅ |
+| 🔐 Headless Telegram session setup | 🟡 |
+| 📜 Legacy licensing | 🟡 |
+| 💳 Payments | ❌ |
+| 🔑 Production web authentication | ❌ |
+| 🚀 Automated release pipeline | ❌ |
+
+## 🔄 Как работает pipeline
+
+~~~text
+Telegram sources
+       │
+       ▼
+┌─────────────────┐
+│    Telethon     │
+│     parser      │
+└────────┬────────┘
+         ▼
+┌────────────────────────┐
+│ Deduplication +        │
+│ advertisement filter   │
+└────────┬───────────────┘
+         ▼
+┌─────────────────┐
+│    AI rewrite   │
+│ local / remote  │
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│ Topic / text    │
+│ processing      │
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│ aiogram Bot API │
+└────────┬────────┘
+         ▼
+ Target Telegram channel
+~~~
+
+## 🏗️ Архитектура
 
 ~~~mermaid
 flowchart LR
-    TG["Telegram sources"] --> P["Telethon parser"]
-    P --> F["Deduplication + ad filter"]
-    F --> AI["AI rewrite"]
-    AI --> T["Topic / text parser"]
-    T --> B["aiogram Bot API"]
-    B --> OUT["Target channel"]
+    SRC["Telegram sources"] --> PARSER["Telethon parser"]
+    PARSER --> FILTER["Deduplication + ad filter"]
+    FILTER --> AI["AI rewrite"]
+    AI --> PARSE["Topic / text parser"]
+    PARSE --> PUB["aiogram publisher"]
+    PUB --> OUT["Target channel"]
 
-    UI["FastAPI Admin"] --> DB["SQLite"]
-    UI --> PX["Proxy diagnostics"]
+    PANEL["FastAPI Admin"] --> DB["SQLite"]
+    PARSER --> DB
+    PUB --> DB
+    PANEL --> PROXY["Proxy diagnostics"]
+
     AI -. local / remote .-> LLM["OpenAI-compatible LLM"]
-    P --> DB
-    B --> DB
 ~~~
 
-## 🎯 Goal / Цель
+## 🎯 Цель проекта
 
-The project automates a small content pipeline:
+Автоматизировать повторяющийся контентный процесс:
 
-**source → filter → AI rewrite → topic selection → publish → statistics**
+**источник → фильтрация → AI-рерайт → обработка → публикация**
 
-The code grew from a practical experiment rather than from a finished framework.
+При этом проект должен оставаться локальным и относительно простым в развёртывании.
 
-## 🛠️ What is implemented / Что сделано
+## 🛠️ Реализовано
 
-- asynchronous Telegram processing;
-- duplicate protection;
-- grouped media handling;
-- configurable ad filtering;
-- local and remote AI modes;
-- structured AI response parsing;
-- Telegram publishing;
-- SQLite migrations and persistent settings;
-- FastAPI settings/status/log API;
-- HTTP, SOCKS4/5 and MTProto proxy support;
-- PyInstaller build configuration;
-- smoke-test tooling.
+Сейчас в проекте есть асинхронная обработка Telegram, защита от повторной публикации, фильтрация рекламного контента, AI-рерайт в локальном или удалённом OpenAI-compatible endpoint, работа с текстом и медиа, SQLite-хранилище, FastAPI-панель и диагностика прокси.
 
-## 🧪 What is unfinished / Что не готово
+Также присутствует конфигурация сборки через PyInstaller и набор служебных smoke-check инструментов.
 
-Some parts are intentionally incomplete: automatic Telegram authorization, production authentication for the panel, a complete licensing backend, payment processing, release automation and several older experimental modules.
+## 🟡 Что ещё не готово
 
-These are documented as gaps instead of being presented as completed functionality.
+Не завершены полноценная автоматическая авторизация Telegram без заранее подготовленной сессии, production-аутентификация веб-панели, полноценный licensing/payment backend и автоматизированный release pipeline.
 
-## 🧱 Tech stack / Стек
+В репозитории также остаются отдельные старые/экспериментальные части, которые не являются обязательными для основного pipeline.
+
+## ⚙️ Конфигурация
+
+Локальная конфигурация задаётся через `.env`, созданный на основе `.env.example`.
+
+Основные группы настроек:
 
 ~~~text
-Python 3.11+
-FastAPI / Uvicorn
-Telethon + aiogram
+Telegram
+AI / OpenAI-compatible endpoint
 SQLite
-OpenAI-compatible AI API
-HTTP / SOCKS4 / SOCKS5 / MTProto
-PyInstaller
+Proxy
+FastAPI
+Publishing
+Build / packaging
 ~~~
 
-## ▶️ Run / Запуск
+Реальные ключи, токены и локальные данные должны оставаться вне Git.
 
-~~~bash
+## 🚀 Быстрый старт
+
+Установи зависимости:
+
+~~~powershell
+python -m pip install -r requirements.txt
+~~~
+
+Создай `.env` на основе `.env.example`, затем запусти:
+
+~~~powershell
 python main.py
 ~~~
 
-Local panel:
+Локальная панель:
 
 ~~~text
 http://127.0.0.1:8000/
 ~~~
 
-Create .env from .env.example.
+Для первого запуска лучше проверить pipeline на тестовом канале, а затем подключать реальные источники и публикацию.
 
-## 🧑‍💻 About the author / Об авторе
+## 🧪 Проверка
 
-**RU:** Я пока новичок в разработке и учусь прямо на этих проектах. Постепенно разбираюсь с Python, API, базами данных, асинхронностью, архитектурой приложений, тестированием и инструментами разработки. Поэтому здесь могут встречаться неидеальные решения — это ещё и практический дневник моего роста.
+~~~text
+Environment
+    │
+    ├─ configuration check
+    ├─ database / migrations
+    ├─ proxy diagnostics
+    ├─ Telegram connectivity
+    ├─ AI rewrite
+    └─ publishing smoke test
+~~~
 
-**EN:** I am still a beginner developer and I am learning by building these projects. I am gradually working through Python, APIs, databases, async programming, application architecture, testing and development tooling. Some solutions may be imperfect, and the repository is also a record of that learning process.
+Автоматические проверки не заменяют реальную авторизацию Telegram и проверку внешнего AI endpoint на конкретном компьютере.
 
-## 📈 Roadmap / Дальше
+## 🗺️ Roadmap
 
 ~~~mermaid
 flowchart LR
-    A["Prototype"] --> B["Stabilization"]
-    B --> C["Better tests"]
+    A["Working prototype"] --> B["Stabilization"]
+    B --> C["Better test coverage"]
     C --> D["Authentication"]
-    D --> E["CI / packaging"]
+    D --> E["Packaging / releases"]
     E --> F["Stable release"]
 ~~~
 
-## 📁 Structure / Структура
+Главная задача roadmap — сделать основной pipeline предсказуемым, удобным для развёртывания и сопровождения.
+
+## 🧑‍💻 Об авторе
+
+Я пока **новичок в разработке** и учусь прямо на практике, собирая этот и другие проекты. Здесь я разбираюсь с Python, асинхронностью, Telegram API, базами данных, веб-панелями, AI-интеграциями, тестированием и упаковкой приложений.
+
+Поэтому часть решений может быть экспериментальной — README специально показывает реальное состояние проекта, а не пытается представить его более готовым, чем он есть.
+
+## 📁 Структура
 
 ~~~text
-main.py              # parser / publisher loop
-Site.py              # FastAPI panel and API
-database.py          # SQLite and migrations
-config.py            # application configuration
-env_loader.py        # environment loading
-proxy_check.py       # proxy diagnostics
+main.py              # основной parser / publisher loop
+Site.py              # FastAPI panel и API
+database.py          # SQLite и миграции
+config.py            # конфигурация
+env_loader.py        # загрузка окружения
+proxy_check.py       # диагностика прокси
 Auth.py              # legacy compatibility
 Parser.spec          # PyInstaller configuration
 tools/               # checks and utilities
@@ -130,6 +199,4 @@ admin.html            # admin UI
 
 ---
 
-**RU:** Проект развивается вместе с моими навыками.
-
-**EN:** The project grows together with my skills.
+> 🏭 **MaryJane Parser — живой учебный проект, который постепенно превращается в локальный content factory.**
