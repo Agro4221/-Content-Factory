@@ -1,0 +1,32 @@
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Runtime data
+*.db
+*.db-*
+*.session
+temp_media/
+logs/
+
+# Build artifacts
+build/
+dist/
+*.toc
+*.pyz
+*.zip
+warn-*.txt
+xref-*.html
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
