@@ -24,12 +24,8 @@ def check_import(module: str) -> None:
     try:
         __import__(module)
         ok(module)
-    except ImportError as exc:
-        fail(module, exc)
     except Exception as exc:
-        # Ошибки типа ModuleNotFoundError обрабатываем как импорты
-        if "No module named" in str(exc):
-            fail(module, exc)
+        fail(module, exc)
 
 
 def main() -> int:
@@ -42,10 +38,6 @@ def main() -> int:
         "startup",
         "database",
         "Auth",
-        # Удалённые модули больше не проверяем
-        # "licensing.client",  <-- удалён
-        # "modules.behavior.engine",  <-- удалён
-        # "modules.reviews.engine",  <-- удалён
     ):
         check_import(mod)
 
@@ -77,20 +69,6 @@ def main() -> int:
             fail(".env.example", FileNotFoundError(env_example))
     except Exception as exc:
         fail("config paths", exc)
-
-    try:
-        # Заглушка проверки лицензии — импортируем, если модуль существует
-        from licensing.client import LicenseClient  # type: ignore[import-not-found]
-        
-        client = LicenseClient()
-        assert hasattr(client, "refresh_online_if_needed")
-        ok("LicenseClient.refresh_online_if_needed(force=)")
-    except ImportError as exc:
-        # Модуль лицензий удалён — пропускаем проверку
-        print(f"  SKIP licensing.client (модуль удалён)")
-        FAILURES.append(f"licensing.client skipped: {exc}")
-    except Exception as exc:
-        fail("licensing.client", exc)
 
     try:
         from Site import app, MODULE_RUNTIME_META
