@@ -1,6 +1,8 @@
 """Первый запуск, каталоги, проверка лицензии при старте приложения."""
 from __future__ import annotations
 
+from typing import Any
+
 import asyncio
 import os
 
@@ -38,7 +40,7 @@ def seed_settings_from_env() -> int:
     return written
 
 
-def _get_license_status() -> dict[str, any]:
+def _get_license_status() -> dict[str, Any]:
     """Заглушка проверки лицензии — всегда возвращает активную лицензию."""
     hwid = get_hwid()
     
@@ -71,7 +73,7 @@ def _get_license_status() -> dict[str, any]:
     }
 
 
-def verify_license_at_boot() -> dict[str, any]:
+def verify_license_at_boot() -> dict[str, Any]:
     """Синхронная проверка лицензии при каждом запуске (кэш сбрасывается)."""
     db = get_db()
     
@@ -90,7 +92,7 @@ def verify_license_at_boot() -> dict[str, any]:
     return status
 
 
-def verify_license_at_boot_async() -> dict[str, any]:
+def verify_license_at_boot_async() -> dict[str, Any]:
     """Онлайн-валидация токена при старте, если настроен сервер лицензий."""
     if not LICENSE_VERIFY_ON_STARTUP:
         return _get_license_status()
@@ -133,7 +135,7 @@ def verify_license_at_boot_async() -> dict[str, any]:
     return status
 
 
-def run_startup_bootstrap() -> dict[str, any]:
+def run_startup_bootstrap() -> dict[str, Any]:
     """Вызывается из main.py до запуска API и бота."""
     prepare_runtime_directories()
     seed_settings_from_env()
@@ -145,7 +147,7 @@ def run_startup_bootstrap() -> dict[str, any]:
     return _get_license_status()
 
 
-def run_startup_bootstrap_async() -> dict[str, any]:
+def run_startup_bootstrap_async() -> dict[str, Any]:
     """Те же шаги, что run_startup_bootstrap, с онлайн-проверкой лицензии."""
     prepare_runtime_directories()
     seed_settings_from_env()
