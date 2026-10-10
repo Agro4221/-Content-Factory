@@ -1091,6 +1091,21 @@
                         </div>
                     </div>
 
+                    <div class="card" id="readinessCard">
+                        <div class="card-header" style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px;">
+                            <div>
+                                <h2 class="card-title">Проверка готовности</h2>
+                                <p class="card-desc" id="readinessSummary" aria-live="polite">Проверяем обязательные настройки…</p>
+                            </div>
+                            <button class="btn btn-ghost" id="readinessRefreshBtn" type="button" onclick="refreshReadiness()">Проверить</button>
+                        </div>
+                        <div class="card-body">
+                            <div id="readinessChecks" style="display:grid; gap:10px;" aria-live="polite">
+                                <p class="card-desc">Загружаем результаты проверки…</p>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Top stats: License / Bot / Proxy / Modules -->
                     <div class="dash-stats" id="dashStats">
                             <div class="dash-stat-value" id="dashLicenseValue">—</div>
@@ -1822,10 +1837,6 @@ const NAV_CONFIG = {
             'posts/logs':     { title: 'Консоль (логи)',             crumb: 'Консоль (логи)' },
             'posts/faq':      { title: 'Инструкция и FAQ',           crumb: 'Инструкция и FAQ' },
         }
-    },
-        }
-    },
-        }
     }
 };
 
@@ -1964,7 +1975,7 @@ function navigate(route) {
 
     // Модульные дашборды — подтягиваем данные при входе
     if (route === 'posts/dashboard') {
-        const mod = route.startsWith('posts') ? 'posts' : route.startsWith() ? : ;
+        const mod = 'posts';
         if (typeof renderModuleDashboard === 'function') renderModuleDashboard(mod);
     }
 
@@ -2852,42 +2863,6 @@ async function refreshBotStatus() {
     renderDashboardFromCache();
 }
 
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-            body: JSON.stringify({ lines }),
-        });
-        if (res.status === 403) {
-            toast({ type: 'warn', title: 'Лицензия', text: 'Сначала активируйте лицензию!' });
-            return;
-        }
-        const data = await res.json();
-        toast({
-            type: 'success',
-            title: 'Импорт аккаунтов',
-            text: `Создано: ${data.created || 0}, пропущено: ${data.skipped || 0}`,
-        });
-        input.value = '';
-        refreshReviewsStatus();
-        renderModuleDashboard();
-    } catch (e) {
-        toast({ type: 'danger', title: 'Ошибка', text: 'Не удалось импортировать аккаунты.' });
-    }
-}
-
 /* ============================================================
    ПРОКСИ — проверка соединения и индикатор в шапке
    ============================================================ */
@@ -3038,6 +3013,60 @@ function renderDashboardFromCache() {
 }
 
 /* ============================================================
+   CONFIGURATION READINESS — visible, secret-safe start preflight
+   ============================================================ */
+async function refreshReadiness() {
+    const summary = document.getElementById('readinessSummary');
+    const results = document.getElementById('readinessChecks');
+    const button = document.getElementById('readinessRefreshBtn');
+    if (!summary || !results) return;
+
+    if (button) button.disabled = true;
+    summary.textContent = 'Проверяем обязательные настройки…';
+    try {
+        const response = await fetch('/api/diagnostics/readiness', { cache: 'no-store' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data.detail || ('HTTP ' + response.status));
+        }
+
+        const blockers = Number(data.blocking_count || 0);
+        const warnings = Number(data.warning_count || 0);
+        summary.textContent = data.summary || (
+            data.ready ? 'Настройки готовы к запуску.' : 'Нужно исправить обязательные настройки.'
+        );
+
+        const checks = Array.isArray(data.checks) ? data.checks : [];
+        results.innerHTML = checks.map(check => {
+            const status = check.status === 'error' ? 'err'
+                : check.status === 'warning' ? 'warn' : 'ok';
+            const icon = status === 'err' ? '×' : status === 'warn' ? '!' : '✓';
+            return `<div style="display:flex; gap:10px; align-items:flex-start;">
+                <span class="dash-check ${status}" aria-hidden="true">${icon}</span>
+                <div style="min-width:0;">
+                    <div style="font-size:13px; font-weight:600; color:var(--text-1);">${escapeHtml(check.title || check.id || 'Проверка')}</div>
+                    <div style="font-size:12px; line-height:1.5; color:var(--text-2);">${escapeHtml(check.detail || '')}</div>
+                </div>
+            </div>`;
+        }).join('');
+
+        const launchButtons = [
+            document.getElementById('botToggleBtn'),
+            document.getElementById('postsLocalStartBtn'),
+        ];
+        launchButtons.forEach(btn => {
+            if (!btn) return;
+            btn.title = data.ready ? '' : 'Сначала исправьте обязательные настройки в блоке «Проверка готовности».';
+        });
+    } catch (error) {
+        summary.textContent = 'Не удалось проверить готовность. Проверьте соединение с локальной панелью и обновите страницу.';
+        results.textContent = 'Ошибка проверки: ' + (error && error.message ? error.message : 'неизвестная ошибка');
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+/* ============================================================
    ЗАГРУЗКА / СОХРАНЕНИЕ НАСТРОЕК
    ============================================================ */
 async function loadSettings() {
@@ -3081,10 +3110,7 @@ async function loadSettings() {
         _dashCache.settings = data;
         renderDashboardFromCache();
 
-        // Модульные дашборды: подтягиваем реальные значения из настроек
-        syncBehaviorFormFromSettings(data);
-        syncReviewsFormFromSettings(data);
-        // Обзор модулей рисуется из /api/stats/* — не перезаписываем карточки настройками.
+        // Обзор модулей рисуется из /api/stats/posts — не перезаписываем карточки настройками.
         const route = state.currentRoute || '';
 
         // Empty states для sources / categories
@@ -3181,6 +3207,7 @@ async function saveSettings(formId, sourceBtn) {
             toast({ type: 'success', title: 'Сохранено', text: 'Настройки применены.' });
             setSaveState(btn, 'success', 'Готово');
             markSaved(formId);
+            refreshReadiness();
             if (formId === 'form-proxy') {
                 fetchProxyStatus();
             } else {
@@ -3775,23 +3802,21 @@ async function refreshPostsStats() {
    Источник истины — /api/stats/{posts|behavior|reviews}.
    ============================================================ */
 async function renderModuleDashboard(module) {
-    let url, stats = {};
+    if (module !== 'posts') return;
+
+    let stats = {};
     try {
-        url = module === 'posts'     ? '/api/stats/posts'
-            : null;
-        if (!url) return;
-        const res = await fetch(url);
+        const res = await fetch('/api/stats/posts');
         if (res.ok) stats = await res.json();
-    } catch (e) { /* silent */ }
-    // Дополнительно подтянем свежие логи модуля для «последних событий»
+    } catch (e) { /* best-effort dashboard refresh */ }
+
     let logs = [];
     try {
-        const r = await fetch(`/api/logs?module=${encodeURIComponent(module)}&limit=10`);
-        if (r.ok) logs = await r.json();
-    } catch (e) {}
-    if (module === 'posts')     renderPostsDashboard(stats, logs);
-    else if (module === ) renderBehaviorDashboard(stats, logs);
-    else if (module === )  renderReviewsDashboard(stats, logs);
+        const response = await fetch('/api/logs?module=posts&limit=10');
+        if (response.ok) logs = await response.json();
+    } catch (e) { /* best-effort dashboard refresh */ }
+
+    renderPostsDashboard(stats, logs);
 }
 
 /* ============================================================
@@ -3811,7 +3836,7 @@ async function renderModuleHealthForRoute(route) {
     // Подтягиваем stats для модуля (best-effort, GET — без проверки лицензии)
     let stats = {};
     try {
-        const url = module === 'posts'     ? '/api/stats/posts'
+        const url = module === 'posts' ? '/api/stats/posts' : null;
         if (url) {
             const res = await fetch(url);
             if (res.ok) stats = await res.json();
@@ -3848,34 +3873,6 @@ function renderModuleHealth(module, stats) {
         _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
         if ((stats.sources_count || 0) > 0) _setHealthItem('sources', `${stats.sources_count} каналов`, `${stats.active_sources_24h || 0} активных за 24ч`, 'ok');
         else                                 _setHealthItem('sources', 'не заданы', 'добавьте в настройках парсинга', 'err');
-    } else if (module === ) {
-        if (stats.proxy_status) applyProxyStatusUI(stats.proxy_status);
-        const proxyDisplay = getProxyDisplayStatus(_dashCache.settings || {});
-        if (stats.implemented === false) {
-            _setHealthItem('bot',  'В разработке', 'бэкенд не подключён', 'dev');
-            _setHealthItem('ai',   '—',           'настройки преконфигурированы', 'dev');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources','настройки', 'URL и ключевые слова', 'warn');
-        } else {
-            _setHealthItem('bot', stats.running ? 'Работает' : 'Остановлен', stats.running ? 'сценарии выполняются' : 'запустите модуль', stats.running ? 'ok' : 'warn');
-            _setHealthItem('ai', `${stats.sessions_today || 0} за сегодня`, 'поведенческие сессии', (stats.sessions_today || 0) > 0 ? 'ok' : 'warn');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources', `${stats.targets_count || 0} целей`, (stats.last_session_at ? `последняя: ${formatLogTime(stats.last_session_at)}` : 'сессий пока нет'), (stats.targets_count || 0) > 0 ? 'ok' : 'warn');
-        }
-    } else if (module === ) {
-        if (stats.proxy_status) applyProxyStatusUI(stats.proxy_status);
-        const proxyDisplay = getProxyDisplayStatus(_dashCache.settings || {});
-        if (stats.implemented === false) {
-            _setHealthItem('bot',  'В разработке', 'бэкенд не подключён', 'dev');
-            _setHealthItem('ai',   '—',           'шаблоны и модели заданы', 'dev');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources','аккаунты',  'Google-аккаунты, пул', 'warn');
-        } else {
-            _setHealthItem('bot', stats.running ? 'Работает' : 'Остановлен', stats.running ? 'очередь в обработке' : 'запустите модуль', stats.running ? 'ok' : 'warn');
-            _setHealthItem('ai', `${stats.accounts_active || 0} активных`, 'аккаунты готовы к публикации', (stats.accounts_active || 0) > 0 ? 'ok' : 'warn');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources', `${stats.queue_pending || 0} в очереди`, stats.last_publish_at ? `последняя публикация ${formatLogTime(stats.last_publish_at)}` : 'публикаций пока нет', (stats.queue_pending || 0) > 0 ? 'ok' : 'warn');
-        }
     }
 }
 
@@ -4514,10 +4511,9 @@ window.addEventListener('DOMContentLoaded', () => {
     refreshBotStatus();
     loadSettings().then(() => {
         ['form-ai', 'form-parsing', 'form-proxy'].forEach(renderSaveMeta);
+        refreshReadiness();
     });
     refreshPostsStats();
-    refreshBehaviorStatus();
-    refreshReviewsStatus();
     fetchProxyStatus();
     startSaveMetaTicker();
     startPollingTimers();

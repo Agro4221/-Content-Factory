@@ -44,7 +44,6 @@ from telethon.tl.custom.message import Message
 from config import (
     AI_REQUEST_TIMEOUT_S,
     AI_TEMPERATURE,
-    AI_TRUNCATE_FALLBACK,
     API_HOST,
     API_PORT,
     BASE_DIR,
@@ -300,7 +299,17 @@ async def _process_message_group(
         return
 
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
-    topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    try:
+        topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    except AIRewriteError as exc:
+        # Не помечаем запись как пропущенную: после восстановления AI
+        # следующий проход сможет обработать её повторно.
+        db.add_log(
+            "WARN-405",
+            f"Пост {source}/{messages[0].id} не опубликован: AI недоступен ({exc}). Повторим на следующем проходе.",
+        )
+        print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
+        return
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
@@ -363,8 +372,13 @@ async def _process_message_group(
         print(f"УСПЕХ: → [{topic}] -> {target_chat}")
     except Exception as send_error:
         _log_send_error(send_error, target_chat)
-        for m in messages:
-            db.save_skipped_post(source, m.id, "send_failed")
+        # Ошибка отправки не означает, что пользователь отказался от поста.
+        # Не записываем его как permanently skipped: после исправления сети
+        # или прав следующий проход попробует отправить его снова.
+        db.add_log(
+            "WARN-406",
+            f"Пост {source}/{messages[0].id} не отправлен и оставлен для повторной попытки.",
+        )
     finally:
         for p in temp_paths:
             try:
@@ -416,6 +430,10 @@ def _log_send_error(send_error: Exception, target_chat) -> None:
         print(f"!!! ОШИБКА ОТПРАВКИ: {send_error}")
 
 
+class AIRewriteError(RuntimeError):
+    """AI не смог подготовить безопасный к публикации текст."""
+
+
 async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[str, str]:
     topics = ", ".join(cfg["topic_channels"].keys()) or "общее"
     db_prompt = db.get_setting("system_prompt", "")
@@ -451,6 +469,7 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
         "temperature": AI_TEMPERATURE,
     }
 
+    failure_reason = "неизвестная ошибка AI"
     try:
         async with session_ai.post(url, json=payload, headers=headers,
                                    timeout=AI_REQUEST_TIMEOUT_S) as r:
@@ -459,19 +478,34 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
                 res = ""
                 for item in data.get("choices", []):
                     res = item.get("message", {}).get("content", "")
-                    if res:
+                    if isinstance(res, str) and res.strip():
                         break
-                if not res:
-                    return "общее", raw_text[:AI_TRUNCATE_FALLBACK]
-                return _parse_ai_response(res, raw_text)
-            _log_ai_http_error(r.status, cfg, await r.text())
+                if not isinstance(res, str) or not res.strip():
+                    failure_reason = "AI вернул пустой ответ"
+                    db.add_log("ERR-400", failure_reason)
+                    print("!!! [AI ERROR] Пустой ответ от AI endpoint")
+                else:
+                    topic, rewritten_text = _parse_ai_response(res, raw_text)
+                    if not rewritten_text.strip():
+                        failure_reason = "AI вернул пустой текст после разбора"
+                        db.add_log("ERR-400", failure_reason)
+                    else:
+                        return topic, rewritten_text
+            else:
+                body = await r.text()
+                _log_ai_http_error(r.status, cfg, body)
+                failure_reason = f"AI endpoint вернул HTTP {r.status}"
     except aiohttp.ClientConnectorError as e:
         _log_ai_network_error(e, cfg)
+        failure_reason = "AI endpoint недоступен"
     except Exception as e:
         db.add_log("ERR-400", f"Неизвестный сбой AI: {e}")
         print(f"!!! [AI ERROR] {e}")
+        failure_reason = f"ошибка ответа AI ({type(e).__name__})"
 
-    return "общее", raw_text[:AI_TRUNCATE_FALLBACK] + "..."
+    # Важно: никогда не подменять рерайт обрезком исходного поста.
+    # Вызывающий код оставит сообщение необработанным и повторит попытку позже.
+    raise AIRewriteError(failure_reason)
 
 
 def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:

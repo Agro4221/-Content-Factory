@@ -4,12 +4,14 @@ FastAPI-приложение: HTML-админка, JSON API для управл�
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 import time
-import asyncio
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -31,6 +33,7 @@ from config import (
     POLL_DELAY_MAX,
     POLL_DELAY_MIN,
     SETTING_KEYS,
+    SESSION_PATH,
 )
 from database import format_display_timestamp, get_db
 from state import bot_running
@@ -211,6 +214,189 @@ def _build_modules_payload() -> dict[str, object]:
     }
 
 
+
+
+def _build_readiness(
+    settings: dict[str, str] | None = None,
+    *,
+    session_exists: bool | None = None,
+) -> dict[str, object]:
+    """Проверяет конфигурацию запуска, не раскрывая credentials и не делая сетевых запросов."""
+    cfg = settings if settings is not None else db.get_all_settings()
+    checks: list[dict[str, str]] = []
+
+    def add_check(check_id: str, title: str, status: str, detail: str) -> None:
+        checks.append({
+            "id": check_id,
+            "title": title,
+            "status": status,
+            "detail": detail,
+        })
+
+    api_id = (cfg.get("tg_api_id") or "").strip()
+    api_hash = (cfg.get("tg_api_hash") or "").strip()
+    bot_token = (cfg.get("bot_token") or "").strip()
+    try:
+        valid_api_id = int(api_id) > 0
+    except (TypeError, ValueError):
+        valid_api_id = False
+    if valid_api_id and api_hash and bot_token:
+        add_check(
+            "telegram",
+            "Доступы Telegram",
+            "warning",
+            "API ID, API hash и токен бота заполнены; валидность данных ещё не проверялась.",
+        )
+    else:
+        missing = []
+        if not valid_api_id:
+            missing.append("корректный API ID")
+        if not api_hash:
+            missing.append("API hash")
+        if not bot_token:
+            missing.append("токен бота")
+        add_check("telegram", "Доступы Telegram", "error", "Заполните: " + ", ".join(missing) + ".")
+
+    if session_exists is None:
+        session_exists = os.path.isfile(SESSION_PATH + ".session")
+    if session_exists:
+        add_check(
+            "session",
+            "Сессия Telegram",
+            "warning",
+            "Файл сессии найден; актуальность авторизации проверится при подключении к Telegram.",
+        )
+    else:
+        add_check(
+            "session",
+            "Сессия Telegram",
+            "error",
+            "Сессия пользователя не найдена. После заполнения Telegram API запустите "
+            "python tools/create_telegram_session.py из папки проекта.",
+        )
+
+    ai_mode = (cfg.get("ai_mode") or "LOCAL").strip().upper()
+    if ai_mode == "LOCAL":
+        local_host = (cfg.get("local_host") or "127.0.0.1").strip()
+        local_port = (cfg.get("local_port") or "1234").strip()
+        local_model = (cfg.get("local_model") or "").strip()
+        try:
+            valid_local_port = 1 <= int(local_port) <= 65535
+        except (TypeError, ValueError):
+            valid_local_port = False
+        if local_host and valid_local_port and local_model:
+            add_check(
+                "ai",
+                "AI-редактор",
+                "warning",
+                "Локальный endpoint и модель заданы. Доступность сервера проверится при первом запросе.",
+            )
+        else:
+            add_check(
+                "ai",
+                "AI-редактор",
+                "error",
+                "Укажите хост, порт от 1 до 65535 и имя загруженной локальной модели.",
+            )
+    elif ai_mode == "REMOTE":
+        remote_url = (cfg.get("remote_url") or "").strip()
+        remote_model = (cfg.get("remote_model") or "").strip()
+        remote_key = (cfg.get("remote_api_key") or "").strip()
+        try:
+            parsed_url = urlsplit(remote_url)
+            valid_remote_url = parsed_url.scheme in {"http", "https"} and bool(parsed_url.netloc)
+        except ValueError:
+            valid_remote_url = False
+        if valid_remote_url and remote_model and remote_key:
+            add_check(
+                "ai",
+                "AI-редактор",
+                "warning",
+                "Облачный endpoint, модель и ключ заданы. Доступность и баланс провайдера не проверялись.",
+            )
+        else:
+            missing = []
+            if not valid_remote_url:
+                missing.append("корректный URL API")
+            if not remote_model:
+                missing.append("имя модели")
+            if not remote_key:
+                missing.append("API-ключ")
+            add_check("ai", "AI-редактор", "error", "Укажите " + ", ".join(missing) + ".")
+    else:
+        add_check("ai", "AI-редактор", "error", "Выберите режим LOCAL или REMOTE.")
+
+    raw_sources = cfg.get("sources") or ""
+    sources = [
+        line.strip()
+        for line in str(raw_sources).splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if sources:
+        add_check("sources", "Источники", "ok", f"Добавлено каналов: {len(sources)}.")
+    else:
+        add_check("sources", "Источники", "error", "Добавьте хотя бы один канал-донор, по одному на строку.")
+
+    raw_topics = cfg.get("topic_channels") or "{}"
+    try:
+        topics = json.loads(raw_topics)
+    except (TypeError, ValueError):
+        topics = None
+    valid_topics = (
+        {str(key).strip(): str(value).strip() for key, value in topics.items()
+         if key is not None and value is not None and str(key).strip() and str(value).strip()}
+        if isinstance(topics, dict)
+        else {}
+    )
+    if valid_topics:
+        add_check("targets", "Каналы назначения", "ok", f"Настроено направлений: {len(valid_topics)}.")
+    elif topics is None:
+        add_check("targets", "Каналы назначения", "error", "Настройка topic_channels содержит некорректный JSON. Пересохраните категории.")
+    else:
+        add_check("targets", "Каналы назначения", "error", "Создайте хотя бы одну пару «тема → канал» в настройках парсинга.")
+
+    use_proxy = str(cfg.get("use_proxy") or "0").strip().lower() in {"1", "true", "yes", "on"}
+    if not use_proxy:
+        add_check("proxy", "Прокси", "ok", "Не обязателен: будет использовано прямое подключение.")
+    else:
+        proxy_type = (cfg.get("proxy_type") or "http").strip().lower()
+        proxy_host = (cfg.get("proxy_host") or "").strip()
+        proxy_port = (cfg.get("proxy_port") or "").strip()
+        try:
+            valid_proxy_port = 1 <= int(proxy_port) <= 65535
+        except (TypeError, ValueError):
+            valid_proxy_port = False
+        missing = []
+        if not proxy_host:
+            missing.append("хост")
+        if not valid_proxy_port:
+            missing.append("порт от 1 до 65535")
+        if proxy_type == "mtproto" and not (cfg.get("mtproto_key") or "").strip():
+            missing.append("секрет MTProto")
+        if missing:
+            add_check("proxy", "Прокси", "error", "Для включённого прокси укажите " + ", ".join(missing) + ".")
+        else:
+            add_check("proxy", "Прокси", "warning", "Параметры заполнены. Проверьте соединение кнопкой «Тестировать прокси».")
+
+    blockers = sum(1 for check in checks if check["status"] == "error")
+    warnings = sum(1 for check in checks if check["status"] == "warning")
+    ready = blockers == 0
+    if ready and warnings:
+        summary = "Обязательные настройки заполнены. Перед публикацией проверьте предупреждения."
+    elif ready:
+        summary = "Обязательные настройки заполнены."
+    else:
+        summary = f"Нужно исправить пунктов: {blockers}. Запуск будет заблокирован до исправления."
+
+    return {
+        "ready": ready,
+        "blocking_count": blockers,
+        "warning_count": warnings,
+        "summary": summary,
+        "checks": checks,
+    }
+
+
 def _start_module(module_id: str) -> bool:
     meta = _module_runtime_meta(module_id)
     if not bool(meta.get("available")):
@@ -219,6 +405,16 @@ def _start_module(module_id: str) -> bool:
     if module_id == MODULE_POSTS:
         if bot_running.is_set():
             return False
+        readiness = _build_readiness(db.get_all_settings())
+        if not readiness["ready"]:
+            checks = readiness["checks"]
+            blocker = next((check for check in checks if check["status"] == "error"), None)
+            if blocker:
+                db.add_log("WARN-001", f"Запуск заблокирован: {blocker['title']}")
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{blocker['title']}: {blocker['detail']}",
+                )
         bot_running.set()
         db.add_log("SYS-000", "Цикл парсера запущен пользователем.")
         return True
@@ -235,6 +431,12 @@ def _stop_module(module_id: str) -> bool:
         return True
 
     raise HTTPException(status_code=404, detail=f"Неизвестный модуль: {module_id}")
+
+
+@app.get("/api/diagnostics/readiness")
+async def api_diagnostics_readiness() -> dict:
+    """Статическая проверка готовности к запуску; сетевые подключения не выполняет."""
+    return _build_readiness(db.get_all_settings())
 
 
 @app.get("/api/modules/status")
