@@ -417,6 +417,7 @@ async def _process_message_group(
     caption_remainder = _media_caption_remainder(final_text)
 
     retry_delay_s = 0
+    secondary_send_error: Exception | None = None
     try:
         if media_list:
             if len(media_list) == 1:
@@ -442,12 +443,21 @@ async def _process_message_group(
             else:
                 await bot.send_media_group(chat_id=target_chat, media=media_list)
 
+            # The media call above is the primary publication. A separate text
+            # suffix is not atomic with it: if the suffix fails, retrying the
+            # whole group could publish the media a second time.
             if caption_remainder:
-                await bot.send_message(chat_id=target_chat, text=caption_remainder)
+                try:
+                    await bot.send_message(chat_id=target_chat, text=caption_remainder)
+                except Exception as exc:
+                    secondary_send_error = exc
             elif final_text and not any(
                 getattr(item, "caption", None) for item in media_list
             ):
-                await bot.send_message(chat_id=target_chat, text=final_text)
+                try:
+                    await bot.send_message(chat_id=target_chat, text=final_text)
+                except Exception as exc:
+                    secondary_send_error = exc
         else:
             await bot.send_message(chat_id=target_chat, text=final_text)
 
@@ -474,6 +484,14 @@ async def _process_message_group(
             for m in messages:
                 db.save_skipped_post(source, m.id, "send_failed")
     else:
+        if secondary_send_error is not None:
+            db.add_log(
+                "WARN-407",
+                f"Основная публикация {source}/{messages[0].id} уже отправлена в {target_chat}, "
+                f"но остаток текста не доставлен ({type(secondary_send_error).__name__}: "
+                f"{secondary_send_error}). Пост будет помечен опубликованным, "
+                "чтобы повтор не продублировал медиа.",
+            )
         failed_post_id = messages[0].id
         try:
             for m in messages:
