@@ -107,6 +107,10 @@ def check_and_install_dependencies() -> None:
             raise subprocess.CalledProcessError(1, "pip")
         print("--> [СИСТЕМА] Готово.\n")
         _reload_env_after_deps()
+        # config.py may have been imported before python-dotenv was installed.
+        # Restart so all import-time settings are re-evaluated with .env loaded.
+        print("--> [СИСТЕМА] Перезапуск для повторной загрузки конфигурации...")
+        os.execv(sys.executable, [sys.executable, *sys.argv])
         return
     except subprocess.CalledProcessError:
         pass
