@@ -20,7 +20,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from deps import check_and_install_dependencies
 check_and_install_dependencies()
 
-from proxy_check import check_proxy, decode_mtproto_secret_full, resolve_proxy_type
+from proxy_check import (
+    check_proxy,
+    decode_mtproto_secret_full,
+    normalize_mtproto_proxy_link,
+    resolve_proxy_type,
+)
 from config import (
     ADMIN_HTML_PATH,
     APP_VERSION,
@@ -550,6 +555,19 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
     if accepted.keys() & PROXY_SETTING_KEYS:
         effective_settings = db.get_all_settings()
         effective_settings.update(accepted)
+        try:
+            normalized_proxy_settings = normalize_mtproto_proxy_link(effective_settings)
+        except ValueError as exc:
+            return JSONResponse(
+                status_code=422,
+                content={"status": "error", "field": "proxy_host", "msg": str(exc)},
+            )
+        # When an MTProto URL was pasted into the host field, persist its
+        # actual server, port, and secret atomically with the rest of the form.
+        for key in ("proxy_host", "proxy_port", "mtproto_key", "proxy_type"):
+            if normalized_proxy_settings.get(key) != effective_settings.get(key):
+                effective_settings[key] = normalized_proxy_settings.get(key, "")
+                accepted[key] = str(effective_settings[key] or "")
         proxy_enabled = str(effective_settings.get("use_proxy", "0") or "").strip().lower() in {
             "1", "true", "yes", "on"
         }
@@ -642,7 +660,18 @@ async def api_proxy_test(request: Request) -> dict:
     data = await _read_json_object(request)
 
     cfg = {key: str(data.get(key, "")) for key in PROXY_SETTING_KEYS}
-    result = await check_proxy(cfg)
+    try:
+        cfg = normalize_mtproto_proxy_link(cfg)
+    except ValueError as exc:
+        result = {
+            "ok": False,
+            "reachable": False,
+            "state": "error",
+            "message": str(exc),
+            "proxy_type": "MTProto",
+        }
+    else:
+        result = await check_proxy(cfg)
     _proxy_runtime_status.update(
         {
             "state": result.get("state", "unknown"),
