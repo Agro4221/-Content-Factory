@@ -49,7 +49,7 @@ def test_network_bind_requires_both_credentials() -> None:
     with pytest.raises(RuntimeError, match="non-loopback"):
         Site._validate_api_auth_configuration("0.0.0.0", "", "")
     with pytest.raises(RuntimeError, match="non-loopback"):
-        Site._validate_api_auth_configuration("::", "admin", "")
+        Site._validate_api_auth_configuration("::", "", "")
 
     Site._validate_api_auth_configuration("0.0.0.0", "admin", "secret")
     Site._validate_api_auth_configuration("127.0.0.1", "", "")
