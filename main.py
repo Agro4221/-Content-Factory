@@ -24,6 +24,11 @@ from typing import Optional
 import aiohttp
 import uvicorn
 from aiogram import Bot
+from aiogram.exceptions import (
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
@@ -44,7 +49,6 @@ from telethon.tl.custom.message import Message
 from config import (
     AI_REQUEST_TIMEOUT_S,
     AI_TEMPERATURE,
-    AI_TRUNCATE_FALLBACK,
     API_HOST,
     API_PORT,
     BASE_DIR,
@@ -286,12 +290,13 @@ async def _process_message_group(
     captions = [m.message for m in messages if m.message]
     raw_text = "\n".join(captions).strip()
 
-    if not raw_text:
+    has_media = any(not _is_media_skippable(m.media) for m in messages)
+    if not raw_text and not has_media:
         for m in messages:
             db.save_skipped_post(source, m.id, "empty")
         return
 
-    if cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
+    if raw_text and cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
         for m in messages:
             db.save_skipped_post(source, m.id, "ads_word")
         return
@@ -300,7 +305,19 @@ async def _process_message_group(
         return
 
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
-    topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    if raw_text:
+        try:
+            topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+        except AIRewriteError as exc:
+            db.add_log(
+                "WARN-405",
+                f"Пост {source}/{messages[0].id} не опубликован: AI недоступен ({exc}). Повторим на следующем проходе.",
+            )
+            print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
+            return
+    else:
+        # A media-only post has no text to rewrite; route it to the default topic.
+        topic, final_text = "общее", ""
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
@@ -334,6 +351,7 @@ async def _process_message_group(
             f"Текст ответа ИИ обрезан с {original_len} до {len(final_text)} символов для Telegram.",
         )
 
+    retry_delay_s = 0
     try:
         if media_list:
             if len(media_list) == 1:
@@ -342,13 +360,13 @@ async def _process_message_group(
                     await bot.send_photo(
                         chat_id=target_chat,
                         photo=single.media,
-                        caption=single.caption or final_text,
+                        caption=single.caption or final_text or None,
                     )
                 else:
                     await bot.send_video(
                         chat_id=target_chat,
                         video=single.media,
-                        caption=single.caption or final_text,
+                        caption=single.caption or final_text or None,
                     )
             else:
                 await bot.send_media_group(chat_id=target_chat, media=media_list)
@@ -363,15 +381,33 @@ async def _process_message_group(
         print(f"УСПЕХ: → [{topic}] -> {target_chat}")
     except Exception as send_error:
         _log_send_error(send_error, target_chat)
-        for m in messages:
-            db.save_skipped_post(source, m.id, "send_failed")
+        retryable = isinstance(
+            send_error,
+            (
+                asyncio.TimeoutError,
+                aiohttp.ClientError,
+                TelegramNetworkError,
+                TelegramServerError,
+                TelegramRetryAfter,
+            ),
+        )
+        if retryable:
+            retry_delay_s = max(0, int(getattr(send_error, "retry_after", 0)))
+            db.add_log(
+                "WARN-406",
+                f"Пост {source}/{messages[0].id} не отправлен из-за временной ошибки "
+                f"({type(send_error).__name__}); оставлен для повторной попытки.",
+            )
+        else:
+            for m in messages:
+                db.save_skipped_post(source, m.id, "send_failed")
     finally:
         for p in temp_paths:
             try:
                 os.remove(p)
             except OSError:
                 pass
-    await asyncio.sleep(SLEEP_BETWEEN_POSTS_S)
+    await asyncio.sleep(max(SLEEP_BETWEEN_POSTS_S, retry_delay_s))
 
 
 async def _download_media(messages: list[Message], caption: str = "") -> tuple[list, list[str]]:
@@ -416,6 +452,10 @@ def _log_send_error(send_error: Exception, target_chat) -> None:
         print(f"!!! ОШИБКА ОТПРАВКИ: {send_error}")
 
 
+class AIRewriteError(RuntimeError):
+    """AI не смог подготовить текст, безопасный для публикации."""
+
+
 async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[str, str]:
     topics = ", ".join(cfg["topic_channels"].keys()) or "общее"
     db_prompt = db.get_setting("system_prompt", "")
@@ -451,6 +491,7 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
         "temperature": AI_TEMPERATURE,
     }
 
+    failure_reason = "неизвестная ошибка AI"
     try:
         async with session_ai.post(url, json=payload, headers=headers,
                                    timeout=AI_REQUEST_TIMEOUT_S) as r:
@@ -458,30 +499,53 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
                 data = await r.json()
                 res = ""
                 for item in data.get("choices", []):
-                    res = item.get("message", {}).get("content", "")
-                    if res:
+                    candidate = item.get("message", {}).get("content", "")
+                    if isinstance(candidate, str) and candidate.strip():
+                        res = candidate
                         break
                 if not res:
-                    return "общее", raw_text[:AI_TRUNCATE_FALLBACK]
-                return _parse_ai_response(res, raw_text)
-            _log_ai_http_error(r.status, cfg, await r.text())
+                    failure_reason = "AI вернул пустой ответ"
+                    db.add_log("ERR-400", failure_reason)
+                    print("!!! [AI ERROR] Пустой ответ от AI endpoint")
+                else:
+                    topic, rewritten_text = _parse_ai_response(res, raw_text)
+                    if rewritten_text.strip():
+                        return topic, rewritten_text
+                    failure_reason = "AI вернул пустой текст после разбора"
+                    db.add_log("ERR-400", failure_reason)
+            else:
+                body = await r.text()
+                _log_ai_http_error(r.status, cfg, body)
+                failure_reason = f"AI endpoint вернул HTTP {r.status}"
     except aiohttp.ClientConnectorError as e:
         _log_ai_network_error(e, cfg)
+        failure_reason = "AI endpoint недоступен"
     except Exception as e:
         db.add_log("ERR-400", f"Неизвестный сбой AI: {e}")
         print(f"!!! [AI ERROR] {e}")
+        failure_reason = f"ошибка ответа AI ({type(e).__name__})"
 
-    return "общее", raw_text[:AI_TRUNCATE_FALLBACK] + "..."
+    # Не публикуем обрезок оригинала: вызывающий код оставит запись для повтора.
+    raise AIRewriteError(failure_reason)
 
 
 def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
+    """Accept only structured responses with non-empty, publishable rewritten text."""
+    if not isinstance(res, str) or not res.strip():
+        raise AIRewriteError("AI вернул пустой ответ")
+
     t_m = re.search(r"ТЕМА:\s*(.*)", res, re.I)
     c_m = re.search(r"ТЕКСТ:\s*(.*)", res, re.S | re.I)
     h_m = re.search(r"ХЭШТЕГИ:\s*(.*)", res, re.I)
+    if not c_m:
+        raise AIRewriteError("отсутствует обязательный раздел ТЕКСТ:")
 
     topic = (t_m.group(1).strip().lower() if t_m else "общее").split("\n")[0].strip()
-    full = c_m.group(1).strip() if c_m else res
-    clean = full.split("ХЭШТЕГИ:")[0].strip()
+    full = c_m.group(1).strip()
+    clean = re.split(r"ХЭШТЕГИ\s*:", full, maxsplit=1, flags=re.I)[0].strip()
+    if not clean:
+        raise AIRewriteError("раздел ТЕКСТ: пуст")
+
     tags = h_m.group(1).strip() if h_m else ""
     return topic, f"{clean}\n\n{tags}"
 
