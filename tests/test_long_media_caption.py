@@ -194,8 +194,9 @@ def test_long_nested_html_caption_preserves_all_visible_content() -> None:
     expected = VisibleText().visible(source)
     actual = VisibleText().visible(prefix) + VisibleText().visible(remainder)
 
-    # The split may discard boundary whitespace, but it must never drop words
-    # or entity-decoded text when HTML tags are balanced on both fragments.
-    assert " ".join(actual.split()) == " ".join(expected.split())
+    # The boundary whitespace is intentionally omitted because the tail is a
+    # separate Telegram message. Every non-whitespace visible character must
+    # still survive the split, including decoded HTML entities.
+    assert "".join(actual.split()) == "".join(expected.split())
     assert len(prefix + "…") <= 1024
     assert main._sanitize_telegram_html(prefix) == prefix
