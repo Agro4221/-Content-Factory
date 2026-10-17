@@ -118,8 +118,6 @@ def test_legacy_utc_timestamps_are_converted_and_new_rows_get_local_timestamps(t
         db.close()
 
 def test_missing_legacy_timestamps_are_backfilled_in_local_time(tmp_path) -> None:
-    from datetime import timedelta
-
     path = tmp_path / "legacy_no_timestamps.db"
     _make_legacy_db(path, include_created_at=False)
 
