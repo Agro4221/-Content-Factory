@@ -4,6 +4,9 @@ FastAPI-приложение: HTML-админка, JSON API для управл�
 """
 from __future__ import annotations
 
+import base64
+import hmac
+import ipaddress
 import os
 import re
 import time
@@ -21,6 +24,9 @@ from proxy_check import check_proxy, resolve_proxy_type
 from config import (
     ADMIN_HTML_PATH,
     APP_VERSION,
+    ADMIN_PASSWORD,
+    ADMIN_USERNAME,
+    API_HOST,
     BASE_DIR,
     BUNDLE_DIR,
     API_LOG_LEVEL,
@@ -35,8 +41,87 @@ from config import (
 from database import format_display_timestamp, get_db
 from state import bot_running
 
+
+def _is_loopback_bind_host(host: str) -> bool:
+    """Return True only for bind addresses that cannot be reached from other hosts."""
+    normalized = host.strip().lower().strip("[]")
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        # Hostnames other than localhost may resolve to public/network interfaces.
+        return False
+
+
+def _validate_api_auth_configuration(host: str, username: str, password: str) -> None:
+    """Fail closed when credentials are incomplete or the panel is network-exposed."""
+    has_username = bool(username.strip())
+    has_password = bool(password)
+    if has_username != has_password:
+        raise RuntimeError(
+            "Admin authentication is misconfigured: set both ADMIN_USERNAME and ADMIN_PASSWORD."
+        )
+    if username and ":" in username:
+        raise RuntimeError("ADMIN_USERNAME cannot contain ':' when Basic authentication is enabled.")
+    if not _is_loopback_bind_host(host) and not (has_username and has_password):
+        raise RuntimeError(
+            "Refusing to expose the admin panel on a non-loopback address without "
+            "ADMIN_USERNAME and ADMIN_PASSWORD. For remote access, use HTTPS or a trusted VPN."
+        )
+
+
+def _basic_auth_matches(header: str | None, expected_username: str, expected_password: str) -> bool:
+    if not header:
+        return False
+    scheme, separator, encoded = header.partition(" ")
+    if not separator or scheme.lower() != "basic" or not encoded:
+        return False
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    supplied_username, separator, supplied_password = decoded.partition(":")
+    if not separator:
+        return False
+    return (
+        hmac.compare_digest(supplied_username.encode("utf-8"), expected_username.encode("utf-8"))
+        and hmac.compare_digest(supplied_password.encode("utf-8"), expected_password.encode("utf-8"))
+    )
+
+
+_validate_api_auth_configuration(API_HOST, ADMIN_USERNAME, ADMIN_PASSWORD)
+
 db = get_db()
 app = FastAPI(title="API Panel Marej")
+
+
+@app.middleware("http")
+async def require_admin_authentication(request: Request, call_next):
+    # Preserve the zero-configuration local workflow, but never silently fail open
+    # if only one credential is present.
+    if not ADMIN_USERNAME and not ADMIN_PASSWORD:
+        return await call_next(request)
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Admin authentication is misconfigured"},
+            headers={"Cache-Control": "no-store"},
+        )
+    if not _basic_auth_matches(
+        request.headers.get("Authorization"),
+        ADMIN_USERNAME,
+        ADMIN_PASSWORD,
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Требуется аутентификация"},
+            headers={
+                "WWW-Authenticate": 'Basic realm="Content Factory Admin"',
+                "Cache-Control": "no-store",
+            },
+        )
+    return await call_next(request)
 
 _STATIC_ASSETS: dict[str, str] = {
     "favicon.png": "image/png",
