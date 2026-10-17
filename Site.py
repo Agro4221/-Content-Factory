@@ -545,7 +545,7 @@ def _build_posts_stats() -> dict:
     sources_raw = (settings.get("sources") or "").strip()
     sources_list = [s for s in sources_raw.split("\n") if s.strip()] if sources_raw else []
     sources_count = len(sources_list)
-    active_sources_24h = sum(1 for s in top_sources if s["count"] > 0)
+    active_sources_24h = db.count_active_published_sources_since(h24_iso)
 
     try:
         import json as _json
