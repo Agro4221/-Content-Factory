@@ -794,6 +794,50 @@ class DB:
                     f"could not record publication for {source}/{post_id}"
                 ) from exc
 
+    def save_posts(self, source: str, post_ids: list[int | str]) -> None:
+        """Atomically persist all IDs in one already-published Telegram message group.
+
+        Telegram sends an album as one logical post. If only some of its source
+        IDs were recorded before a SQLite error, a retry could resend the entire
+        album and duplicate media already delivered. The group records must commit
+        together or not at all.
+        """
+        if not post_ids:
+            return
+
+        now = _local_now_str()
+        rows = [
+            (make_post_key(source, post_id), str(post_id), source, now)
+            for post_id in post_ids
+        ]
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.executemany(
+                    """
+                    INSERT INTO published_posts (post_key, post_id, source_name, created_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(post_key) DO NOTHING
+                    """,
+                    rows,
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                _logger.error(
+                    "save_posts failed for group %s (%s IDs): %s",
+                    source,
+                    len(post_ids),
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not record publication group for {source}"
+                ) from exc
+
     def save_skipped_post(self, source: str, post_id: int | str, reason: str) -> None:
         """Помечает пост как пропущенный (реклама/пустой)."""
         with self._lock:
