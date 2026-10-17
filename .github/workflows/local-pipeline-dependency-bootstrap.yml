@@ -2,9 +2,9 @@ name: Local pipeline with dependency bootstrap check
 
 on:
   pull_request:
-    branches: [fix/reload-config-after-dependency-install-after-local-pipeline]
-  push:
     branches: [fix/legacy-post-key-migration-after-local-pipeline]
+  push:
+    branches: [fix/sqlite-stats-anchor-after-legacy-migration]
 
 permissions:
   contents: read
