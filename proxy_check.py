@@ -96,6 +96,10 @@ async def _test_http(
                 return False, f"Прокси ответил с кодом {resp.status}"
     except asyncio.TimeoutError as exc:
         raise exc
+    except aiohttp.ClientHttpProxyError as exc:
+        if getattr(exc, "status", None) == 407:
+            return False, "Прокси требует авторизацию: проверьте логин и пароль."
+        return False, _friendly_error(exc)
     except Exception as exc:
         return False, _friendly_error(exc)
 
@@ -377,13 +381,7 @@ async def check_proxy(cfg: dict, timeout: float = 20.0) -> dict[str, Any]:
                 timeout,
             )
         else:
-            ok, message = await _test_http(
-                host,
-                port,
-                cfg.get("proxy_user") or "",
-                cfg.get("proxy_pass") or "",
-                timeout,
-            )
+            ok, message = False, f"Неподдерживаемый тип прокси: {proxy_type!r}"
     except asyncio.TimeoutError:
         ok, message = False, "Таймаут: сервер не отвечает"
     except Exception as exc:
