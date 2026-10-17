@@ -1,4 +1,4 @@
-"""Guard the Windows release workflow against accidental removal of release gates."""
+"""Guard the Windows release workflow against accidental removal or corruption."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,5 +30,13 @@ def test_release_validates_tests_before_packaging_or_publishing() -> None:
     assert "dist/Parser.exe.sha256" in workflow
     assert "gh release create" in workflow
     assert "--verify-tag" in workflow
-    assert r"^v\d+\.\d+\.\d+(\.\d+)?" in workflow
-    assert "$Matches[0].Length -ne $env:GITHUB_REF_NAME.Length" in workflow
+    assert r"^v\d+\.\d+\.\d+(\.\d+)?$" in workflow
+
+
+def test_release_workflow_has_no_corrupted_duplicate_fragments() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert workflow.count("- name: Set up Python") == 1
+    assert workflow.count("- name: Set up Node.js") == 1
+    assert ") {" not in workflow
+    assert "Release tags must look like v1.2.3 or v1.2.3.4" in workflow
