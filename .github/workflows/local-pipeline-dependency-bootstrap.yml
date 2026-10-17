@@ -2,9 +2,9 @@ name: Local pipeline with dependency bootstrap check
 
 on:
   pull_request:
-    branches: [fix/invalid-json-after-local-pipeline]
-  push:
     branches: [fix/stats-http-error-after-local-pipeline]
+  push:
+    branches: [fix/count-active-sources-after-local-pipeline]
 
 permissions:
   contents: read
@@ -34,6 +34,7 @@ jobs:
           tests/test_logs_limit_bounds.py
           tests/test_invalid_json_api.py
           tests/test_stats_error_response.py
+          tests/test_active_sources_stats.py
           tests/test_bot_token_format.py
           tests/test_telegram_backlog_cursor.py
           tests/test_legacy_db_timestamp_migration.py
