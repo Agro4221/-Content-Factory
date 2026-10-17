@@ -30,3 +30,16 @@ def test_streams_without_reconfigure_are_safe(monkeypatch) -> None:
     monkeypatch.setattr(env_loader.sys, "stderr", None)
 
     env_loader._configure_stdio_errors()
+
+
+
+def test_closed_embedded_stream_does_not_abort_startup(monkeypatch) -> None:
+    class ClosedStream:
+        @staticmethod
+        def reconfigure(**_kwargs) -> None:
+            raise RuntimeError("stream is closed")
+
+    monkeypatch.setattr(env_loader.sys, "stdout", ClosedStream())
+    monkeypatch.setattr(env_loader.sys, "stderr", ClosedStream())
+
+    env_loader._configure_stdio_errors()
