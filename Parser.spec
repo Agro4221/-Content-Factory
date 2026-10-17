@@ -27,11 +27,21 @@ PROJECT_MODULES = [
     "state",
 ]
 
-# === Data-файлы (положить рядом с .exe) ===
-# admin.html кладётся в корень bundle — SITE根相对路径
-datas = [
-    (str(PROJECT_DIR / "admin.html"), "."),
-]
+# === Runtime resources bundled into the one-file executable ===
+# env_loader.py searches BASE_DIR first, then BUNDLE_DIR for .env.example.
+# Site.py serves the logo and favicon from BUNDLE_DIR (then BASE_DIR).
+# Keep resources at the bundle root to match config.py and Site.py paths.
+BUNDLE_ASSETS = (
+    "admin.html",
+    "activate.html",
+    ".env.example",
+    "favicon.png",
+    "brand-logo.webp",
+    "brand-logo.png",
+    "brand-logo@2x.webp",
+    "brand-logo@2x.png",
+)
+datas = [(str(PROJECT_DIR / filename), ".") for filename in BUNDLE_ASSETS]
 
 # === Hidden imports (то, что PyInstaller не находит статическим анализом) ===
 hiddenimports = [
