@@ -92,19 +92,27 @@ async def protect_admin_panel(request: Request, call_next):
         )
 
     auth_enabled = has_username and has_password
-    if not _is_loopback_host(API_HOST) and not auth_enabled:
+    client_host = request.client.host if request.client else None
+    # Also detect exposure through a loopback-bound reverse proxy when Uvicorn
+    # has accepted a trusted forwarded client address. "testclient" is the
+    # in-process Starlette test transport, not a routable network client.
+    remote_client = bool(
+        client_host
+        and client_host != "testclient"
+        and not _is_loopback_host(client_host)
+    )
+    if not auth_enabled and (not _is_loopback_host(API_HOST) or remote_client):
         return JSONResponse(
             status_code=503,
             content={
                 "detail": (
-                    "Панель привязана к внешнему интерфейсу без защиты. "
-                    "Задайте ADMIN_USERNAME и ADMIN_PASSWORD; используйте HTTPS."
+                    "Панель доступна не только локально, но защита не настроена. "
+                    "Задайте ADMIN_USERNAME и ADMIN_PASSWORD; для удалённого доступа используйте HTTPS."
                 )
             },
         )
 
-    client_host = request.client.host if request.client else None
-    if auth_enabled and not _is_loopback_host(client_host) and request.url.scheme != "https":
+    if auth_enabled and remote_client and request.url.scheme != "https":
         return JSONResponse(
             status_code=403,
             content={"detail": "Для удалённого доступа к панели требуется HTTPS"},
