@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import webbrowser
+from urllib.parse import quote
 from typing import Optional
 
 import aiohttp
@@ -160,8 +161,6 @@ def _make_socks_session(cfg: dict) -> Optional[AiohttpSession]:
     if not host or port is None:
         db.add_log("WARN-300", "SOCKS прокси не применён: host/port невалидны.")
         return None
-
-    from urllib.parse import quote
 
     user = cfg.get("proxy_user") or ""
     password = cfg.get("proxy_pass") or ""
