@@ -63,6 +63,7 @@ async def _run_failed_send(monkeypatch, error: Exception):
 
     message = SimpleNamespace(id=43, message="Source text", media=None)
     main.bot_running.set()
+    stopped_by_send_error = False
     try:
         await main._process_message_group(
             client=None,
@@ -76,10 +77,11 @@ async def _run_failed_send(monkeypatch, error: Exception):
             bot=FailingBot(),
             ai_session=None,
         )
+        stopped_by_send_error = not main.bot_running.is_set()
     finally:
         main.bot_running.clear()
 
-    return logs, skipped, published
+    return logs, skipped, published, stopped_by_send_error
 
 
 @pytest.mark.parametrize(
@@ -94,19 +96,23 @@ async def _run_failed_send(monkeypatch, error: Exception):
     ids=["timeout", "aiohttp-network", "telegram-network", "telegram-server-5xx", "rate-limit"],
 )
 def test_transient_send_failure_leaves_post_eligible_for_retry(monkeypatch, error_factory: Callable[[], Exception]) -> None:
-    logs, skipped, published = asyncio.run(_run_failed_send(monkeypatch, error_factory()))
+    logs, skipped, published, stopped = asyncio.run(_run_failed_send(monkeypatch, error_factory()))
 
     assert skipped == []
     assert published == []
     assert any(entry[0] == "WARN-406" for entry in logs)
+    assert stopped is False
 
 
-def test_permanent_forbidden_send_failure_stays_skipped(monkeypatch) -> None:
-    logs, skipped, published = asyncio.run(_run_failed_send(monkeypatch, _forbidden_error()))
+def test_permanent_forbidden_send_failure_stays_retryable_and_stops_parser(monkeypatch) -> None:
+    logs, skipped, published, stopped = asyncio.run(
+        _run_failed_send(monkeypatch, _forbidden_error())
+    )
 
-    assert skipped == [("@source", 43, "send_failed")]
+    assert skipped == []
     assert published == []
-    assert not any(entry[0] == "WARN-406" for entry in logs)
+    assert stopped is True
+    assert any(entry[0] == "ERR-408" for entry in logs)
 
 def test_caption_tail_failure_does_not_retry_already_sent_media(monkeypatch) -> None:
     """A failed second message must not cause the successfully sent media to be duplicated."""
