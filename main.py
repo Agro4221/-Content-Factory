@@ -381,18 +381,27 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
     if cap_text and len(cap_text) > 1024:
         cap_text = cap_text[:1020].rsplit(" ", 1)[0] + "…"
     caption_assigned = False
-    for m in messages:
-        if _is_media_skippable(m.media):
-            continue
-        path = await m.download_media(file=f"{TEMP_DIR}/", progress_callback=_progress_bar)
-        if not path:
-            continue
-        temp_paths.append(path)
-        m_t = _classify_extension(path)
-        cap = cap_text if cap_text and not caption_assigned else None
-        if cap is not None:
-            caption_assigned = True
-        media_list.append(m_t(media=FSInputFile(path), caption=cap))
+    try:
+        for m in messages:
+            if _is_media_skippable(m.media):
+                continue
+            path = await m.download_media(file=f"{TEMP_DIR}/", progress_callback=_progress_bar)
+            if not path:
+                continue
+            temp_paths.append(path)
+            m_t = _classify_extension(path)
+            cap = cap_text if cap_text and not caption_assigned else None
+            if cap is not None:
+                caption_assigned = True
+            media_list.append(m_t(media=FSInputFile(path), caption=cap))
+    except BaseException:
+        # The caller's send/finally block is entered only after this function returns.
+        for path in temp_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        raise
     print()
     return media_list, temp_paths
 
