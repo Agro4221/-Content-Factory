@@ -1293,7 +1293,10 @@ async def _process_one_source(
     except (AuthKeyUnregisteredError, SessionPasswordNeededError) as e:
         db.add_log("ERR-203", f"Сессия Telegram невалидна ({type(e).__name__}): {e}")
         print(f"!!! [ERR-203] Сессия Telegram закрыта / требует 2FA: {e}")
-        return True
+        # Reconnecting with the same revoked or 2FA-blocked session cannot fix
+        # this state. Stop the parser until the user supplies a valid session.
+        bot_running.clear()
+        return False
     except (ChannelInvalidError, UsernameInvalidError, UsernameNotOccupiedError) as e:
         db.add_log("ERR-200", f"Канал не найден {source!r}: {e}")
         print(f"!!! Ошибка доступа к {source}: канал не найден.")
