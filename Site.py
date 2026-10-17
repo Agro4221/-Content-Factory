@@ -8,6 +8,7 @@ import os
 import re
 import time
 import asyncio
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -131,6 +132,32 @@ def _normalize_validated_setting(key: str, value) -> str:
             field=key,
             msg=f"{key} должен быть LOCAL или REMOTE",
         )
+
+    if key == "topic_channels":
+        try:
+            topics = json.loads(raw or "{}")
+        except (TypeError, ValueError) as exc:
+            raise SettingsValidationError(
+                field=key,
+                msg="topic_channels должен содержать корректный JSON-объект категорий.",
+            ) from exc
+        if not isinstance(topics, dict):
+            raise SettingsValidationError(
+                field=key,
+                msg="topic_channels должен быть JSON-объектом, а не массивом или скаляром.",
+            )
+        normalized_topics: dict[str, str] = {}
+        for topic, target in topics.items():
+            if not isinstance(topic, str) or not isinstance(target, str):
+                raise SettingsValidationError(
+                    field=key,
+                    msg="Названия категорий и целевые каналы должны быть строками.",
+                )
+            topic = topic.strip()
+            target = target.strip()
+            if topic and target:
+                normalized_topics[topic] = target
+        return json.dumps(normalized_topics, ensure_ascii=False)
 
     if key == "proxy_type":
         normalized = raw.lower()
