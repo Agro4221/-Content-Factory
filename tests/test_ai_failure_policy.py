@@ -146,3 +146,34 @@ def test_valid_ai_response_still_returns_rewritten_text(monkeypatch) -> None:
     assert topic == "общее"
     assert "Переписанный текст" in rewritten
     assert "original source text" not in rewritten
+
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "I cannot help with that request.",
+        '{"message": "not in the expected structure"}',
+        "ТЕМА: новости\nХЭШТЕГИ: #новости",
+        "ТЕМА: новости\nТЕКСТ:\nХЭШТЕГИ: #новости",
+    ],
+)
+def test_malformed_success_response_is_rejected(monkeypatch, response: str) -> None:
+    patch_ai_logging(monkeypatch)
+    session = FakeSession(
+        FakeResponse(
+            200,
+            payload={"choices": [{"message": {"content": response}}]},
+        )
+    )
+
+    with pytest.raises(main.AIRewriteError):
+        asyncio.run(main._ai_rewrite("original source text", ai_config(), session))
+
+
+def test_parser_rejects_malformed_format_directly() -> None:
+    with pytest.raises(main.AIRewriteError, match="ТЕКСТ"):
+        main._parse_ai_response("model output without the required sections", "source")
+
+    with pytest.raises(main.AIRewriteError, match="пуст"):
+        main._parse_ai_response("ТЕМА: новости\nТЕКСТ:\nХЭШТЕГИ: #новости", "source")
