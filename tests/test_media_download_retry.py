@@ -168,3 +168,50 @@ def test_unexpected_download_error_keeps_post_retryable(monkeypatch) -> None:
     assert logs[0][0] == "WARN-501"
     assert "temporary Telegram file download failure" in logs[0][1]
 
+def test_flood_wait_from_media_download_reaches_main_cooldown_handler(monkeypatch) -> None:
+    class FakeFloodWaitError(Exception):
+        seconds = 17
+
+    logs: list[tuple[str, str]] = []
+
+    class FakeDB:
+        def add_log(self, level: str, message: str) -> None:
+            logs.append((level, message))
+
+    class Running:
+        @staticmethod
+        def is_set() -> bool:
+            return True
+
+    async def rewrite(*_args, **_kwargs):
+        return "news", "rewritten text"
+
+    async def flood_download(*_args, **_kwargs):
+        raise FakeFloodWaitError("wait 17 seconds")
+
+    class FakeBot:
+        async def send_message(self, **_kwargs):
+            raise AssertionError("send must not happen during FloodWait")
+
+    monkeypatch.setattr(main, "FloodWaitError", FakeFloodWaitError)
+    monkeypatch.setattr(main, "db", FakeDB())
+    monkeypatch.setattr(main, "bot_running", Running())
+    monkeypatch.setattr(main, "_ai_rewrite", rewrite)
+    monkeypatch.setattr(main, "_download_media", flood_download)
+
+    cfg = {
+        "ads_words": [],
+        "watermark": "",
+        "topic_channels": {"news": "@target"},
+    }
+    message = SimpleNamespace(id=92, message="source text", media=object())
+
+    with pytest.raises(FakeFloodWaitError):
+        asyncio.run(
+            main._process_message_group(
+                None, "@source", [message], cfg, FakeBot(), None
+            )
+        )
+
+    assert logs == []
+
