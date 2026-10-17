@@ -308,9 +308,26 @@ async def api_bot_toggle() -> dict:
 
 
 # === Настройки ===
+# These values are never sent over the settings API in plaintext.
+# The marker lets the admin form preserve an existing value without revealing it.
+_SECRET_SETTING_KEYS = frozenset({
+    "tg_api_hash",
+    "bot_token",
+    "remote_api_key",
+    "proxy_pass",
+    "mtproto_key",
+    "license_key",
+})
+_SECRET_SETTING_REDACTED_VALUE = "__CONTENT_FACTORY_SECRET_SET__"
+
+
 @app.get("/api/settings")
 async def api_get_settings(module: Optional[str] = Query(default=None)) -> dict:
-    return db.get_all_settings()
+    settings = dict(db.get_all_settings())
+    for key in _SECRET_SETTING_KEYS:
+        if settings.get(key):
+            settings[key] = _SECRET_SETTING_REDACTED_VALUE
+    return settings
 
 
 PROXY_SETTING_KEYS = frozenset(
@@ -404,6 +421,11 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
     for key, value in data.items():
         if key not in SETTING_KEYS:
             rejected.append(key)
+            continue
+
+        # The value is a UI placeholder, not a credential. Ignoring it means
+        # saving unrelated fields won't overwrite the stored secret.
+        if key in _SECRET_SETTING_KEYS and value == _SECRET_SETTING_REDACTED_VALUE:
             continue
 
         try:
