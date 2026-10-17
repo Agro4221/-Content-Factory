@@ -138,3 +138,34 @@ def test_missing_legacy_timestamps_are_backfilled_in_local_time(tmp_path) -> Non
         assert published == skipped
     finally:
         db.close()
+
+def test_newer_schema_is_rejected_before_legacy_schema_repair(tmp_path) -> None:
+    path = tmp_path / "newer_schema.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "CREATE TABLE published_posts (post_id TEXT PRIMARY KEY, source_name TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO published_posts (post_id, source_name) VALUES ('17', '@news')"
+        )
+        conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION + 1}")
+        conn.commit()
+    finally:
+        conn.close()
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="новее поддерживаемой"):
+        DB(str(path))
+
+    check = sqlite3.connect(path)
+    try:
+        columns = {row[1] for row in check.execute("PRAGMA table_info(published_posts)")}
+        row = check.execute("SELECT post_id, source_name FROM published_posts").fetchone()
+        assert "created_at" not in columns
+        assert row == ("17", "@news")
+        assert check.execute("PRAGMA user_version").fetchone()[0] == CURRENT_SCHEMA_VERSION + 1
+    finally:
+        check.close()
+
