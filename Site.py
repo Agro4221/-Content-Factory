@@ -120,7 +120,21 @@ def _normalize_int_range(
         raise SettingsValidationError(field=field, msg=f"{field} не может быть пустым")
     if not raw.isascii() or not raw.isdigit():
         raise SettingsValidationError(field=field, msg=f"{field} должен быть целым числом")
-    value = int(raw)
+    # Python limits decimal-to-int conversion length to mitigate denial of
+    # service. Return a field validation error rather than leaking that ValueError
+    # as an HTTP 500 when an API client submits thousands of digits.
+    if len(raw) > 20:
+        raise SettingsValidationError(
+            field=field,
+            msg=f"{field} содержит слишком много цифр.",
+        )
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SettingsValidationError(
+            field=field,
+            msg=f"{field} должен быть допустимым целым числом.",
+        ) from exc
     if min_value is not None and value < min_value:
         raise SettingsValidationError(field=field, msg=f"{field} должен быть >= {min_value}")
     if max_value is not None and value > max_value:
