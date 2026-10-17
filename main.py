@@ -834,6 +834,7 @@ async def _process_message_group(
 
     retry_delay_s = 0
     secondary_send_error: Exception | None = None
+    secondary_text_to_send = ""
     try:
         if media_list:
             if len(media_list) == 1:
@@ -864,15 +865,17 @@ async def _process_message_group(
             # suffix is not atomic with it: if the suffix fails, retrying the
             # whole group could publish the media a second time.
             if caption_remainder:
+                secondary_text_to_send = caption_remainder
                 try:
-                    await bot.send_message(chat_id=target_chat, text=caption_remainder)
+                    await bot.send_message(chat_id=target_chat, text=secondary_text_to_send)
                 except Exception as exc:
                     secondary_send_error = exc
             elif final_text and not any(
                 getattr(item, "caption", None) for item in media_list
             ):
+                secondary_text_to_send = final_text
                 try:
-                    await bot.send_message(chat_id=target_chat, text=final_text)
+                    await bot.send_message(chat_id=target_chat, text=secondary_text_to_send)
                 except Exception as exc:
                     secondary_send_error = exc
         else:
@@ -913,26 +916,35 @@ async def _process_message_group(
                 "пост сохранён для повтора, парсер остановлен."
             )
     else:
-        if secondary_send_error is not None:
-            db.add_log(
-                "WARN-407",
-                f"Основная публикация {source}/{messages[0].id} уже отправлена в {target_chat}, "
-                f"но остаток текста не доставлен ({type(secondary_send_error).__name__}: "
-                f"{secondary_send_error}). Пост будет помечен опубликованным, "
-                "чтобы повтор не продублировал медиа.",
-            )
         failed_post_id = messages[0].id
+        followup_queued = False
         try:
-            # The real DB commits album/message-group deduplication records
-            # atomically. Keep the fallback for lightweight integrations and
-            # older test doubles that only implement save_post().
-            save_group = getattr(db, "save_posts", None)
-            if callable(save_group):
-                save_group(source, [message.id for message in messages])
+            if secondary_send_error is not None:
+                # Media is already published. Atomically save deduplication
+                # markers and the undelivered text tail; never retry the whole
+                # source post merely because its second message failed.
+                save_with_followup = getattr(db, "save_posts_with_followup", None)
+                if not callable(save_with_followup):
+                    raise DatabaseWriteError(
+                        "database adapter cannot atomically persist a failed text follow-up"
+                    )
+                save_with_followup(
+                    source,
+                    [message.id for message in messages],
+                    target_chat,
+                    secondary_text_to_send,
+                )
+                followup_queued = True
             else:
-                for m in messages:
-                    failed_post_id = m.id
-                    db.save_post(source, m.id)
+                # The real DB commits album/message-group deduplication records
+                # atomically. Keep the fallback for older lightweight adapters.
+                save_group = getattr(db, "save_posts", None)
+                if callable(save_group):
+                    save_group(source, [message.id for message in messages])
+                else:
+                    for m in messages:
+                        failed_post_id = m.id
+                        db.save_post(source, m.id)
         except DatabaseWriteError as db_error:
             # Telegram has already accepted the send. Stop before more posts can
             # be emitted with missing deduplication records.
@@ -948,6 +960,13 @@ async def _process_message_group(
                 "но не записана в SQLite. Бот остановлен; проверьте канал перед запуском."
             )
         else:
+            if followup_queued:
+                db.add_log(
+                    "WARN-407",
+                    f"Основная публикация {source}/{messages[0].id} уже отправлена в {target_chat}, "
+                    f"но остаток текста не доставлен ({type(secondary_send_error).__name__}). "
+                    "Остаток атомарно сохранён в SQLite и будет повторно отправлен без дублирования медиа.",
+                )
             db.add_log(
                 "OK-501",
                 f"Пост {source}/{messages[0].id} успешно опубликован в {target_chat} "
