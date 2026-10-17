@@ -281,6 +281,25 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
 # ==========================================
 # ОБРАБОТКА ПОСТОВ
 # ==========================================
+def _truncate_telegram_text(text: str, max_length: int = 4096) -> str:
+    """Keep as much content as possible while respecting Telegram text limits."""
+    marker = "\n\n[…обрезано…]"
+    if len(text) <= max_length:
+        return text
+
+    content_limit = max(max_length - len(marker), 0)
+    prefix = text[:content_limit]
+    last_space = prefix.rfind(" ")
+    if last_space > 0:
+        prefix = prefix[:last_space]
+    else:
+        # A URL/token may not contain spaces; hard-cut it rather than dropping it.
+        prefix = prefix.rstrip()
+    if not prefix and content_limit:
+        prefix = text[:content_limit]
+    return prefix.rstrip() + marker
+
+
 async def _process_message_group(
     client: TelegramClient,
     source: str,
@@ -357,8 +376,7 @@ async def _process_message_group(
     MAX_TG_LEN = 4096
     if len(final_text) > MAX_TG_LEN:
         original_len = len(final_text)
-        truncated = final_text[: MAX_TG_LEN - 50].rsplit(" ", 1)[0]
-        final_text = truncated + "\n\n[…обрезано…]"
+        final_text = _truncate_telegram_text(final_text, MAX_TG_LEN)
         db.add_log(
             "WARN-500",
             f"Текст ответа ИИ обрезан с {original_len} до {len(final_text)} символов для Telegram.",
