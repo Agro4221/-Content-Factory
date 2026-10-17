@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HTML_PATH = ROOT / "admin.html"
-SCRIPT_TAG = re.compile(r"<script\\b([^>]*)>(.*?)</script\\s*>", re.IGNORECASE | re.DOTALL)
+SCRIPT_TAG = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
 
 
 def main() -> int:
@@ -22,7 +22,7 @@ def main() -> int:
     scripts = [
         body
         for attrs, body in SCRIPT_TAG.findall(html)
-        if not re.search(r"\\bsrc\\s*=", attrs, re.IGNORECASE) and body.strip()
+        if not re.search(r"\bsrc\s*=", attrs, re.IGNORECASE) and body.strip()
     ]
     if not scripts:
         print(f"В {HTML_PATH.name} не найден встроенный JavaScript.", file=sys.stderr)
