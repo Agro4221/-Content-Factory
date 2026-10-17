@@ -189,6 +189,14 @@ def _normalize_validated_setting(key: str, value) -> str:
             max_value=POLL_DELAY_MAX,
         )
 
+    if key == "local_port":
+        return _normalize_int_range(
+            "local_port",
+            raw,
+            min_value=1,
+            max_value=65535,
+        )
+
     if key == "proxy_port":
         return _normalize_int_range(
             "proxy_port",
