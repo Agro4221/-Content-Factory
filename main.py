@@ -753,7 +753,7 @@ def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
     if not clean:
         raise AIResponseFormatError("раздел ТЕКСТ: пуст")
     tags = h_m.group(1).strip() if h_m else ""
-    return topic, f"{clean}\n\n{tags}"
+    return topic, f"{clean}\n\n{tags}" if tags else clean
 
 
 def _log_ai_http_error(status: int, cfg: dict, body: str) -> None:
