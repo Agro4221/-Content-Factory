@@ -438,8 +438,8 @@ def _load_config() -> dict:
             or (remote_scheme == "http" and not http_loopback)
         ):
             raise ValueError(
-                "Для ai_mode=REMOTE нужен HTTPS; HTTP разрешён только для localhost "
-                "или loopback-адреса."
+                "remote_url для ai_mode=REMOTE должен использовать HTTPS; HTTP разрешён "
+                "только для localhost или loopback-адреса."
             )
 
     sources_raw = get_setting("sources", "")
