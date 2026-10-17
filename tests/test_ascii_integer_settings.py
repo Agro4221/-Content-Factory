@@ -35,7 +35,7 @@ def make_json_request(payload: dict) -> Request:
     )
 
 
-@pytest.mark.parametrize("key", ["poll_delay", "proxy_port", "tg_api_id"])
+@pytest.mark.parametrize("key", ["poll_delay", "proxy_port", "tg_api_id", "local_port"])
 def test_unicode_digit_returns_validation_error_not_server_error(key: str) -> None:
     response = asyncio.run(
         Site.api_post_settings(
@@ -55,6 +55,7 @@ def test_unicode_digit_returns_validation_error_not_server_error(key: str) -> No
         ("poll_delay", "60", "60"),
         ("proxy_port", "3128", "3128"),
         ("tg_api_id", "12345", "12345"),
+        ("local_port", "1234", "1234"),
     ],
 )
 def test_ascii_integer_settings_remain_valid(
