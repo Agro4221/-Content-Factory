@@ -470,6 +470,7 @@ def _load_config() -> dict:
     elif (
         not poll_delay_raw.isascii()
         or not poll_delay_raw.isdigit()
+        or len(poll_delay_raw) > len(str(POLL_DELAY_MAX))
         or not POLL_DELAY_MIN <= int(poll_delay_raw) <= POLL_DELAY_MAX
     ):
         raise ValueError(
