@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 import main
+import Site
 
 
 class FakeDB:
@@ -59,7 +60,7 @@ def test_empty_local_ai_host_uses_safe_default(monkeypatch) -> None:
     ],
 )
 def test_local_host_accepts_hosts_and_ipv6(host: str, expected: str) -> None:
-    assert main.Site._normalize_validated_setting("local_host", host) == expected
+    assert Site._normalize_validated_setting("local_host", host) == expected
 
 
 @pytest.mark.parametrize(
