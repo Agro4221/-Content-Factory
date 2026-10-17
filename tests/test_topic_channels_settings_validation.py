@@ -109,3 +109,41 @@ def test_telegram_invite_link_is_rejected_as_publication_target(
     assert result.status_code == 422
     assert db.writes == []
 
+@pytest.mark.parametrize(
+    "invalid_link",
+    [
+        "https://t.me/share/url?url=https://example.com",
+        "https://t.me/proxy?server=proxy.example&port=443&secret=00112233445566778899aabbccddeeff",
+        "ftp://t.me/news_channel",
+        "https://t.me/c/not-a-number/123",
+    ],
+)
+def test_non_channel_telegram_links_are_rejected_as_targets(
+    monkeypatch,
+    invalid_link: str,
+) -> None:
+    db = FakeDB()
+    monkeypatch.setattr(Site, "db", db)
+
+    result = _save({
+        "topic_channels": json.dumps({"news": invalid_link}, ensure_ascii=False)
+    })
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 422
+    assert db.writes == []
+
+
+def test_www_telegram_channel_link_is_normalized(monkeypatch) -> None:
+    db = FakeDB()
+    monkeypatch.setattr(Site, "db", db)
+
+    result = _save({
+        "topic_channels": json.dumps(
+            {"news": "www.t.me/news_channel/123"}, ensure_ascii=False
+        )
+    })
+
+    assert result == {"status": "success", "saved": 1}
+    assert json.loads(db.settings["topic_channels"]) == {"news": "@news_channel"}
+
