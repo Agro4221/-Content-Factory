@@ -385,10 +385,20 @@ def _normalize_validated_setting(key: str, value) -> str:
                 field=key,
                 msg="remote_url содержит некорректный адрес или порт.",
             ) from exc
-        if parsed_url.scheme.lower() not in {"http", "https"} or not parsed_url.hostname or not valid_port:
+        scheme = parsed_url.scheme.lower()
+        host = parsed_url.hostname
+        if (
+            scheme not in {"http", "https"}
+            or not host
+            or not valid_port
+            or (scheme == "http" and not _is_loopback_host(host))
+        ):
             raise SettingsValidationError(
                 field=key,
-                msg="remote_url должен быть корректным HTTP- или HTTPS-адресом.",
+                msg=(
+                    "remote_url должен использовать HTTPS; HTTP разрешён только "
+                    "для localhost или loopback-адреса."
+                ),
             )
         return raw
 
