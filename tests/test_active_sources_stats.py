@@ -49,6 +49,8 @@ def test_active_source_count_includes_sources_outside_top_five(
 
 
 def test_dashboard_uses_full_active_source_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    log_type_queries: list[tuple[str, ...]] = []
+
     class FakeDB:
         def sqlite_datetime(self, modifier: str) -> str:
             return {
@@ -70,7 +72,8 @@ def test_dashboard_uses_full_active_source_count(monkeypatch: pytest.MonkeyPatch
             return {}
 
         def count_logs_by_type(self, _types: tuple[str, ...], _since: str) -> int:
-            return 0
+            log_type_queries.append(_types)
+            return 4 if _types == ("OK-", "SUCCESS") else 0
 
         def last_published(self) -> tuple[None, None]:
             return None, None
@@ -98,3 +101,6 @@ def test_dashboard_uses_full_active_source_count(monkeypatch: pytest.MonkeyPatch
 
     assert len(stats["top_sources_24h"]) == 5
     assert stats["active_sources_24h"] == 7
+    assert stats["successes_24h"] == 4
+    assert ("OK-", "SUCCESS") in log_type_queries
+    assert ("SYS-",) not in log_type_queries
