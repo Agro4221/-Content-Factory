@@ -23,6 +23,13 @@ class FakeInputMediaPhoto:
         self.caption = caption
 
 
+
+class FakeInputMediaVideo:
+    def __init__(self, *, media, caption=None) -> None:
+        self.media = media
+        self.caption = caption
+
+
 class FakeDB:
     def __init__(self) -> None:
         self.published: list[tuple[str, int]] = []
@@ -42,10 +49,14 @@ class FakeDB:
 class FakeBot:
     def __init__(self) -> None:
         self.photos: list[dict] = []
+        self.videos: list[dict] = []
         self.messages: list[dict] = []
 
     async def send_photo(self, **kwargs) -> None:
         self.photos.append(kwargs)
+
+    async def send_video(self, **kwargs) -> None:
+        self.videos.append(kwargs)
 
     async def send_message(self, **kwargs) -> None:
         self.messages.append(kwargs)
@@ -98,6 +109,55 @@ def test_media_without_caption_is_published_without_calling_ai(monkeypatch) -> N
     assert bot.photos[0]["chat_id"] == "@destination"
     assert bot.photos[0]["photo"] == "photo-file"
     assert bot.photos[0]["caption"] is None
+
+
+def test_video_without_caption_is_published_without_calling_ai(monkeypatch) -> None:
+    fake_db = FakeDB()
+    bot = FakeBot()
+    ai_calls: list[str] = []
+
+    async def unexpected_ai_call(raw_text, cfg, session):
+        ai_calls.append(raw_text)
+        raise AssertionError("AI must not be called when the source post has no text")
+
+    async def fake_download_media(messages, caption):
+        assert caption == ""
+        return [FakeInputMediaVideo(media="video-file", caption=None)], []
+
+    monkeypatch.setattr(main, "db", fake_db)
+    monkeypatch.setattr(main, "_ai_rewrite", unexpected_ai_call)
+    monkeypatch.setattr(main, "_download_media", fake_download_media)
+    monkeypatch.setattr(main, "InputMediaVideo", FakeInputMediaVideo)
+    monkeypatch.setattr(main, "SLEEP_BETWEEN_POSTS_S", 0)
+
+    cfg = {
+        "ads_words": [],
+        "watermark": "",
+        "topic_channels": {"общее": "@destination"},
+    }
+    main.bot_running.clear()
+    main.bot_running.set()
+    try:
+        asyncio.run(
+            main._process_message_group(
+                client=None,
+                source="@source",
+                messages=[FakeMessage(44, MessageMediaVideo())],
+                cfg=cfg,
+                bot=bot,
+                ai_session=None,
+            )
+        )
+    finally:
+        main.bot_running.clear()
+
+    assert ai_calls == []
+    assert fake_db.skipped == []
+    assert fake_db.published == [("@source", 44)]
+    assert bot.videos == [
+        {"chat_id": "@destination", "video": "video-file", "caption": None}
+    ]
+    assert bot.photos == []
 
 
 def test_truly_empty_message_is_still_skipped(monkeypatch) -> None:
