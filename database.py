@@ -871,10 +871,43 @@ class DB:
                         "INSERT INTO skipped_posts (post_key, post_id, source_name, reason, created_at) VALUES (?, ?, ?, ?, ?)",
                         (make_post_key(source, post_id), str(post_id), source, reason, _local_now_str()),
                     )
-            except sqlite3.IntegrityError:
-                pass
-            except sqlite3.Error as e:
-                _logger.error("save_skipped_post failed for %s/%s: %s", source, post_id, e)
+            except sqlite3.IntegrityError as exc:
+                try:
+                    existing = self.conn.execute(
+                        "SELECT 1 FROM skipped_posts WHERE post_key = ?",
+                        (make_post_key(source, post_id),),
+                    ).fetchone()
+                except sqlite3.Error as check_error:
+                    _logger.error(
+                        "save_skipped_post failed for %s/%s while checking duplicate: %s",
+                        source,
+                        post_id,
+                        check_error,
+                    )
+                    raise DatabaseWriteError(
+                        f"could not verify skipped record for {source}/{post_id}"
+                    ) from check_error
+                if existing:
+                    return
+                _logger.error(
+                    "save_skipped_post integrity failure for %s/%s: %s",
+                    source,
+                    post_id,
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not record skipped post for {source}/{post_id}"
+                ) from exc
+            except sqlite3.Error as exc:
+                _logger.error(
+                    "save_skipped_post failed for %s/%s: %s",
+                    source,
+                    post_id,
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not record skipped post for {source}/{post_id}"
+                ) from exc
 
     # ---------- logs ----------
     def add_log(self, log_type: str, message: str) -> None:
