@@ -90,6 +90,14 @@ def _is_media_skippable(media) -> bool:
     return cls_name == "MessageMediaWebPage"
 
 
+def _is_downloadable_media(media) -> bool:
+    return type(media).__name__ in {"MessageMediaPhoto", "MessageMediaDocument"}
+
+
+class MediaDownloadError(RuntimeError):
+    """A downloadable Telegram attachment was not retrieved successfully."""
+
+
 def _classify_extension(path: str):
     ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
     if ext in ("mp4", "mov", "gif", "mkv", "webm"):
@@ -371,7 +379,15 @@ async def _process_message_group(
     if not bot_running.is_set():
         return
 
-    media_list, temp_paths = await _download_media(messages, final_text)
+    try:
+        media_list, temp_paths = await _download_media(messages, final_text)
+    except MediaDownloadError as exc:
+        db.add_log(
+            "WARN-501",
+            f"Пост {source}/{messages[0].id} не опубликован: {exc}. Оставлен для повтора.",
+        )
+        print(f"!!! Не удалось скачать вложение для {source}/{messages[0].id}; пост оставлен для повтора.")
+        return
 
     MAX_TG_LEN = 4096
     if len(final_text) > MAX_TG_LEN:
@@ -447,6 +463,10 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
                 continue
             path = await m.download_media(file=f"{TEMP_DIR}/", progress_callback=_progress_bar)
             if not path:
+                if _is_downloadable_media(m.media):
+                    raise MediaDownloadError(
+                        f"Telethon не вернул файл для сообщения {getattr(m, 'id', '?')}"
+                    )
                 continue
             temp_paths.append(path)
             m_t = _classify_extension(path)
