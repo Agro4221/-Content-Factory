@@ -62,6 +62,8 @@ from config import (
     MIN_AD_WORD_LEN,
     MIN_PROXY_PORT,
     POLL_DELAY_DEFAULT,
+    POLL_DELAY_MAX,
+    POLL_DELAY_MIN,
     POLL_PAUSE_S,
     SESSION_PATH,
     SLEEP_API_ERROR_S,
@@ -406,6 +408,22 @@ def _load_config() -> dict:
         if norm_key and norm_val:
             topic_channels[norm_key] = norm_val
 
+    poll_delay_raw = str(
+        get_setting("poll_delay", str(POLL_DELAY_DEFAULT)) or ""
+    ).strip()
+    if not poll_delay_raw:
+        poll_delay = POLL_DELAY_DEFAULT
+    elif (
+        not poll_delay_raw.isascii()
+        or not poll_delay_raw.isdigit()
+        or not POLL_DELAY_MIN <= int(poll_delay_raw) <= POLL_DELAY_MAX
+    ):
+        raise ValueError(
+            f"poll_delay должен быть целым числом от {POLL_DELAY_MIN} до {POLL_DELAY_MAX}."
+        )
+    else:
+        poll_delay = int(poll_delay_raw)
+
     return {
         "api_id": _safe_int(get_setting("tg_api_id", "0"), 0),
         "api_hash": (get_setting("tg_api_hash", "") or "").strip(),
@@ -422,8 +440,7 @@ def _load_config() -> dict:
         "sources": sources,
         "topic_channels": topic_channels,
         "ads_words": ads_words,
-        "poll_delay": _safe_int(get_setting("poll_delay", str(POLL_DELAY_DEFAULT)),
-                               POLL_DELAY_DEFAULT),
+        "poll_delay": poll_delay,
         "use_proxy": is_truthy(get_setting("use_proxy", "0")),
         "proxy_type": (get_setting("proxy_type", "") or "").strip().lower(),
         "proxy_host": (get_setting("proxy_host", "") or "").strip(),
