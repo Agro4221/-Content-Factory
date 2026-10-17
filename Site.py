@@ -444,9 +444,7 @@ async def api_proxy_status() -> dict:
 
 @app.post("/api/proxy/test")
 async def api_proxy_test(request: Request) -> dict:
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+    data = await _read_json_object(request)
 
     cfg = {key: str(data.get(key, "")) for key in PROXY_SETTING_KEYS}
     result = await check_proxy(cfg)
