@@ -109,3 +109,28 @@ def test_legacy_migration_preserves_existing_timestamps_and_new_rows_get_timesta
         assert db.conn.execute("PRAGMA user_version").fetchone()[0] == CURRENT_SCHEMA_VERSION
     finally:
         db.close()
+
+def test_missing_legacy_timestamps_are_backfilled_in_local_time(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import database
+
+    path = tmp_path / "legacy_no_timestamps.db"
+    _make_legacy_db(path, include_created_at=False)
+    monkeypatch.setattr(database, "_local_now_str", lambda: "2030-01-02 03:04:05")
+
+    db = DB(str(path))
+    try:
+        published = db.conn.execute(
+            "SELECT created_at FROM published_posts WHERE post_id = '17'"
+        ).fetchone()[0]
+        skipped = db.conn.execute(
+            "SELECT created_at FROM skipped_posts WHERE post_id = '18'"
+        ).fetchone()[0]
+
+        assert published == "2030-01-02 03:04:05"
+        assert skipped == "2030-01-02 03:04:05"
+    finally:
+        db.close()
+
