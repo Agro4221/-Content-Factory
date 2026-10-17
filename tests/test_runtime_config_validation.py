@@ -110,3 +110,27 @@ def test_corrupt_persisted_topic_routing_fails_closed(monkeypatch, raw: str) -> 
     with pytest.raises(ValueError, match="topic_channels"):
         main._load_config()
 
+def test_load_config_reads_one_consistent_settings_snapshot(monkeypatch) -> None:
+    class SnapshotDB:
+        def get_all_settings(self) -> dict[str, str]:
+            return {
+                "ai_mode": "LOCAL",
+                "local_host": "127.0.0.1",
+                "local_port": "1234",
+                "topic_channels": '{"news":"@target"}',
+                "sources": "@source",
+                "local_model": "snapshot-model",
+            }
+
+        def get_setting(self, *_args, **_kwargs):
+            raise AssertionError("live settings must not be read field-by-field")
+
+    monkeypatch.setattr(main, "db", SnapshotDB())
+
+    cfg = main._load_config()
+
+    assert cfg["ai_mode"] == "LOCAL"
+    assert cfg["local_model"] == "snapshot-model"
+    assert cfg["topic_channels"] == {"news": "@target"}
+    assert cfg["sources"] == ["@source"]
+
