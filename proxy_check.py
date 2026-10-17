@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import re
 from typing import Any, Optional, Type
 from urllib.parse import quote
@@ -17,6 +18,18 @@ try:
     _HAS_SOCKS = True
 except ImportError:
     _HAS_SOCKS = False
+
+
+def format_proxy_host(host: str) -> str:
+    """Bracket IPv6 literals when they are embedded in proxy URLs."""
+    normalized = (host or "").strip()
+    if normalized.startswith("[") and normalized.endswith("]"):
+        return normalized
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return normalized
+    return f"[{normalized}]" if address.version == 6 else normalized
 
 
 def _validate_port(port_str: str) -> Optional[int]:
@@ -72,7 +85,8 @@ async def _test_http(
     auth = ""
     if user or password:
         auth = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
-    proxy_url = f"http://{auth}{host}:{port}"
+    url_host = format_proxy_host(host)
+    proxy_url = f"http://{auth}{url_host}:{port}"
     client_timeout = aiohttp.ClientTimeout(total=timeout)
     try:
         async with aiohttp.ClientSession(timeout=client_timeout) as session:
@@ -101,7 +115,8 @@ async def _test_socks(
     auth = ""
     if user or password:
         auth = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
-    proxy_url = f"{scheme}://{auth}{host}:{port}"
+    url_host = format_proxy_host(host)
+    proxy_url = f"{scheme}://{auth}{url_host}:{port}"
     client_timeout = aiohttp.ClientTimeout(total=timeout)
     connector = ProxyConnector.from_url(proxy_url)
     try:
