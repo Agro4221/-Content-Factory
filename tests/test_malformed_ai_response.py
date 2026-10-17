@@ -129,7 +129,7 @@ def test_malformed_ai_response_is_not_sent_or_marked_as_published(
         "watermark": "",
         "topic_channels": {"новости": "@target"},
     }
-    message = SimpleNamespace(id=7, message="original source text")
+    message = SimpleNamespace(id=7, message="original source text", media=None)
 
     asyncio.run(
         main._process_message_group(None, "@source", [message], cfg, FakeBot(), None)
