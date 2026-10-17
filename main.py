@@ -1029,17 +1029,33 @@ async def _wait_for_settings() -> None:
     await asyncio.sleep(SLEEP_NO_CONFIG_S)
 
 
-async def _connect_authorized_client(client: TelegramClient) -> bool:
-    """Connect without invoking Telethon's interactive phone/code login flow."""
-    await client.connect()
+def _stdin_is_interactive() -> bool:
+    """Return whether a phone/code login prompt can be safely shown to the user."""
+    try:
+        return bool(sys.stdin and sys.stdin.isatty())
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+async def _connect_authorized_client(
+    client: TelegramClient,
+    *,
+    allow_interactive: bool = False,
+) -> bool:
+    """Connect non-interactively by default; login prompts require an explicit TTY opt-in."""
+    if allow_interactive:
+        await client.start()
+    else:
+        await client.connect()
+
     if await client.is_user_authorized():
         return True
     db.add_log(
         "ERR-203",
-        "Telegram-сессия не авторизована. Создайте/переавторизуйте session-файл "
-        "интерактивно, затем снова запустите парсер.",
+        "Telegram-сессия не авторизована. Запустите в интерактивном терминале, "
+        "чтобы пройти вход по телефону/коду, или укажите готовый session-файл.",
     )
-    print("!!! [ERR-203] Telegram-сессия не авторизована; интерактивный вход не запускался.")
+    print("!!! [ERR-203] Telegram-сессия не авторизована.")
     return False
 
 
@@ -1282,12 +1298,21 @@ async def main() -> None:
         need_reconnect = False
         try:
             session_file = SESSION_PATH + ".session"
-            if not os.path.exists(session_file):
-                db.add_log("ERR-203", "Сессия Telegram не найдена. Создайте её интерактивно один раз или положите готовый .session в каталог приложения.")
-                print("!!! [ERR-203] Сессия Telegram не найдена — запуск в headless-режиме невозможен.")
+            allow_interactive_login = _stdin_is_interactive()
+            if not os.path.exists(session_file) and not allow_interactive_login:
+                db.add_log(
+                    "ERR-203",
+                    "Сессия Telegram не найдена и интерактивный терминал недоступен. "
+                    "Запустите парсер из терминала для создания сессии или положите "
+                    "готовый .session в каталог приложения.",
+                )
+                print("!!! [ERR-203] Нужна авторизация Telegram в интерактивном терминале.")
                 bot_running.clear()
                 continue
-            if not await _connect_authorized_client(client):
+            if not await _connect_authorized_client(
+                client,
+                allow_interactive=allow_interactive_login,
+            ):
                 bot_running.clear()
                 continue
             print("\n=== КРУГ ОБХОДА ИСТОЧНИКОВ НАЧАТ ===")
