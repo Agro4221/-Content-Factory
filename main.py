@@ -245,7 +245,7 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
         db.add_log("WARN-300", "MTProto применён только к чтению каналов; бот-отправщик идёт напрямую.")
         return None, mtproto_kwargs, bot_session
 
-    proxy_type = cfg["proxy_type"] or "socks5"
+    proxy_type = cfg["proxy_type"] or "http"
     telethon_proxy = {
         "proxy_type": proxy_type,
         "addr": cfg["proxy_host"],
