@@ -44,7 +44,6 @@ from telethon.tl.custom.message import Message
 from config import (
     AI_REQUEST_TIMEOUT_S,
     AI_TEMPERATURE,
-    AI_TRUNCATE_FALLBACK,
     API_HOST,
     API_PORT,
     BASE_DIR,
@@ -300,7 +299,15 @@ async def _process_message_group(
         return
 
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
-    topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    try:
+        topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    except AIRewriteError as exc:
+        db.add_log(
+            "WARN-405",
+            f"Пост {source}/{messages[0].id} не опубликован: AI недоступен ({exc}). Повторим на следующем проходе.",
+        )
+        print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
+        return
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
@@ -416,6 +423,10 @@ def _log_send_error(send_error: Exception, target_chat) -> None:
         print(f"!!! ОШИБКА ОТПРАВКИ: {send_error}")
 
 
+class AIRewriteError(RuntimeError):
+    """AI не смог подготовить текст, безопасный для публикации."""
+
+
 async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[str, str]:
     topics = ", ".join(cfg["topic_channels"].keys()) or "общее"
     db_prompt = db.get_setting("system_prompt", "")
@@ -451,6 +462,7 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
         "temperature": AI_TEMPERATURE,
     }
 
+    failure_reason = "неизвестная ошибка AI"
     try:
         async with session_ai.post(url, json=payload, headers=headers,
                                    timeout=AI_REQUEST_TIMEOUT_S) as r:
@@ -458,30 +470,53 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
                 data = await r.json()
                 res = ""
                 for item in data.get("choices", []):
-                    res = item.get("message", {}).get("content", "")
-                    if res:
+                    candidate = item.get("message", {}).get("content", "")
+                    if isinstance(candidate, str) and candidate.strip():
+                        res = candidate
                         break
                 if not res:
-                    return "общее", raw_text[:AI_TRUNCATE_FALLBACK]
-                return _parse_ai_response(res, raw_text)
-            _log_ai_http_error(r.status, cfg, await r.text())
+                    failure_reason = "AI вернул пустой ответ"
+                    db.add_log("ERR-400", failure_reason)
+                    print("!!! [AI ERROR] Пустой ответ от AI endpoint")
+                else:
+                    topic, rewritten_text = _parse_ai_response(res, raw_text)
+                    if rewritten_text.strip():
+                        return topic, rewritten_text
+                    failure_reason = "AI вернул пустой текст после разбора"
+                    db.add_log("ERR-400", failure_reason)
+            else:
+                body = await r.text()
+                _log_ai_http_error(r.status, cfg, body)
+                failure_reason = f"AI endpoint вернул HTTP {r.status}"
     except aiohttp.ClientConnectorError as e:
         _log_ai_network_error(e, cfg)
+        failure_reason = "AI endpoint недоступен"
     except Exception as e:
         db.add_log("ERR-400", f"Неизвестный сбой AI: {e}")
         print(f"!!! [AI ERROR] {e}")
+        failure_reason = f"ошибка ответа AI ({type(e).__name__})"
 
-    return "общее", raw_text[:AI_TRUNCATE_FALLBACK] + "..."
+    # Не публикуем обрезок оригинала: вызывающий код оставит запись для повтора.
+    raise AIRewriteError(failure_reason)
 
 
 def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
+    """Accept only structured responses with non-empty, publishable rewritten text."""
+    if not isinstance(res, str) or not res.strip():
+        raise AIRewriteError("AI вернул пустой ответ")
+
     t_m = re.search(r"ТЕМА:\s*(.*)", res, re.I)
     c_m = re.search(r"ТЕКСТ:\s*(.*)", res, re.S | re.I)
     h_m = re.search(r"ХЭШТЕГИ:\s*(.*)", res, re.I)
+    if not c_m:
+        raise AIRewriteError("отсутствует обязательный раздел ТЕКСТ:")
 
     topic = (t_m.group(1).strip().lower() if t_m else "общее").split("\n")[0].strip()
-    full = c_m.group(1).strip() if c_m else res
-    clean = full.split("ХЭШТЕГИ:")[0].strip()
+    full = c_m.group(1).strip()
+    clean = re.split(r"ХЭШТЕГИ\s*:", full, maxsplit=1, flags=re.I)[0].strip()
+    if not clean:
+        raise AIRewriteError("раздел ТЕКСТ: пуст")
+
     tags = h_m.group(1).strip() if h_m else ""
     return topic, f"{clean}\n\n{tags}"
 
