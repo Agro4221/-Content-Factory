@@ -98,7 +98,13 @@ def _is_media_skippable(media) -> bool:
 
 
 def _is_downloadable_media(media) -> bool:
-    return type(media).__name__ in {"MessageMediaPhoto", "MessageMediaDocument"}
+    # Telethon normally represents videos as MessageMediaDocument; keep the
+    # explicit video name for compatible wrappers and test doubles.
+    return type(media).__name__ in {
+        "MessageMediaPhoto",
+        "MessageMediaDocument",
+        "MessageMediaVideo",
+    }
 
 
 class MediaDownloadError(RuntimeError):
@@ -389,10 +395,17 @@ async def _process_message_group(
     captions = [m.message for m in messages if m.message]
     raw_text = "\n".join(captions).strip()
 
-    has_media = any(not _is_media_skippable(m.media) for m in messages)
+    has_media = any(_is_downloadable_media(m.media) for m in messages)
     if not raw_text and not has_media:
+        has_unsupported_media = any(
+            m.media is not None
+            and not _is_media_skippable(m.media)
+            and not _is_downloadable_media(m.media)
+            for m in messages
+        )
+        reason = "unsupported_media" if has_unsupported_media else "empty"
         for m in messages:
-            db.save_skipped_post(source, m.id, "empty")
+            db.save_skipped_post(source, m.id, reason)
         return
 
     if raw_text and cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
@@ -593,7 +606,7 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
     caption_assigned = False
     try:
         for m in messages:
-            if _is_media_skippable(m.media):
+            if _is_media_skippable(m.media) or not _is_downloadable_media(m.media):
                 continue
             path = await m.download_media(file=f"{TEMP_DIR}/", progress_callback=_progress_bar)
             if not path:
