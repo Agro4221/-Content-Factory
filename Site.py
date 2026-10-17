@@ -31,6 +31,7 @@ from config import (
     POLL_DELAY_MAX,
     POLL_DELAY_MIN,
     SETTING_KEYS,
+    is_truthy,
 )
 from database import format_display_timestamp, get_db
 from state import bot_running
@@ -121,6 +122,17 @@ def _normalize_int_range(
 def _normalize_validated_setting(key: str, value) -> str:
     """Валидирует оставшиеся глобальные ключи настроек."""
     raw = "" if value is None else str(value).strip()
+
+    if key == "use_proxy":
+        normalized = raw.lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return "1"
+        if normalized in {"0", "false", "no", "off"}:
+            return "0"
+        raise SettingsValidationError(
+            field=key,
+            msg=f"{key} должен быть логическим значением",
+        )
 
     if key == "poll_delay":
         return _normalize_int_range(
@@ -310,7 +322,9 @@ async def api_bot_toggle() -> dict:
 # === Настройки ===
 @app.get("/api/settings")
 async def api_get_settings(module: Optional[str] = Query(default=None)) -> dict:
-    return db.get_all_settings()
+    settings = db.get_all_settings()
+    settings["use_proxy"] = "1" if is_truthy(settings.get("use_proxy", "0")) else "0"
+    return settings
 
 
 PROXY_SETTING_KEYS = frozenset(
@@ -345,7 +359,7 @@ def get_proxy_runtime_status() -> dict:
 
 async def refresh_proxy_runtime_status(settings: Optional[dict] = None) -> dict:
     cfg = _proxy_cfg_from_settings(settings)
-    use_proxy = str(cfg.get("use_proxy", "0")).strip() in ("1", "true", "True")
+    use_proxy = is_truthy(cfg.get("use_proxy", "0"))
     host = (cfg.get("proxy_host") or "").strip()
 
     if not use_proxy:
