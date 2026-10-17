@@ -690,6 +690,40 @@ async def _wait_for_db() -> None:
     await asyncio.sleep(SLEEP_DB_ERROR_S)
 
 
+_SOURCE_CURSORS_SETTING = "_internal_source_cursors_json"
+
+
+def _load_source_cursors() -> dict[str, int]:
+    try:
+        raw = db.get_setting(_SOURCE_CURSORS_SETTING, "{}")
+        cursors = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(cursors, dict):
+        return {}
+    return {
+        source: value
+        for source, value in cursors.items()
+        if isinstance(source, str)
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+    }
+
+
+def _get_source_cursor(source: str) -> int | None:
+    return _load_source_cursors().get(source)
+
+
+def _set_source_cursor(source: str, message_id: int) -> None:
+    cursors = _load_source_cursors()
+    cursors[source] = int(message_id)
+    db.set_setting(
+        _SOURCE_CURSORS_SETTING,
+        json.dumps(cursors, ensure_ascii=False, sort_keys=True),
+    )
+
+
 async def _process_one_source(
     client: TelegramClient,
     source: str,
@@ -701,13 +735,18 @@ async def _process_one_source(
         print("--> [СИСТЕМА] Парсинг прерван пользователем.")
         return False
     print(f"--> Проверка канала: {source}")
-    grouped: dict = {}
+    cursor = _get_source_cursor(source)
+    source_messages: list[Message] = []
     try:
-        async for message in client.iter_messages(source, limit=10):
-            if db.is_published(source, message.id) or db.is_skipped(source, message.id):
-                continue
-            gid = message.grouped_id or f"single_{message.id}"
-            grouped.setdefault(gid, []).append(message)
+        if cursor is None:
+            # Keep the established first-scan behaviour: seed from the latest ten
+            # posts rather than publishing an entire historical channel.
+            async for message in client.iter_messages(source, limit=10):
+                source_messages.append(message)
+        else:
+            # Subsequent scans catch every newer message, not just the newest ten.
+            async for message in client.iter_messages(source, min_id=cursor, reverse=True):
+                source_messages.append(message)
     except (AuthKeyUnregisteredError, SessionPasswordNeededError) as e:
         db.add_log("ERR-203", f"Сессия Telegram невалидна ({type(e).__name__}): {e}")
         print(f"!!! [ERR-203] Сессия Telegram закрыта / требует 2FA: {e}")
@@ -725,11 +764,60 @@ async def _process_one_source(
         print(f"!!! Ошибка доступа к {source}: {e}")
         return False
 
-    for messages in grouped.values():
+    if not source_messages:
+        return False
+
+    source_messages.sort(key=lambda message: message.id)
+    if cursor is None:
+        cursor = max(0, source_messages[0].id - 1)
+        _set_source_cursor(source, cursor)
+
+    grouped: dict = {}
+    for message in source_messages:
+        gid = message.grouped_id or f"single_{message.id}"
+        grouped.setdefault(gid, []).append(message)
+
+    completed_groups: dict[object, bool] = {}
+    cursor_index = 0
+
+    def advance_cursor() -> None:
+        nonlocal cursor, cursor_index
+        previous_cursor = cursor
+        while cursor_index < len(source_messages):
+            message = source_messages[cursor_index]
+            gid = message.grouped_id or f"single_{message.id}"
+            if not completed_groups.get(gid, False):
+                break
+            cursor = message.id
+            cursor_index += 1
+        if cursor > previous_cursor:
+            _set_source_cursor(source, cursor)
+
+    for gid, messages in grouped.items():
         if not bot_running.is_set():
             break
-        await _process_message_group(client, source, messages, cfg, bot, ai_session)
+
+        pending = [
+            message for message in messages
+            if not db.is_published(source, message.id)
+            and not db.is_skipped(source, message.id)
+        ]
+        if pending:
+            await _process_message_group(
+                client, source, pending, cfg, bot, ai_session
+            )
+
+        completed_groups[gid] = all(
+            db.is_published(source, message.id)
+            or db.is_skipped(source, message.id)
+            for message in messages
+        )
+        advance_cursor()
+        if not completed_groups[gid]:
+            # Keep this message available for retry and don't advance over newer IDs.
+            return False
     return False
+
 
 
 async def main() -> None:
