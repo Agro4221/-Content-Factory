@@ -21,13 +21,16 @@ def test_release_validates_tests_before_packaging_or_publishing() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     tests = workflow.index("Run complete regression suite")
     build = workflow.index("Build Windows executable")
+    smoke = workflow.index("Smoke-test built Windows executable")
     verify = workflow.index("Verify executable and generate checksum")
     upload = workflow.index("Upload build artifact")
     release = workflow.index("Publish GitHub Release")
 
-    assert tests < build < verify < upload < release
+    assert tests < build < smoke < verify < upload < release
     assert "python -m pytest -q tests" in workflow
     assert "dist/Parser.exe.sha256" in workflow
+    assert "Parser.exe smoke test passed" in workflow
+    assert "/api/bot/status" in workflow
     assert "gh release create" in workflow
     assert "--verify-tag" in workflow
     assert r"^v\d+\.\d+\.\d+(\.\d+)?$" in workflow
