@@ -66,7 +66,7 @@ from config import (
     make_post_key,
     warn_if_defaults,
 )
-from database import get_db
+from database import DatabaseWriteError, get_db
 from Site import app
 from state import bot_running
 from proxy_check import build_mtproto_client_kwargs
@@ -401,46 +401,65 @@ async def _process_message_group(
     caption_remainder = _media_caption_remainder(final_text)
 
     try:
-        if media_list:
-            if len(media_list) == 1:
-                single = media_list[0]
-                if isinstance(single, InputMediaPhoto):
-                    await bot.send_photo(
-                        chat_id=target_chat,
-                        photo=single.media,
-                        caption=single.caption or final_text or None,
-                    )
-                elif isinstance(single, InputMediaVideo):
-                    await bot.send_video(
-                        chat_id=target_chat,
-                        video=single.media,
-                        caption=single.caption or final_text or None,
-                    )
+            if media_list:
+                if len(media_list) == 1:
+                    single = media_list[0]
+                    if isinstance(single, InputMediaPhoto):
+                        await bot.send_photo(
+                            chat_id=target_chat,
+                            photo=single.media,
+                            caption=single.caption or final_text or None,
+                        )
+                    elif isinstance(single, InputMediaVideo):
+                        await bot.send_video(
+                            chat_id=target_chat,
+                            video=single.media,
+                            caption=single.caption or final_text or None,
+                        )
+                    else:
+                        await bot.send_document(
+                            chat_id=target_chat,
+                            document=single.media,
+                            caption=single.caption or final_text or None,
+                        )
                 else:
-                    await bot.send_document(
-                        chat_id=target_chat,
-                        document=single.media,
-                        caption=single.caption or final_text or None,
-                    )
+                    await bot.send_media_group(chat_id=target_chat, media=media_list)
+
+                if caption_remainder:
+                    await bot.send_message(chat_id=target_chat, text=caption_remainder)
+                elif final_text and not any(
+                    getattr(item, "caption", None) for item in media_list
+                ):
+                    await bot.send_message(chat_id=target_chat, text=final_text)
             else:
-                await bot.send_media_group(chat_id=target_chat, media=media_list)
-
-            if caption_remainder:
-                await bot.send_message(chat_id=target_chat, text=caption_remainder)
-            elif final_text and not any(
-                getattr(item, "caption", None) for item in media_list
-            ):
                 await bot.send_message(chat_id=target_chat, text=final_text)
-        else:
-            await bot.send_message(chat_id=target_chat, text=final_text)
 
-        for m in messages:
-            db.save_post(source, m.id)
-        print(f"УСПЕХ: → [{topic}] -> {target_chat}")
     except Exception as send_error:
         _log_send_error(send_error, target_chat)
         for m in messages:
             db.save_skipped_post(source, m.id, "send_failed")
+    else:
+        failed_post_id = messages[0].id
+        try:
+            for m in messages:
+                failed_post_id = m.id
+                db.save_post(source, m.id)
+        except DatabaseWriteError as db_error:
+            # Telegram has already accepted the send. Stop before more posts can
+            # be emitted with missing deduplication records.
+            bot_running.clear()
+            db.add_log(
+                "ERR-DB-501",
+                f"Пост {source}/{failed_post_id} уже отправлен в Telegram, "
+                f"но запись в SQLite не удалась ({db_error}); бот остановлен. "
+                "Перед перезапуском проверьте целевой канал.",
+            )
+            print(
+                f"!!! Публикация {source}/{failed_post_id} уже отправлена, "
+                "но не записана в SQLite. Бот остановлен; проверьте канал перед запуском."
+            )
+        else:
+            print(f"УСПЕХ: → [{topic}] -> {target_chat}")
     finally:
         for p in temp_paths:
             try:
