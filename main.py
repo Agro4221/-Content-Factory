@@ -531,8 +531,20 @@ async def _process_message_group(
                 f"({type(send_error).__name__}); оставлен для повторной попытки.",
             )
         else:
-            for m in messages:
-                db.save_skipped_post(source, m.id, "send_failed")
+            # A send rejection can be corrected (permissions, target, token, or
+            # malformed payload). Never turn a delivery failure into a permanent
+            # skip: stop the loop and leave the post pending for a deliberate retry.
+            bot_running.clear()
+            db.add_log(
+                "ERR-408",
+                f"Пост {source}/{messages[0].id} не доставлен из-за постоянной ошибки "
+                f"({type(send_error).__name__}); пост оставлен для повтора, парсер остановлен. "
+                "Исправьте токен/права/целевой канал и запустите парсер снова.",
+            )
+            print(
+                f"!!! [ERR-408] Отправка поста {source}/{messages[0].id} отклонена; "
+                "пост сохранён для повтора, парсер остановлен."
+            )
     else:
         if secondary_send_error is not None:
             db.add_log(
