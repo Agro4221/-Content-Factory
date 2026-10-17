@@ -217,18 +217,31 @@ def _media_caption_cut_index(text: str, max_chars: int = 1020) -> int:
     return 0
 
 
-def _media_caption_prefix(text: str, max_chars: int = 1020) -> str:
-    """Return valid, balanced HTML that fits alongside an ellipsis in Telegram."""
+def _media_caption_split(text: str, max_chars: int = 1020) -> tuple[str, int]:
+    """Return a balanced caption prefix and the exact source index it consumes."""
     caption = (text or "").strip()
     if len(caption) <= max_chars:
-        return caption
+        return caption, len(caption)
+
     cut = _media_caption_cut_index(caption, max_chars)
     while cut > 0:
-        prefix = _sanitize_telegram_html(caption[:cut].rstrip())
+        raw_prefix = caption[:cut].rstrip()
+        prefix = _sanitize_telegram_html(raw_prefix)
         if len(prefix) <= max_chars:
-            return prefix
-        cut = _media_caption_cut_index(caption[:cut].rstrip(), max(1, cut - 8))
-    return ""
+            # Use this final cut for the remainder too. Sanitizing an open HTML
+            # fragment may add closing tags and require moving the cut backwards.
+            return prefix, cut
+        cut = _media_caption_cut_index(
+            caption[:cut].rstrip(),
+            max(1, cut - max(8, len(prefix) - max_chars + 8)),
+        )
+    return "", 0
+
+
+def _media_caption_prefix(text: str, max_chars: int = 1020) -> str:
+    """Return valid, balanced HTML that fits alongside an ellipsis in Telegram."""
+    prefix, _cut = _media_caption_split(text, max_chars)
+    return prefix
 
 
 def _media_caption_remainder(text: str) -> str:
@@ -236,7 +249,7 @@ def _media_caption_remainder(text: str) -> str:
     caption = (text or "").strip()
     if len(caption) <= 1024:
         return ""
-    cut = _media_caption_cut_index(caption, 1020)
+    _prefix, cut = _media_caption_split(caption, 1020)
     return _sanitize_telegram_html(caption[cut:].lstrip())
 
 
