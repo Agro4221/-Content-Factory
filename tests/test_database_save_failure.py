@@ -141,3 +141,57 @@ def test_save_posts_is_idempotent_for_already_recorded_group_items() -> None:
     finally:
         db.conn.close()
 
+def test_set_settings_rolls_back_entire_batch_when_one_write_fails() -> None:
+    db = object.__new__(DB)
+    db._lock = threading.Lock()
+    db.conn = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        db.conn.execute(
+            "CREATE TABLE bot_settings (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        db.conn.execute(
+            "INSERT INTO bot_settings (key, value) VALUES ('existing', 'original')"
+        )
+        db.conn.execute(
+            """
+            CREATE TRIGGER reject_one_setting
+            BEFORE INSERT ON bot_settings
+            WHEN NEW.key = 'reject'
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated disk full');
+            END;
+            """
+        )
+
+        with pytest.raises(RuntimeError, match="transaction rolled back"):
+            db.set_settings({
+                "existing": "updated",
+                "reject": "value",
+                "later": "value",
+            })
+
+        rows = dict(db.conn.execute("SELECT key, value FROM bot_settings"))
+        assert rows == {"existing": "original"}
+        assert not db.conn.in_transaction
+    finally:
+        db.conn.close()
+
+
+def test_set_settings_commits_whole_batch() -> None:
+    db = object.__new__(DB)
+    db._lock = threading.Lock()
+    db.conn = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        db.conn.execute(
+            "CREATE TABLE bot_settings (key TEXT PRIMARY KEY, value TEXT)"
+        )
+
+        db.set_settings({"ai_mode": "LOCAL", "local_port": 1234})
+
+        assert dict(db.conn.execute("SELECT key, value FROM bot_settings")) == {
+            "ai_mode": "LOCAL",
+            "local_port": "1234",
+        }
+    finally:
+        db.conn.close()
+
