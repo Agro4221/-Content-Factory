@@ -575,6 +575,10 @@ async def api_server_time() -> dict[str, object]:
 
 
 # === Логи ===
+# Bound offset scans so an arbitrary page parameter cannot force huge SQLite work.
+MAX_LOGS_OFFSET = 1_000_000
+
+
 @app.get("/api/logs")
 async def api_get_logs(
     limit: int = LOGS_PAGE_SIZE,
@@ -588,6 +592,8 @@ async def api_get_logs(
     if page < 1:
         page = 1
     offset = (page - 1) * limit
+    if offset > MAX_LOGS_OFFSET:
+        return []
     rows = db.get_logs(limit=limit, offset=offset)
     return [
         {
