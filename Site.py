@@ -122,6 +122,17 @@ def _normalize_validated_setting(key: str, value) -> str:
     """Валидирует оставшиеся глобальные ключи настроек."""
     raw = "" if value is None else str(value).strip()
 
+    if key == "proxy_type":
+        normalized = raw.lower()
+        if not normalized:
+            return ""
+        if normalized in {"http", "socks5", "socks4", "mtproto"}:
+            return normalized
+        raise SettingsValidationError(
+            field=key,
+            msg="proxy_type должен быть одним из: HTTP, SOCKS5, SOCKS4, MTProto",
+        )
+
     if key == "poll_delay":
         return _normalize_int_range(
             "poll_delay",
