@@ -583,7 +583,7 @@ def _build_posts_stats() -> dict:
 
 
 @app.get("/api/stats/posts")
-async def api_stats_posts() -> dict | JSONResponse:
+async def api_stats_posts() -> dict:
     try:
         return _build_posts_stats()
     except Exception as e:
