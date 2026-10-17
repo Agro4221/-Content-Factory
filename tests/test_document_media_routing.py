@@ -87,7 +87,7 @@ def test_single_document_is_sent_with_send_document(
         "watermark": "",
         "topic_channels": {"news": "@target"},
     }
-    message = SimpleNamespace(id=7, message="source caption")
+    message = SimpleNamespace(id=7, message="source caption", media=None)
 
     asyncio.run(
         main._process_message_group(None, "@source", [message], cfg, FakeBot(), None)
