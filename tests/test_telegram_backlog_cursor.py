@@ -200,3 +200,26 @@ def test_first_scan_fetches_the_older_half_of_a_cut_off_album(monkeypatch) -> No
     ]
     assert db.cursor() == 115
 
+def test_flood_wait_from_source_read_reaches_main_cooldown_handler(monkeypatch) -> None:
+    class FakeFloodWaitError(Exception):
+        seconds = 23
+
+    db = FakeDB()
+    monkeypatch.setattr(main, "db", db)
+    monkeypatch.setattr(main, "bot_running", RunningBot())
+    monkeypatch.setattr(main, "FloodWaitError", FakeFloodWaitError)
+
+    class FloodClient:
+        def iter_messages(self, _source, **_kwargs):
+            async def generate():
+                raise FakeFloodWaitError("wait 23 seconds")
+                yield message(1)
+
+            return generate()
+
+    with pytest.raises(FakeFloodWaitError):
+        asyncio.run(main._process_one_source(FloodClient(), SOURCE, {}, None, None))
+
+    assert db.logs == []
+    assert db.cursor() is None
+
