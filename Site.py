@@ -32,6 +32,7 @@ from config import (
     MIN_PROXY_PORT,
     MODULE_POSTS,
     POLL_DELAY_MAX,
+    normalize_target_chat,
     POLL_DELAY_MIN,
     SETTING_KEYS,
     is_truthy,
@@ -156,8 +157,13 @@ def _normalize_validated_setting(key: str, value) -> str:
                     msg="Названия категорий и целевые каналы должны быть строками.",
                 )
             topic = topic.strip()
-            target = target.strip()
+            target = normalize_target_chat(target)
             if topic and target:
+                if target.startswith(("https://t.me/+", "https://t.me/joinchat/")) or "/joinchat/" in target:
+                    raise SettingsValidationError(
+                        field=key,
+                        msg="Ссылка-приглашение Telegram не является получателем публикации. Укажите публичный @username или числовой ID канала.",
+                    )
                 normalized_topics[topic] = target
         return json.dumps(normalized_topics, ensure_ascii=False)
 
