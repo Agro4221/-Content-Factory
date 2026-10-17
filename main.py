@@ -737,6 +737,11 @@ async def _process_message_group(
                 "но не записана в SQLite. Бот остановлен; проверьте канал перед запуском."
             )
         else:
+            db.add_log(
+                "OK-501",
+                f"Пост {source}/{messages[0].id} успешно опубликован в {target_chat} "
+                f"(тема: {topic}).",
+            )
             print(f"УСПЕХ: → [{topic}] -> {target_chat}")
     finally:
         for p in temp_paths:
