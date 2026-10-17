@@ -577,8 +577,23 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
                     },
                 )
 
-    for key, normalized_value in accepted.items():
-        db.set_setting(key, normalized_value)
+    if accepted:
+        save_settings_batch = getattr(db, "set_settings", None)
+        try:
+            if callable(save_settings_batch):
+                save_settings_batch(accepted)
+            else:
+                # Compatibility for adapters/test doubles predating set_settings().
+                for key, normalized_value in accepted.items():
+                    db.set_setting(key, normalized_value)
+        except Exception:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "msg": "Не удалось сохранить настройки. Изменения отменены; проверьте доступность базы данных.",
+                },
+            )
 
     saved = len(accepted)
     if accepted.keys() & PROXY_SETTING_KEYS:
