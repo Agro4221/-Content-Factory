@@ -691,7 +691,7 @@ def _build_posts_stats() -> dict:
 
     skipped_by_reason = db.top_skipped_reasons(h24_iso)
 
-    successes_24h = db.count_logs_by_type(("OK", "SUCCESS", "SYS-"), h24_iso)
+    successes_24h = db.count_logs_by_type(("OK-", "SUCCESS"), h24_iso)
     errors_24h = db.count_logs_by_type(("ERR-",), h24_iso)
 
     last_ts, last_source = db.last_published()
