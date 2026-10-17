@@ -79,7 +79,7 @@ from config import (
 from database import DatabaseWriteError, get_db
 from Site import app
 from state import bot_running
-from proxy_check import build_mtproto_client_kwargs, format_proxy_host
+from proxy_check import build_mtproto_client_kwargs, format_proxy_host, normalize_mtproto_proxy_link
 
 try:
     from aiohttp_socks import ProxyConnector as SocksConnector
@@ -331,6 +331,11 @@ def _load_config() -> dict:
 def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[AiohttpSession]]:
     if not cfg["use_proxy"]:
         return None, None, None
+
+    try:
+        cfg = normalize_mtproto_proxy_link(cfg)
+    except ValueError as exc:
+        raise ProxyConfigurationError(f"Некорректная MTProto-ссылка: {exc}") from exc
 
     host = (cfg.get("proxy_host") or "").strip()
     if not host:
