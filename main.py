@@ -259,22 +259,22 @@ def _load_config() -> dict:
             f"Некорректный ai_mode={ai_mode!r}; допустимы только LOCAL и REMOTE."
         )
 
-    local_host = (db.get_setting("local_host", "127.0.0.1") or "127.0.0.1").strip()
-    local_port_raw = str(db.get_setting("local_port", "1234") or "1234").strip()
+    local_host = (get_setting("local_host", "127.0.0.1") or "127.0.0.1").strip()
+    local_port_raw = str(get_setting("local_port", "1234") or "1234").strip()
     local_port = _validate_port(local_port_raw)
     if not local_host:
         raise ValueError("local_host не может быть пустым.")
     if local_port is None:
         raise ValueError("local_port должен быть целым числом от 1 до 65535.")
 
-    sources_raw = db.get_setting("sources", "")
+    sources_raw = get_setting("sources", "")
     sources = [s.strip() for s in sources_raw.split("\n") if s.strip()] if sources_raw else []
 
-    ads_raw = db.get_setting("ads_words", "")
+    ads_raw = get_setting("ads_words", "")
     ads_words = [w.strip() for w in ads_raw.split("\n") if w.strip()] if ads_raw else []
 
     try:
-        raw_topics = json.loads(db.get_setting("topic_channels", "{}") or "{}")
+        raw_topics = json.loads(get_setting("topic_channels", "{}") or "{}")
     except (TypeError, ValueError) as exc:
         raise ValueError(
             "topic_channels содержит повреждённый JSON; настройки не применены, "
@@ -300,31 +300,31 @@ def _load_config() -> dict:
             topic_channels[norm_key] = norm_val
 
     return {
-        "api_id": _safe_int(db.get_setting("tg_api_id", "0"), 0),
-        "api_hash": (db.get_setting("tg_api_hash", "") or "").strip(),
-        "bot_token": (db.get_setting("bot_token", "") or "").strip(),
+        "api_id": _safe_int(get_setting("tg_api_id", "0"), 0),
+        "api_hash": (get_setting("tg_api_hash", "") or "").strip(),
+        "bot_token": (get_setting("bot_token", "") or "").strip(),
         "ai_mode": ai_mode,
         "local_url": (
             f"http://{format_proxy_host(local_host)}:"
             f"{local_port}/v1/chat/completions"
         ),
-        "local_model": db.get_setting("local_model", ""),
-        "remote_url": (db.get_setting("remote_url", "") or "").strip(),
-        "remote_api_key": db.get_setting("remote_api_key", ""),
-        "remote_model": db.get_setting("remote_model", ""),
+        "local_model": get_setting("local_model", ""),
+        "remote_url": (get_setting("remote_url", "") or "").strip(),
+        "remote_api_key": get_setting("remote_api_key", ""),
+        "remote_model": get_setting("remote_model", ""),
         "sources": sources,
         "topic_channels": topic_channels,
         "ads_words": ads_words,
-        "poll_delay": _safe_int(db.get_setting("poll_delay", str(POLL_DELAY_DEFAULT)),
+        "poll_delay": _safe_int(get_setting("poll_delay", str(POLL_DELAY_DEFAULT)),
                                POLL_DELAY_DEFAULT),
-        "use_proxy": is_truthy(db.get_setting("use_proxy", "0")),
-        "proxy_type": (db.get_setting("proxy_type", "") or "").strip().lower(),
-        "proxy_host": (db.get_setting("proxy_host", "") or "").strip(),
-        "proxy_port": (db.get_setting("proxy_port", "") or "").strip(),
-        "proxy_user": db.get_setting("proxy_user", ""),
-        "proxy_pass": db.get_setting("proxy_pass", ""),
-        "mtproto_key": db.get_setting("mtproto_key", ""),
-        "watermark": db.get_setting("watermark_text", ""),
+        "use_proxy": is_truthy(get_setting("use_proxy", "0")),
+        "proxy_type": (get_setting("proxy_type", "") or "").strip().lower(),
+        "proxy_host": (get_setting("proxy_host", "") or "").strip(),
+        "proxy_port": (get_setting("proxy_port", "") or "").strip(),
+        "proxy_user": get_setting("proxy_user", ""),
+        "proxy_pass": get_setting("proxy_pass", ""),
+        "mtproto_key": get_setting("mtproto_key", ""),
+        "watermark": get_setting("watermark_text", ""),
     }
 
 
