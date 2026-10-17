@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 
 from database import CURRENT_SCHEMA_VERSION, DB
 
@@ -83,7 +84,7 @@ def test_populated_legacy_tables_migrate_without_default_alter_failure(tmp_path)
         db.close()
 
 
-def test_legacy_migration_preserves_existing_timestamps_and_new_rows_get_timestamps(tmp_path) -> None:
+def test_legacy_utc_timestamps_are_converted_and_new_rows_get_local_timestamps(tmp_path) -> None:
     path = tmp_path / "legacy_with_timestamps.db"
     _make_legacy_db(path, include_created_at=True)
 
@@ -95,8 +96,14 @@ def test_legacy_migration_preserves_existing_timestamps_and_new_rows_get_timesta
         skipped = db.conn.execute(
             "SELECT post_key, created_at FROM skipped_posts WHERE post_id = '18'"
         ).fetchone()
-        assert published == ("@news:17", "2024-03-04 05:06:07")
-        assert skipped == ("@news:18", "2024-03-05 06:07:08")
+        expected_published = datetime.fromisoformat(
+            "2024-03-04 05:06:07"
+        ).replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        expected_skipped = datetime.fromisoformat(
+            "2024-03-05 06:07:08"
+        ).replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        assert published == ("@news:17", expected_published)
+        assert skipped == ("@news:18", expected_skipped)
 
         db.save_post("@news", 19)
         db.save_skipped_post("@news", 20, "empty")
@@ -110,18 +117,15 @@ def test_legacy_migration_preserves_existing_timestamps_and_new_rows_get_timesta
     finally:
         db.close()
 
-def test_missing_legacy_timestamps_are_backfilled_in_local_time(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    import database
+def test_missing_legacy_timestamps_are_backfilled_in_local_time(tmp_path) -> None:
+    from datetime import timedelta
 
     path = tmp_path / "legacy_no_timestamps.db"
     _make_legacy_db(path, include_created_at=False)
-    monkeypatch.setattr(database, "_local_now_str", lambda: "2030-01-02 03:04:05")
 
     db = DB(str(path))
     try:
+        now = datetime.now()
         published = db.conn.execute(
             "SELECT created_at FROM published_posts WHERE post_id = '17'"
         ).fetchone()[0]
@@ -129,8 +133,10 @@ def test_missing_legacy_timestamps_are_backfilled_in_local_time(
             "SELECT created_at FROM skipped_posts WHERE post_id = '18'"
         ).fetchone()[0]
 
-        assert published == "2030-01-02 03:04:05"
-        assert skipped == "2030-01-02 03:04:05"
+        published_dt = datetime.strptime(published, "%Y-%m-%d %H:%M:%S")
+        skipped_dt = datetime.strptime(skipped, "%Y-%m-%d %H:%M:%S")
+        assert abs((now - published_dt).total_seconds()) < 30
+        assert abs((now - skipped_dt).total_seconds()) < 30
+        assert published == skipped
     finally:
         db.close()
-
