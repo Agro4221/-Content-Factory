@@ -470,6 +470,8 @@ async def api_get_logs(
     page: int = 1,
     module: Optional[str] = Query(default=None),
 ) -> list[dict]:
+    if limit < 1:
+        limit = 1
     if limit > 200:
         limit = 200
     if page < 1:
