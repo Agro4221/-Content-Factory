@@ -10,11 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "release-windows.yml"
 
 
-def test_windows_release_workflow_is_tag_and_integration_branch_driven() -> None:
+def test_windows_release_workflow_is_version_tag_and_manual_dispatch_driven() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert '      - "v*"' in workflow
-    assert "fix/local-bugfix-integration-2026-10-17" in workflow
     assert "workflow_dispatch:" in workflow
     assert "contents: write" in workflow
 
