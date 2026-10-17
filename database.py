@@ -359,6 +359,10 @@ _DEFAULT_SETTINGS: dict[str, str] = {
 _DEFAULT_SETTINGS = {**_DEFAULT_SETTINGS, **ALL_FUTURE_DEFAULTS}
 
 
+class DatabaseWriteError(RuntimeError):
+    """A database write failed after a post may already have been published."""
+
+
 class DB:
     """Потокобезопасная (через WAL+busy_timeout+threading.Lock) обёртка над SQLite.
 
@@ -657,18 +661,44 @@ class DB:
         return cur.fetchone() is not None
 
     def save_post(self, source: str, post_id: int | str) -> None:
-        """Помечает пост как успешно опубликованный."""
+        """Record a successful publication, raising if SQLite cannot persist it."""
+        post_key = make_post_key(source, post_id)
+        values = (post_key, str(post_id), source)
         with self._lock:
             try:
                 with self.conn:
                     self.conn.execute(
                         "INSERT INTO published_posts (post_key, post_id, source_name) VALUES (?, ?, ?)",
-                        (make_post_key(source, post_id), str(post_id), source),
+                        values,
                     )
-            except sqlite3.IntegrityError:
-                pass  # дубль — норма
-            except sqlite3.Error as e:
-                _logger.error("save_post failed for %s/%s: %s", source, post_id, e)
+            except sqlite3.IntegrityError as exc:
+                # A duplicate key is expected only when this post is already recorded.
+                try:
+                    existing = self.conn.execute(
+                        "SELECT 1 FROM published_posts WHERE post_key = ?",
+                        (post_key,),
+                    ).fetchone()
+                except sqlite3.Error as check_error:
+                    _logger.error(
+                        "save_post failed for %s/%s while checking duplicate: %s",
+                        source,
+                        post_id,
+                        check_error,
+                    )
+                    raise DatabaseWriteError(
+                        f"could not verify publication record for {source}/{post_id}"
+                    ) from check_error
+                if existing:
+                    return
+                _logger.error("save_post integrity failure for %s/%s: %s", source, post_id, exc)
+                raise DatabaseWriteError(
+                    f"could not record publication for {source}/{post_id}"
+                ) from exc
+            except sqlite3.Error as exc:
+                _logger.error("save_post failed for %s/%s: %s", source, post_id, exc)
+                raise DatabaseWriteError(
+                    f"could not record publication for {source}/{post_id}"
+                ) from exc
 
     def save_skipped_post(self, source: str, post_id: int | str, reason: str) -> None:
         """Помечает пост как пропущенный (реклама/пустой)."""
