@@ -145,24 +145,68 @@ def _prepare_media_group(media_list: list) -> list:
     return media_list
 
 
+def _last_safe_text_space(value: str) -> int:
+    """Find the final whitespace outside an HTML tag or quoted attribute."""
+    last_space = -1
+    in_tag = False
+    quote_char = ""
+    for index, char in enumerate(value):
+        if in_tag:
+            if quote_char:
+                if char == quote_char:
+                    quote_char = ""
+            elif char in {"'", '"'}:
+                quote_char = char
+            elif char == ">":
+                in_tag = False
+        elif char == "<":
+            in_tag = True
+        elif char.isspace():
+            last_space = index
+    return last_space
+
+
+def _media_caption_cut_index(text: str, max_chars: int = 1020) -> int:
+    """Choose a truncation boundary outside HTML tags and character entities."""
+    if len(text) <= max_chars:
+        return len(text)
+    prefix = text[:max_chars]
+    if _last_safe_text_space(prefix) > 0:
+        prefix = prefix[:_last_safe_text_space(prefix)]
+    cut = len(prefix)
+    # Never leave a partial tag or HTML entity at the end of the caption.
+    last_open = prefix.rfind("<")
+    last_close = prefix.rfind(">")
+    if last_open > last_close:
+        cut = min(cut, last_open)
+    entity_start = prefix.rfind("&")
+    entity_end = prefix.rfind(";")
+    if entity_start > entity_end:
+        cut = min(cut, entity_start)
+    return max(0, cut)
+
+
 def _media_caption_prefix(text: str, max_chars: int = 1020) -> str:
-    """Return a caption prefix that fits alongside an ellipsis in Telegram."""
+    """Return valid, balanced HTML that fits alongside an ellipsis in Telegram."""
     caption = (text or "").strip()
     if len(caption) <= max_chars:
         return caption
-    prefix = caption[:max_chars]
-    last_space = prefix.rfind(" ")
-    if last_space > 0:
-        prefix = prefix[:last_space]
-    return prefix.rstrip()
+    cut = _media_caption_cut_index(caption, max_chars)
+    while cut > 0:
+        prefix = _sanitize_telegram_html(caption[:cut].rstrip())
+        if len(prefix) <= max_chars:
+            return prefix
+        cut = _media_caption_cut_index(caption[:cut].rstrip(), max(1, cut - 8))
+    return ""
 
 
 def _media_caption_remainder(text: str) -> str:
-    """Return text omitted from Telegram's media-caption limit."""
+    """Return valid text omitted from Telegram's media-caption limit."""
     caption = (text or "").strip()
     if len(caption) <= 1024:
         return ""
-    return caption[len(_media_caption_prefix(caption)):].lstrip()
+    cut = _media_caption_cut_index(caption, 1020)
+    return _sanitize_telegram_html(caption[cut:].lstrip())
 
 
 def _progress_bar(current: int, total: int) -> None:
