@@ -286,12 +286,13 @@ async def _process_message_group(
     captions = [m.message for m in messages if m.message]
     raw_text = "\n".join(captions).strip()
 
-    if not raw_text:
+    has_media = any(not _is_media_skippable(m.media) for m in messages)
+    if not raw_text and not has_media:
         for m in messages:
             db.save_skipped_post(source, m.id, "empty")
         return
 
-    if cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
+    if raw_text and cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
         for m in messages:
             db.save_skipped_post(source, m.id, "ads_word")
         return
@@ -300,7 +301,11 @@ async def _process_message_group(
         return
 
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
-    topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    if raw_text:
+        topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    else:
+        # A media-only post has no text to rewrite; route it to the default topic.
+        topic, final_text = "общее", ""
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
@@ -342,13 +347,13 @@ async def _process_message_group(
                     await bot.send_photo(
                         chat_id=target_chat,
                         photo=single.media,
-                        caption=single.caption or final_text,
+                        caption=single.caption or final_text or None,
                     )
                 else:
                     await bot.send_video(
                         chat_id=target_chat,
                         video=single.media,
-                        caption=single.caption or final_text,
+                        caption=single.caption or final_text or None,
                     )
             else:
                 await bot.send_media_group(chat_id=target_chat, media=media_list)
