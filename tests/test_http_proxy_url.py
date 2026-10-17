@@ -39,3 +39,29 @@ def test_http_proxy_credentials_are_percent_encoded(
     assert parsed.password == cfg["proxy_pass"]
     assert parsed.host == cfg["proxy_host"]
     assert parsed.port == int(cfg["proxy_port"])
+
+def test_http_proxy_does_not_drop_single_credential_field(monkeypatch) -> None:
+    urls: list[str] = []
+
+    class FakeAiohttpSession:
+        def __init__(self, *, proxy: str) -> None:
+            urls.append(proxy)
+
+    monkeypatch.setattr(main, "AiohttpSession", FakeAiohttpSession)
+
+    for user, password in [("alice", ""), ("", "secret")]:
+        main._setup_proxy({
+            "use_proxy": True,
+            "proxy_type": "http",
+            "proxy_host": "proxy.example",
+            "proxy_port": "3128",
+            "proxy_user": user,
+            "proxy_pass": password,
+            "mtproto_key": "",
+        })
+
+    assert urls == [
+        "http://alice:@proxy.example:3128",
+        "http://:secret@proxy.example:3128",
+    ]
+
