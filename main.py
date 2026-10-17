@@ -397,7 +397,7 @@ async def _process_message_group(
 
     try:
         media_list, temp_paths = await _download_media(messages, final_text)
-    except MediaDownloadError as exc:
+    except Exception as exc:
         db.add_log(
             "WARN-501",
             f"Пост {source}/{messages[0].id} не опубликован: {exc}. Оставлен для повтора.",
