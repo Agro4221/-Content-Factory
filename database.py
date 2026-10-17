@@ -450,9 +450,11 @@ class DB:
                     self.conn.execute(
                         f"ALTER TABLE {table} ADD COLUMN created_at DATETIME"
                     )
+                # Runtime writes timestamps in local wall-clock time
+                # (matching dashboard cutoffs), so legacy backfill must do the same.
                 self.conn.execute(
-                    f"UPDATE {table} SET created_at = CURRENT_TIMESTAMP "
-                    "WHERE created_at IS NULL"
+                    f"UPDATE {table} SET created_at = ? WHERE created_at IS NULL",
+                    (_local_now_str(),),
                 )
                 for statement in indexes:
                     self.conn.execute(statement)
