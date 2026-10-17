@@ -146,10 +146,10 @@ def test_malformed_ai_response_is_not_sent_or_marked_as_published(
 )
 def test_ai_parser_removes_hashtag_heading_case_insensitively(hashtag_label: str) -> None:
     topic, text = main._parse_ai_response(
-        f"ТЕМА: Новости\\nТЕКСТ: Переработанный текст.\\n{hashtag_label} #новости",
+        f"ТЕМА: Новости\nТЕКСТ: Переработанный текст.\n{hashtag_label} #новости",
         "original source text",
     )
 
     assert topic == "новости"
-    assert text == "Переработанный текст.\\n\\n#новости"
+    assert text == "Переработанный текст.\n\n#новости"
 
