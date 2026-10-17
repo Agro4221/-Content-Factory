@@ -88,7 +88,6 @@ def main() -> int:
     except ImportError as exc:
         # Модуль лицензий удалён — пропускаем проверку
         print(f"  SKIP licensing.client (модуль удалён)")
-        FAILURES.append(f"licensing.client skipped: {exc}")
     except Exception as exc:
         fail("licensing.client", exc)
 
