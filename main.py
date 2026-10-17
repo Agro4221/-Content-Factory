@@ -13,6 +13,7 @@ check_and_install_dependencies()
 import asyncio
 import json
 import html
+import ipaddress
 from html.parser import HTMLParser
 import os
 import re
@@ -21,7 +22,7 @@ import sys
 import threading
 import time
 import webbrowser
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from typing import Optional
 
 import aiohttp
@@ -360,8 +361,55 @@ def _load_config() -> dict:
     local_port = _validate_port(local_port_raw)
     if not local_host:
         raise ValueError("local_host не может быть пустым.")
+    if any(char in local_host for char in "/?#@") or any(
+        char.isspace() for char in local_host
+    ):
+        raise ValueError(
+            "local_host должен быть именем хоста или IP-адресом, без URL-схемы и пути."
+        )
+    bracketed_host = local_host.startswith("[") or local_host.endswith("]")
+    host_value = (
+        local_host[1:-1]
+        if local_host.startswith("[") and local_host.endswith("]")
+        else local_host
+    )
+    if bracketed_host:
+        try:
+            if ipaddress.ip_address(host_value).version != 6:
+                raise ValueError("brackets are only valid for IPv6")
+        except ValueError as exc:
+            raise ValueError(
+                "local_host в квадратных скобках должен быть корректным IPv6-адресом."
+            ) from exc
+    else:
+        try:
+            ipaddress.ip_address(host_value)
+        except ValueError:
+            if ":" in host_value or not re.fullmatch(r"[A-Za-z0-9.-]+", host_value):
+                raise ValueError(
+                    "local_host должен быть корректным именем хоста или IP-адресом."
+                )
     if local_port is None:
         raise ValueError("local_port должен быть целым числом от 1 до 65535.")
+
+    remote_url = (get_setting("remote_url", "") or "").strip()
+    if ai_mode == "REMOTE":
+        try:
+            parsed_remote_url = urlsplit(remote_url)
+            remote_port = parsed_remote_url.port
+            valid_remote_port = remote_port is None or 1 <= remote_port <= 65535
+        except ValueError as exc:
+            raise ValueError(
+                "remote_url содержит некорректный адрес или порт."
+            ) from exc
+        if (
+            parsed_remote_url.scheme.lower() not in {"http", "https"}
+            or not parsed_remote_url.hostname
+            or not valid_remote_port
+        ):
+            raise ValueError(
+                "Для ai_mode=REMOTE укажите корректный HTTP- или HTTPS-адрес remote_url."
+            )
 
     sources_raw = get_setting("sources", "")
     sources: list[str] = []
@@ -440,7 +488,7 @@ def _load_config() -> dict:
             f"{local_port}/v1/chat/completions"
         ),
         "local_model": get_setting("local_model", ""),
-        "remote_url": (get_setting("remote_url", "") or "").strip(),
+        "remote_url": remote_url,
         "remote_api_key": get_setting("remote_api_key", ""),
         "remote_model": get_setting("remote_model", ""),
         "sources": sources,
