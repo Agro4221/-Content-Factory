@@ -114,12 +114,22 @@ def normalize_target_chat(value: str | int | None) -> str:
     try:
         parsed = urlsplit(candidate)
         host = (parsed.hostname or "").lower()
-    except ValueError:
-        return raw
+    except ValueError as exc:
+        if candidate.startswith(("http://", "https://", "tg://")):
+            raise ValueError("Некорректная ссылка на Telegram-канал.") from exc
+        raise ValueError("Укажите корректный @username, числовой ID или ссылку t.me.") from exc
 
     telegram_hosts = {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}
     if host not in telegram_hosts:
-        return raw
+        if parsed.scheme or parsed.netloc:
+            raise ValueError(
+                "Получатель должен быть Telegram-каналом: @username, числовой ID или ссылка t.me."
+            )
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", raw):
+            return f"@{raw}"
+        raise ValueError(
+            "Получатель должен быть корректным @username, числовым ID или ссылкой t.me."
+        )
     if parsed.scheme.lower() not in {"http", "https"}:
         raise ValueError("Ссылка Telegram должна начинаться с https:// или быть обычным @username.")
 
