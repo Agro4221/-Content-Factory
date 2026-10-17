@@ -334,7 +334,20 @@ def _load_config() -> dict:
         raise ValueError("local_port должен быть целым числом от 1 до 65535.")
 
     sources_raw = get_setting("sources", "")
-    sources = [s.strip() for s in sources_raw.split("\n") if s.strip()] if sources_raw else []
+    sources: list[str] = []
+    if sources_raw:
+        for raw_source in sources_raw.split("\n"):
+            raw_source = raw_source.strip()
+            if not raw_source:
+                continue
+            try:
+                source = normalize_target_chat(raw_source)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Некорректный источник Telegram {raw_source!r}: {exc}"
+                ) from exc
+            if source and source not in sources:
+                sources.append(source)
 
     ads_raw = get_setting("ads_words", "")
     ads_words = [w.strip() for w in ads_raw.split("\n") if w.strip()] if ads_raw else []
