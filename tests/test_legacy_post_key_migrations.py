@@ -13,7 +13,7 @@ def database_for_connection(conn: sqlite3.Connection) -> DB:
 
 
 def test_legacy_skipped_posts_are_migrated_when_published_posts_are_current() -> None:
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         conn.execute(
             "CREATE TABLE published_posts (post_key TEXT PRIMARY KEY, post_id TEXT, source_name TEXT)"
@@ -49,7 +49,7 @@ def test_legacy_skipped_posts_are_migrated_when_published_posts_are_current() ->
 
 
 def test_both_legacy_tables_migrate_and_repeat_without_data_loss() -> None:
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         conn.execute(
             "CREATE TABLE published_posts (post_id INTEGER PRIMARY KEY, source_name TEXT)"
@@ -80,7 +80,7 @@ def test_both_legacy_tables_migrate_and_repeat_without_data_loss() -> None:
         conn.close()
 
 def test_failed_legacy_migration_aborts_instead_of_leaving_broken_schema() -> None:
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         # Corrupt/partial legacy schema: migration cannot preserve rows because
         # the historical table lacks its required source_name column.
