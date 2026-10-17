@@ -550,7 +550,9 @@ def _build_posts_stats() -> dict:
     try:
         import json as _json
         topics = _json.loads(settings.get("topic_channels") or "{}")
-    except Exception:
+        if not isinstance(topics, dict):
+            topics = {}
+    except (TypeError, ValueError):
         topics = {}
     topics_count = len(topics)
     topics_with_target = sum(1 for v in topics.values() if v)
