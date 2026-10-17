@@ -176,5 +176,5 @@ def test_enabled_mtproto_rejects_malformed_secret_before_settings_are_written(mo
     assert isinstance(result, JSONResponse)
     assert result.status_code == 422
     assert fake_db.writes == []
-    assert "mtproto_key" == "mtproto_key"
+    assert b'"field":"mtproto_key"' in result.body
 
