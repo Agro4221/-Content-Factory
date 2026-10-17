@@ -129,3 +129,27 @@ def test_unbroken_long_caption_keeps_prefix_and_sends_only_the_tail() -> None:
     assert len(prefix + "…") <= 1024
     assert prefix + remainder == text
 
+def test_long_html_caption_is_truncated_without_broken_tags() -> None:
+    text = "<blockquote><b>" + ("Verylongword " * 140) + "</b></blockquote>"
+
+    prefix = main._media_caption_prefix(text)
+    remainder = main._media_caption_remainder(text)
+    caption = prefix + "…"
+
+    assert len(caption) <= 1024
+    assert prefix.startswith("<blockquote><b>")
+    assert prefix.endswith("</b></blockquote>")
+    assert main._sanitize_telegram_html(caption) == caption
+    assert "</b>" not in remainder
+    assert "</blockquote>" not in remainder
+
+
+def test_truncation_does_not_split_html_tags_or_entities() -> None:
+    for text in [
+        "<a href=\"https://example.com/some/very/long/path?one=1&amp;two=2\">" + "x" * 1200 + "</a>",
+        ("word " * 190) + "&amp;" + ("tail " * 100),
+    ]:
+        prefix = main._media_caption_prefix(text)
+        assert len(prefix) <= 1020
+        assert main._sanitize_telegram_html(prefix) == prefix
+
