@@ -315,12 +315,43 @@ def _migration_v5(db: "DB") -> None:
     db.set_setting("logs_utc_to_local_done", "1")
 
 
+def _migration_v6(db: "DB") -> None:
+    """v6: normalize legacy UTC post timestamps to the local convention used by stats."""
+    if db._get_schema_version() >= 6:
+        return
+
+    # Explicit SQL transaction; the schema version commits with the timestamp
+    # update so an interrupted startup can never shift the same rows twice.
+    db.conn.execute("BEGIN IMMEDIATE")
+    try:
+        for table in ("published_posts", "skipped_posts"):
+            columns = {
+                row[1]
+                for row in db.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if "created_at" not in columns:
+                continue
+            db.conn.execute(
+                f"UPDATE {table} SET created_at = "
+                "CASE WHEN datetime(created_at) IS NOT NULL "
+                "THEN datetime(created_at, 'localtime') ELSE created_at END "
+                "WHERE created_at IS NOT NULL"
+            )
+        db.conn.execute("PRAGMA user_version = 6")
+        db.conn.commit()
+    except BaseException:
+        if db.conn.in_transaction:
+            db.conn.rollback()
+        raise
+
+
 # Регистрируем миграции
 MIGRATIONS.append((1, _migration_v1))
 MIGRATIONS.append((2, _migration_v2))
 MIGRATIONS.append((3, _migration_v3))
 MIGRATIONS.append((4, _migration_v4))
 MIGRATIONS.append((5, _migration_v5))
+MIGRATIONS.append((6, _migration_v6))
 
 CURRENT_SCHEMA_VERSION: int = max(v for v, _ in MIGRATIONS)
 
@@ -438,6 +469,7 @@ class DB:
                 "ON skipped_posts(reason)",
             ),
         }
+        schema_version = self._get_schema_version()
         for table, indexes in table_indexes.items():
             columns = [
                 row[1]
@@ -450,12 +482,19 @@ class DB:
                     self.conn.execute(
                         f"ALTER TABLE {table} ADD COLUMN created_at DATETIME"
                     )
-                # Runtime writes timestamps in local wall-clock time
-                # (matching dashboard cutoffs), so legacy backfill must do the same.
-                self.conn.execute(
-                    f"UPDATE {table} SET created_at = ? WHERE created_at IS NULL",
-                    (_local_now_str(),),
-                )
+                # Before v6, timestamps are normalized by migration v6. Backfill
+                # with the same UTC convention as SQLite CURRENT_TIMESTAMP so
+                # the migration can convert the values exactly once.
+                if schema_version < 6:
+                    self.conn.execute(
+                        f"UPDATE {table} SET created_at = CURRENT_TIMESTAMP "
+                        "WHERE created_at IS NULL"
+                    )
+                else:
+                    self.conn.execute(
+                        f"UPDATE {table} SET created_at = ? WHERE created_at IS NULL",
+                        (_local_now_str(),),
+                    )
                 for statement in indexes:
                     self.conn.execute(statement)
 
