@@ -78,3 +78,24 @@ def test_both_legacy_tables_migrate_and_repeat_without_data_loss() -> None:
         ).fetchall() == [("@skipped:22", "22", "@skipped", "empty")]
     finally:
         conn.close()
+
+def test_failed_legacy_migration_aborts_instead_of_leaving_broken_schema() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        # Corrupt/partial legacy schema: migration cannot preserve rows because
+        # the historical table lacks its required source_name column.
+        conn.execute("CREATE TABLE published_posts (post_id INTEGER PRIMARY KEY)")
+        db = database_for_connection(conn)
+
+        import pytest
+
+        with pytest.raises(RuntimeError, match="published_posts migration failed"):
+            db._migrate_legacy_post_keys()
+
+        # The transaction must roll back the rename/create attempt rather than
+        # leave a new but unusable post_key table behind.
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(published_posts)")}
+        assert columns == {"post_id"}
+        assert conn.execute("SELECT COUNT(*) FROM published_posts").fetchone()[0] == 0
+    finally:
+        conn.close()
