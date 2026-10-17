@@ -66,6 +66,16 @@ def test_invalid_mtproto_link_is_rejected() -> None:
 def test_api_proxy_test_normalizes_mtproto_link_before_checking(monkeypatch) -> None:
     captured: list[dict] = []
 
+    class FakeRequest:
+        async def json(self) -> dict:
+            return {
+                "use_proxy": "1",
+                "proxy_type": "mtproto",
+                "proxy_host": f"https://t.me/proxy?server=proxy.example&port=443&secret={SECRET}",
+                "proxy_port": "",
+                "mtproto_key": "",
+            }
+
     async def fake_check(cfg: dict) -> dict:
         captured.append(dict(cfg))
         return {
@@ -77,25 +87,12 @@ def test_api_proxy_test_normalizes_mtproto_link_before_checking(monkeypatch) -> 
         }
 
     monkeypatch.setattr(Site, "check_proxy", fake_check)
-    payload = {
-        "use_proxy": "1",
-        "proxy_type": "mtproto",
-        "proxy_host": f"https://t.me/proxy?server=proxy.example&port=443&secret={SECRET}",
-        "proxy_port": "",
-        "mtproto_key": "",
-    }
-    result = asyncio.run(Site.api_proxy_test(type("Req", (), {
-        "json": lambda self: _json(payload)
-    })()))
+    result = asyncio.run(Site.api_proxy_test(FakeRequest()))
 
     assert result["ok"] is True
     assert captured[0]["proxy_host"] == "proxy.example"
     assert captured[0]["proxy_port"] == "443"
     assert captured[0]["mtproto_key"] == SECRET
-
-
-async def _json(payload: dict) -> dict:
-    return payload
 
 
 def test_runtime_setup_normalizes_mtproto_url_before_validating_port(monkeypatch) -> None:
