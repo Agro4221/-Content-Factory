@@ -2947,29 +2947,38 @@ function collectProxyFormData() {
 }
 
 async function testProxyConnection(data) {
-    const res = await fetch('/api/proxy/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    });
-    const result = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        if (res.status === 404) {
+    try {
+        const res = await fetch('/api/proxy/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            if (res.status === 404) {
+                return {
+                    ok: false,
+                    reachable: false,
+                    state: 'error',
+                    message: 'Проверка прокси недоступна — перезапустите приложение (main.py), чтобы подтянуть обновление.',
+                };
+            }
             return {
                 ok: false,
                 reachable: false,
                 state: 'error',
-                message: 'Проверка прокси недоступна — перезапустите приложение (main.py), чтобы подтянуть обновление.',
+                message: (result && (result.detail || result.msg)) || `HTTP ${res.status}`,
             };
         }
+        return result;
+    } catch (_) {
         return {
             ok: false,
             reachable: false,
             state: 'error',
-            message: (result && (result.detail || result.msg)) || `HTTP ${res.status}`,
+            message: 'Не удалось проверить соединение с прокси. Проверьте подключение и повторите попытку.',
         };
     }
-    return result;
 }
 
 function setupProxyPillNavigation() {

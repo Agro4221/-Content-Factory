@@ -1,0 +1,29 @@
+name: Admin panel proxy-check behavior
+
+on:
+  pull_request:
+    branches: [fix/admin-inline-js-syntax]
+  push:
+    branches: [fix/proxy-test-network-errors-after-admin-js-syntax]
+
+permissions:
+  contents: read
+
+jobs:
+  admin-proxy-check-behavior:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check inline admin JavaScript syntax and stale calls
+        run: python tools/check_frontend.py
+      - name: Test proxy check behavior on network failures
+        run: node tests/test_proxy_connection_rejection.cjs
