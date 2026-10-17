@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "release-windows.yml"
@@ -43,3 +45,21 @@ def test_release_workflow_has_no_corrupted_duplicate_fragments() -> None:
     assert workflow.count("- name: Set up Node.js") == 1
     assert "\n) {" not in workflow
     assert "Release tags must look like v1.2.3 or v1.2.3.4" in workflow
+
+
+
+def test_release_workflow_is_valid_yaml_with_expected_job_structure() -> None:
+    workflow = yaml.load(
+        WORKFLOW.read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+
+    assert workflow["name"] == "Validate and publish Windows release"
+    assert "push" in workflow["on"]
+    assert "tags" in workflow["on"]["push"]
+    steps = workflow["jobs"]["windows-release"]["steps"]
+    names = [step["name"] for step in steps]
+    assert names.count("Set up Python") == 1
+    assert names.count("Set up Node.js") == 1
+    assert names.index("Run complete regression suite") < names.index("Build Windows executable")
+    assert names.index("Smoke-test built Windows executable") < names.index("Publish GitHub Release")
