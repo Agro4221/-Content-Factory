@@ -57,9 +57,7 @@ def resolve_proxy_type(cfg: dict) -> str:
 def normalize_mtproto_proxy_link(cfg: dict) -> dict:
     """Expand t.me/proxy or tg://proxy links into host, port and secret fields."""
     normalized = dict(cfg)
-    if resolve_proxy_type(normalized) != "mtproto":
-        return normalized
-
+    configured_type = (normalized.get("proxy_type") or "").strip().lower()
     raw_host = (normalized.get("proxy_host") or "").strip()
     candidate = raw_host
     if candidate.startswith("t.me/") or candidate.startswith("telegram.me/"):
@@ -67,7 +65,7 @@ def normalize_mtproto_proxy_link(cfg: dict) -> dict:
     try:
         parsed = urlsplit(candidate)
     except ValueError:
-        return normalized
+        parsed = urlsplit("")
 
     host = (parsed.hostname or "").lower()
     is_public_link = (
@@ -76,6 +74,12 @@ def normalize_mtproto_proxy_link(cfg: dict) -> dict:
         and parsed.scheme.lower() in {"http", "https"}
     )
     is_deep_link = parsed.scheme.lower() == "tg" and parsed.netloc.lower() == "proxy"
+
+    # If a concrete non-MTProto type was explicitly selected, a stale/accidental
+    # link must not override that selection. Empty type is allowed for legacy
+    # configurations and is inferred from a recognized MTProto link.
+    if configured_type in {"http", "socks4", "socks5"}:
+        return normalized
     if not (is_public_link or is_deep_link):
         return normalized
 
