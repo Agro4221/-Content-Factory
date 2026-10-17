@@ -1068,6 +1068,21 @@ async def _process_one_source(
             # posts rather than publishing an entire historical channel.
             async for message in client.iter_messages(_source_entity(source), limit=10):
                 source_messages.append(message)
+            source_messages.sort(key=lambda message: message.id)
+
+            # The oldest of those ten may be in the middle of an album. Pull
+            # the remaining messages with that grouped_id before setting the
+            # initial cursor, otherwise older album items are never revisited.
+            if source_messages and source_messages[0].grouped_id:
+                boundary_group = source_messages[0].grouped_id
+                async for earlier in client.iter_messages(
+                    _source_entity(source),
+                    max_id=source_messages[0].id,
+                    limit=100,
+                ):
+                    if earlier.grouped_id == boundary_group:
+                        source_messages.append(earlier)
+                source_messages.sort(key=lambda message: message.id)
         else:
             # Subsequent scans catch every newer message, not just the newest ten.
             async for message in client.iter_messages(_source_entity(source), min_id=cursor, reverse=True):
