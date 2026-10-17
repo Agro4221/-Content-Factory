@@ -301,6 +301,13 @@ async def _process_message_group(
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
     try:
         topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    except AIResponseFormatError as exc:
+        db.add_log(
+            "WARN-404",
+            f"Пост {source}/{messages[0].id} не опубликован: AI вернул неверный формат ({exc}). Оставлен для повтора.",
+        )
+        print(f"!!! AI вернул неверный формат для {source}/{messages[0].id}; пост оставлен для повтора.")
+        return
     except AIRewriteError as exc:
         db.add_log(
             "WARN-405",
@@ -427,6 +434,10 @@ class AIRewriteError(RuntimeError):
     """AI не смог подготовить текст, безопасный для публикации."""
 
 
+class AIResponseFormatError(AIRewriteError):
+    """Successful AI response does not contain publishable structured content."""
+
+
 async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[str, str]:
     topics = ", ".join(cfg["topic_channels"].keys()) or "общее"
     db_prompt = db.get_setting("system_prompt", "")
@@ -487,14 +498,23 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
             else:
                 body = await r.text()
                 _log_ai_http_error(r.status, cfg, body)
-                failure_reason = f"AI endpoint вернул HTTP {r.status}"
-    except aiohttp.ClientConnectorError as e:
-        _log_ai_network_error(e, cfg)
-        failure_reason = "AI endpoint недоступен"
-    except Exception as e:
-        db.add_log("ERR-400", f"Неизвестный сбой AI: {e}")
-        print(f"!!! [AI ERROR] {e}")
-        failure_reason = f"ошибка ответа AI ({type(e).__name__})"
+                failure_reason = f"AI endpoint вернул def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
+    if not isinstance(res, str) or not res.strip():
+        raise AIResponseFormatError("пустой ответ")
+    t_m = re.search(r"ТЕМА:\\s*(.*)", res, re.I)
+    c_m = re.search(r"ТЕКСТ:\\s*(.*)", res, re.S | re.I)
+    h_m = re.search(r"ХЭШТЕГИ:\\s*(.*)", res, re.I)
+
+    if not c_m:
+        raise AIResponseFormatError("отсутствует обязательный раздел ТЕКСТ:")
+    topic = (t_m.group(1).strip().lower() if t_m else "общее").split("\\n")[0].strip()
+    full = c_m.group(1).strip()
+    clean = full.split("ХЭШТЕГИ:")[0].strip()
+    if not clean:
+        raise AIResponseFormatError("раздел ТЕКСТ: пуст")
+    tags = h_m.group(1).strip() if h_m else ""
+    return topic, f"{clean}\\n\\n{tags}"
+e_reason = f"ошибка ответа AI ({type(e).__name__})"
 
     # Не публикуем обрезок оригинала: вызывающий код оставит запись для повтора.
     raise AIRewriteError(failure_reason)
