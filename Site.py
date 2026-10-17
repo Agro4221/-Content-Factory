@@ -9,7 +9,9 @@ import re
 import time
 import asyncio
 import json
+import ipaddress
 from datetime import datetime
+from urllib.parse import urlsplit
 from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -196,6 +198,54 @@ def _normalize_validated_setting(key: str, value) -> str:
             min_value=1,
             max_value=65535,
         )
+
+    if key == "local_host":
+        if not raw:
+            return "127.0.0.1"
+        if any(char in raw for char in "/?#@") or any(char.isspace() for char in raw):
+            raise SettingsValidationError(
+                field=key,
+                msg="local_host должен быть именем хоста или IP-адресом, без URL-схемы и пути.",
+            )
+        bracketed = raw.startswith("[") or raw.endswith("]")
+        host_value = raw[1:-1] if raw.startswith("[") and raw.endswith("]") else raw
+        if bracketed:
+            try:
+                if ipaddress.ip_address(host_value).version != 6:
+                    raise ValueError("brackets are only valid for IPv6")
+            except ValueError as exc:
+                raise SettingsValidationError(
+                    field=key,
+                    msg="В квадратных скобках должен быть корректный IPv6-адрес.",
+                ) from exc
+        else:
+            try:
+                ipaddress.ip_address(host_value)
+            except ValueError:
+                if ":" in host_value or not re.fullmatch(r"[A-Za-z0-9.-]+", host_value):
+                    raise SettingsValidationError(
+                        field=key,
+                        msg="local_host должен быть корректным именем хоста или IP-адресом.",
+                    )
+        return raw
+
+    if key == "remote_url":
+        if not raw:
+            return ""
+        try:
+            parsed_url = urlsplit(raw)
+            valid_port = parsed_url.port is None or 1 <= parsed_url.port <= 65535
+        except ValueError as exc:
+            raise SettingsValidationError(
+                field=key,
+                msg="remote_url содержит некорректный адрес или порт.",
+            ) from exc
+        if parsed_url.scheme.lower() not in {"http", "https"} or not parsed_url.hostname or not valid_port:
+            raise SettingsValidationError(
+                field=key,
+                msg="remote_url должен быть корректным HTTP- или HTTPS-адресом.",
+            )
+        return raw
 
     if key == "proxy_port":
         return _normalize_int_range(
