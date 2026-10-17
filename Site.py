@@ -141,6 +141,23 @@ def _normalize_validated_setting(key: str, value) -> str:
             msg=f"{key} должен быть LOCAL или REMOTE",
         )
 
+    if key == "sources":
+        normalized_sources: list[str] = []
+        for raw_source in raw.splitlines():
+            source = raw_source.strip()
+            if not source:
+                continue
+            try:
+                source = normalize_target_chat(source)
+            except ValueError as exc:
+                raise SettingsValidationError(
+                    field=key,
+                    msg=f"Некорректный источник {raw_source.strip()!r}: {exc}",
+                ) from exc
+            if source and source not in normalized_sources:
+                normalized_sources.append(source)
+        return "\n".join(normalized_sources)
+
     if key == "topic_channels":
         try:
             topics = json.loads(raw or "{}")
