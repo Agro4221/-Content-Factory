@@ -3088,7 +3088,7 @@ async function saveSettings(formId, sourceBtn) {
     const data = Object.fromEntries(formData.entries());
 
     if (formId === 'form-parsing') {
-        const topics = {};
+        const topics = Object.create(null);
         document.querySelectorAll('.dynamic-row').forEach(row => {
             const k = row.querySelector('.cat-key').value.trim();
             const v = row.querySelector('.cat-val').value.trim();
@@ -3230,7 +3230,7 @@ function addCategoryRow(catName = '', chanId = '') {
     removeBtn.onclick = () => {
         row.remove();
         // Пересчитать empty-state после удаления
-        const topics = {};
+        const topics = Object.create(null);
         document.querySelectorAll('.dynamic-row').forEach(r => {
             const k = r.querySelector('.cat-key').value.trim();
             const v = r.querySelector('.cat-val').value.trim();
