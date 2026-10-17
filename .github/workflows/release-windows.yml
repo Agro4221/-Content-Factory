@@ -2,6 +2,8 @@ name: Validate and publish Windows release
 
 on:
   push:
+    branches:
+      - fix/local-bugfix-integration-2026-10-17
     tags:
       - "v*"
   workflow_dispatch:
