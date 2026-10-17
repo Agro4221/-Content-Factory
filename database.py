@@ -609,6 +609,9 @@ class DB:
         if "post_key" not in cols:
             try:
                 with self.conn:
+                    # DB uses isolation_level=None (autocommit), so explicitly
+                    # begin a transaction for this multi-statement schema change.
+                    self.conn.execute("BEGIN IMMEDIATE")
                     # Копируем старые данные с переименованием в новый формат
                     self.conn.execute("ALTER TABLE published_posts RENAME TO _published_posts_legacy")
                     self.conn.execute(
@@ -667,6 +670,8 @@ class DB:
         if cols and "post_key" not in cols:
             try:
                 with self.conn:
+                    # Keep the rename/create/copy/drop sequence atomic in autocommit mode.
+                    self.conn.execute("BEGIN IMMEDIATE")
                     self.conn.execute("ALTER TABLE skipped_posts RENAME TO _skipped_posts_legacy")
                     self.conn.execute(
                         """
