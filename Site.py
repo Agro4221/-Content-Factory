@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from deps import check_and_install_dependencies
 check_and_install_dependencies()
 
-from proxy_check import check_proxy, resolve_proxy_type
+from proxy_check import check_proxy, decode_mtproto_secret_full, resolve_proxy_type
 from config import (
     ADMIN_HTML_PATH,
     APP_VERSION,
@@ -580,6 +580,29 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
                         "msg": "Укажите корректный порт прокси в диапазоне 1–65535.",
                     },
                 )
+
+            if resolve_proxy_type(effective_settings) == "mtproto":
+                secret = (effective_settings.get("mtproto_key") or "").strip()
+                if not secret:
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "status": "error",
+                            "field": "mtproto_key",
+                            "msg": "Для MTProto-прокси необходимо указать секретный ключ.",
+                        },
+                    )
+                try:
+                    decode_mtproto_secret_full(secret)
+                except (ValueError, TypeError) as exc:
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "status": "error",
+                            "field": "mtproto_key",
+                            "msg": f"Секрет MTProto некорректен: {exc}",
+                        },
+                    )
 
     if accepted:
         save_settings_batch = getattr(db, "set_settings", None)
