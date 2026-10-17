@@ -797,22 +797,35 @@ async def _wait_for_db() -> None:
 _SOURCE_CURSORS_SETTING = "_internal_source_cursors_json"
 
 
+class SourceCursorStateError(RuntimeError):
+    """Stored polling cursors are corrupt; do not silently re-baseline history."""
+
+
 def _load_source_cursors() -> dict[str, int]:
+    raw = db.get_setting(_SOURCE_CURSORS_SETTING, None)
+    if raw is None or not str(raw).strip():
+        return {}
     try:
-        raw = db.get_setting(_SOURCE_CURSORS_SETTING, "{}")
-        cursors = json.loads(raw or "{}")
-    except (TypeError, ValueError):
-        return {}
+        cursors = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise SourceCursorStateError("JSON курсоров повреждён") from exc
     if not isinstance(cursors, dict):
-        return {}
-    return {
-        source: value
-        for source, value in cursors.items()
-        if isinstance(source, str)
-        and isinstance(value, int)
-        and not isinstance(value, bool)
-        and value >= 0
-    }
+        raise SourceCursorStateError("JSON курсоров должен быть объектом")
+
+    normalized: dict[str, int] = {}
+    for source, value in cursors.items():
+        if (
+            not isinstance(source, str)
+            or not source.strip()
+            or not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 0
+        ):
+            raise SourceCursorStateError(
+                f"Некорректная запись курсора для источника {source!r}"
+            )
+        normalized[source] = value
+    return normalized
 
 
 def _get_source_cursor(source: str) -> int | None:
@@ -839,7 +852,18 @@ async def _process_one_source(
         print("--> [СИСТЕМА] Парсинг прерван пользователем.")
         return False
     print(f"--> Проверка канала: {source}")
-    cursor = _get_source_cursor(source)
+    try:
+        cursor = _get_source_cursor(source)
+    except SourceCursorStateError as exc:
+        db.add_log(
+            "ERR-207",
+            f"Источник {source} оставлен без обработки: курсор повреждён ({exc}). "
+            "Курсор не сброшен, чтобы не пропустить историю. Исправьте значение "
+            f"{_SOURCE_CURSORS_SETTING} в базе настроек.",
+        )
+        print(f"!!! [ERR-207] Курсор {source} повреждён; источник пропущен без сброса.")
+        return False
+
     source_messages: list[Message] = []
     try:
         if cursor is None:
