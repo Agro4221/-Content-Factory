@@ -71,3 +71,12 @@ def test_windows_smoke_script_checks_runtime_api_and_bundled_assets() -> None:
     assert "Parser.exe smoke test passed" in script
     assert "favicon.png" in script
     assert "Stop-Process" in script
+
+def test_release_and_regression_workflows_check_all_source_syntax() -> None:
+    regression = (ROOT / ".github" / "workflows" / "local-bugfix-regression.yml").read_text(encoding="utf-8")
+    release = WORKFLOW.read_text(encoding="utf-8")
+
+    for workflow in (regression, release):
+        assert "python -m compileall -q ." in workflow
+        assert "node --check script.js" in workflow
+

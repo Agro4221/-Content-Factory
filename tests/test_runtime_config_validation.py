@@ -78,7 +78,13 @@ def test_local_host_rejects_url_syntax_and_malformed_addresses(host: str) -> Non
 
 @pytest.mark.parametrize(
     "url",
-    ["ftp://example.com/api", "http://", "https://example.com:99999/chat", "not-a-url"],
+    [
+        "ftp://example.com/api",
+        "http://",
+        "http://api.example.com/v1/chat/completions",
+        "https://example.com:99999/chat",
+        "not-a-url",
+    ],
 )
 def test_remote_url_rejects_invalid_or_non_http_endpoints(url: str) -> None:
     import Site
@@ -88,12 +94,18 @@ def test_remote_url_rejects_invalid_or_non_http_endpoints(url: str) -> None:
     assert exc.value.field == "remote_url"
 
 
-def test_remote_url_accepts_http_and_https_endpoints() -> None:
+def test_remote_url_accepts_https_and_loopback_http_endpoints() -> None:
     import Site
 
     assert Site._normalize_validated_setting(
         "remote_url", "https://api.example.com/v1/chat/completions"
     ) == "https://api.example.com/v1/chat/completions"
+    assert Site._normalize_validated_setting(
+        "remote_url", "http://127.0.0.1:1234/v1/chat/completions"
+    ) == "http://127.0.0.1:1234/v1/chat/completions"
+    assert Site._normalize_validated_setting(
+        "remote_url", "http://[::1]:1234/v1/chat/completions"
+    ) == "http://[::1]:1234/v1/chat/completions"
 
 
 def test_empty_local_ai_port_uses_safe_default(monkeypatch) -> None:
@@ -213,6 +225,7 @@ def test_invalid_persisted_local_ai_host_is_rejected(monkeypatch, host: str) -> 
         "",
         "ftp://api.example.com/chat",
         "http://",
+        "http://api.example.com/v1/chat/completions",
         "https://api.example.com:99999/chat",
         "https://api.example.com:not-a-port/chat",
         "not-a-url",
@@ -229,6 +242,19 @@ def test_invalid_persisted_remote_ai_endpoint_is_rejected(
 
     with pytest.raises(ValueError, match="remote_url"):
         main._load_config()
+
+
+def test_loopback_http_remote_ai_endpoint_is_accepted(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main,
+        "db",
+        FakeDB(
+            ai_mode="REMOTE",
+            remote_url="http://127.0.0.1:1234/v1/chat/completions",
+        ),
+    )
+
+    assert main._load_config()["remote_url"] == "http://127.0.0.1:1234/v1/chat/completions"
 
 
 def test_valid_persisted_remote_ai_endpoint_is_accepted(monkeypatch) -> None:

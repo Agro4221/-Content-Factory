@@ -43,6 +43,12 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: Compile all Python sources
+        run: python -m compileall -q .
+
+      - name: Check standalone JavaScript syntax
+        run: node --check script.js
+
       - name: Check admin panel JavaScript syntax
         run: python tools/check_frontend.py
 
