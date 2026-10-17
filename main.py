@@ -286,7 +286,9 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
     }
     if proxy_type == "http":
         if cfg["proxy_user"] and cfg["proxy_pass"]:
-            proxy_url = f"http://{cfg['proxy_user']}:{cfg['proxy_pass']}@{cfg['proxy_host']}:{port}"
+            proxy_user = quote(str(cfg["proxy_user"]), safe="")
+            proxy_password = quote(str(cfg["proxy_pass"]), safe="")
+            proxy_url = f"http://{proxy_user}:{proxy_password}@{cfg['proxy_host']}:{port}"
         else:
             proxy_url = f"http://{cfg['proxy_host']}:{port}"
         bot_session = AiohttpSession(proxy=proxy_url)
