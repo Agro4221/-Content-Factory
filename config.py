@@ -12,9 +12,14 @@ load_environment()
 
 APP_VERSION = "1.28.3.6"
 
-API_HOST = os.environ.get("API_HOST", "127.0.0.1")
+API_HOST = os.environ.get("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 API_PORT = int(os.environ.get("API_PORT", "8000"))
 API_LOG_LEVEL = os.environ.get("API_LOG_LEVEL", "warning")
+# Optional HTTP Basic credentials for the local admin panel. If the API binds
+# to a non-loopback interface, both values are mandatory. Use HTTPS at the
+# reverse proxy when exposing the panel beyond localhost.
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 BROWSER_OPEN_ON_START = os.environ.get("BROWSER_OPEN_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
 BROWSER_OPEN_DELAY_S = float(os.environ.get("BROWSER_OPEN_DELAY_S", "2.5"))
 
