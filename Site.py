@@ -145,6 +145,18 @@ def _normalize_validated_setting(key: str, value) -> str:
     return "" if value is None else str(value)
 
 
+async def _read_json_object(request: Request) -> dict:
+    """Parse a JSON object and return a client error for malformed input."""
+    try:
+        data = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Некорректный JSON") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+    return data
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     if not os.path.exists(ADMIN_HTML_PATH):
@@ -395,9 +407,7 @@ async def _on_startup_refresh_proxy() -> None:
 
 @app.post("/api/settings")
 async def api_post_settings(request: Request, background_tasks: BackgroundTasks) -> dict:
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+    data = await _read_json_object(request)
 
     rejected: list[str] = []
     accepted: dict[str, str] = {}
@@ -413,6 +423,40 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
                 status_code=422,
                 content={"status": "error", "field": e.field, "msg": e.msg},
             )
+
+    if accepted.keys() & PROXY_SETTING_KEYS:
+        effective_settings = db.get_all_settings()
+        effective_settings.update(accepted)
+        proxy_enabled = str(effective_settings.get("use_proxy", "0") or "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if proxy_enabled:
+            if not (effective_settings.get("proxy_host") or "").strip():
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "status": "error",
+                        "field": "proxy_host",
+                        "msg": "Укажите хост прокси, прежде чем включать прокси.",
+                    },
+                )
+            proxy_port = (effective_settings.get("proxy_port") or "").strip()
+            try:
+                _normalize_int_range(
+                    "proxy_port",
+                    proxy_port,
+                    min_value=MIN_PROXY_PORT,
+                    max_value=MAX_PROXY_PORT,
+                )
+            except (SettingsValidationError, ValueError):
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "status": "error",
+                        "field": "proxy_port",
+                        "msg": "Укажите корректный порт прокси в диапазоне 1–65535.",
+                    },
+                )
 
     for key, normalized_value in accepted.items():
         db.set_setting(key, normalized_value)
@@ -434,9 +478,7 @@ async def api_proxy_status() -> dict:
 
 @app.post("/api/proxy/test")
 async def api_proxy_test(request: Request) -> dict:
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+    data = await _read_json_object(request)
 
     cfg = {key: str(data.get(key, "")) for key in PROXY_SETTING_KEYS}
     result = await check_proxy(cfg)
