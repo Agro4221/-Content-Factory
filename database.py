@@ -436,6 +436,16 @@ class DB:
             isolation_level=None,  # autocommit; транзакции — через `with`
         )
         self._configure_pragmas()
+        # Refuse a database from a newer application before any helper attempts
+        # schema repair/backfill; even "helpful" ALTERs would mutate an unsupported DB.
+        schema_version = self._get_schema_version()
+        if schema_version > CURRENT_SCHEMA_VERSION:
+            self.conn.close()
+            raise RuntimeError(
+                f"Схема БД (v{schema_version}) новее поддерживаемой "
+                f"(v{CURRENT_SCHEMA_VERSION}). Обновите код или используйте "
+                "бэкап БД старой версии."
+            )
         self._ensure_created_at_columns()
         self._run_migrations()
         self._migrate_legacy_post_keys()  # для очень старых БД до версионирования
