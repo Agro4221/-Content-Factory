@@ -281,9 +281,9 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
                 port,
                 cfg["mtproto_key"],
             )
-        except ValueError as exc:
+        except (ValueError, ImportError) as exc:
             raise ProxyConfigurationError(
-                f"Секрет MTProto некорректен: {exc}. Прямое подключение не будет использоваться."
+                f"Секрет MTProto некорректен или зависимость отсутствует: {exc}. Прямое подключение не будет использоваться."
             ) from exc
         db.add_log(
             "WARN-300",
