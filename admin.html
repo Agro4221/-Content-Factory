@@ -1468,7 +1468,7 @@
                             <div class="card-body">
                                 <div class="form-group full">
                                     <label class="form-label" for="sources">ID или ссылки доноров</label>
-                                    <textarea name="sources" id="sources" rows="5" placeholder="Channel1&#10;Channel2&#10;-100123456789" oninput="updateEmptyStates(_dashCache.settings || {}, (()=>{try{return JSON.parse(_dashCache.settings?.topic_channels||'{}')}catch(e){return{}}})())"></textarea>
+                                    <textarea name="sources" id="sources" rows="5" placeholder="Channel1&#10;Channel2&#10;-100123456789" oninput="updateEmptyStates(_dashCache.settings || {}, parseTopicChannels(_dashCache.settings?.topic_channels))"></textarea>
                                     <div class="form-hint">Каждый канал с новой строки. Бот должен иметь доступ на чтение.</div>
                                 </div>
                                 <div class="empty-state" id="sourcesEmpty" style="display:none;">
@@ -1790,9 +1790,17 @@ function aiModeIsLocal(mode) {
     return normalizeAiMode(mode) === 'LOCAL';
 }
 
+function parseTopicChannels(raw) {
+    try {
+        const value = JSON.parse(raw || '{}');
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    } catch (e) {
+        return {};
+    }
+}
+
 function buildOnboardState(settings, licenseActive) {
-    let topics = {};
-    try { topics = JSON.parse((settings && settings.topic_channels) || '{}'); } catch (e) {}
+    const topics = parseTopicChannels(settings && settings.topic_channels);
     const aiMode = normalizeAiMode(settings && settings.ai_mode);
     return {
         license: !!licenseActive,
@@ -3029,8 +3037,7 @@ async function loadSettings() {
         fetchProxyStatus();
         renderProxyReadonly(data);
 
-        let topics = {};
-        try { topics = JSON.parse(data.topic_channels || '{}'); } catch (e) {}
+        const topics = parseTopicChannels(data.topic_channels);
 
         const catContainer = document.getElementById('categories-container');
         if (catContainer) {
@@ -3575,7 +3582,7 @@ function renderDashboard(licenseActive, botStatus, settings) {
             && (settings.tg_api_hash || '').trim()
             && (settings.bot_token || '').trim()
             && (settings.sources || '').trim()
-            && (() => { try { return Object.keys(JSON.parse(settings.topic_channels || '{}')).length > 0; } catch (e) { return false; } })();
+            && Object.keys(parseTopicChannels(settings.topic_channels)).length > 0;
         modCard.dataset.state = postsOk ? 'ok' : 'warn';
         modVal.textContent = postsOk ? 'Готов' : '1 / 3';
         modHint.textContent = postsOk ? 'парсер готов к работе' : 'основной модуль требует настройки';
@@ -3588,8 +3595,7 @@ function renderDashboard(licenseActive, botStatus, settings) {
             ? !!(settings.local_model || '').trim()
             : !!(settings.remote_model || '').trim() && !!(settings.remote_api_key || '').trim();
         const srcOk = !!(settings.sources || '').trim();
-        let topics = {};
-        try { topics = JSON.parse(settings.topic_channels || '{}'); } catch (e) {}
+        const topics = parseTopicChannels(settings.topic_channels);
         const tgtOk = Object.keys(topics).length > 0;
         const checks = [
             { ok: licenseActive, label: 'Лицензия' },
