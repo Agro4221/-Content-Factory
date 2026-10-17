@@ -14,7 +14,7 @@ def _configure_stdio_errors() -> None:
             continue
         try:
             reconfigure(errors="backslashreplace")
-        except (OSError, ValueError):
+        except (OSError, RuntimeError, ValueError):
             # Some embedded terminals and test capture streams cannot be reconfigured.
             pass
 
