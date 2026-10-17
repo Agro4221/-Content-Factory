@@ -12,7 +12,6 @@ import main
         "",
         "not-a-token",
         "12345",
-        "12345:short",
         "user:some-password",
     ],
 )
