@@ -105,7 +105,7 @@ def normalize_target_chat(value: str | int | None) -> str:
         return raw
     if raw.startswith("@"):
         if re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", raw):
-            return raw
+            return raw.lower()
         raise ValueError("Укажите корректный Telegram @username или числовой ID канала.")
 
     candidate = raw
@@ -126,7 +126,7 @@ def normalize_target_chat(value: str | int | None) -> str:
                 "Получатель должен быть Telegram-каналом: @username, числовой ID или ссылка t.me."
             )
         if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", raw):
-            return f"@{raw}"
+            return f"@{raw.lower()}"
         raise ValueError(
             "Получатель должен быть корректным @username, числовым ID или ссылкой t.me."
         )
@@ -164,7 +164,7 @@ def normalize_target_chat(value: str | int | None) -> str:
             "Эта ссылка Telegram не является ссылкой на канал. Укажите @username или ID."
         )
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username):
-        return f"@{username}"
+        return f"@{username.lower()}"
     raise ValueError("Ссылка Telegram не содержит корректное имя или ID канала.")
 
 
