@@ -305,13 +305,20 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
             "Прямое подключение не будет использоваться."
         )
 
-    if cfg.get("mtproto_key"):
-        try:
-            mtproto_kwargs = build_mtproto_client_kwargs(
-                host,
-                port,
-                cfg["mtproto_key"],
+    proxy_type = (cfg.get("proxy_type") or "").strip().lower()
+    mtproto_key = (cfg.get("mtproto_key") or "").strip()
+    # Respect an explicit UI selection; infer MTProto from its key only for
+    # legacy configs whose proxy_type is empty.
+    if not proxy_type:
+        proxy_type = "mtproto" if mtproto_key else "http"
+
+    if proxy_type == "mtproto":
+        if not mtproto_key:
+            raise ProxyConfigurationError(
+                "Выбран MTProto, но секретный ключ не задан. Прямое подключение не будет использоваться."
             )
+        try:
+            mtproto_kwargs = build_mtproto_client_kwargs(host, port, mtproto_key)
         except (ValueError, ImportError) as exc:
             raise ProxyConfigurationError(
                 f"Секрет MTProto некорректен или зависимость отсутствует: {exc}. Прямое подключение не будет использоваться."
@@ -321,12 +328,6 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
             "MTProto-прокси применяется только для чтения каналов; бот-отправщик подключается напрямую.",
         )
         return None, mtproto_kwargs, None
-
-    proxy_type = (cfg.get("proxy_type") or "http").strip().lower()
-    if proxy_type == "mtproto":
-        raise ProxyConfigurationError(
-            "Выбран MTProto, но секретный ключ не задан. Прямое подключение не будет использоваться."
-        )
     if proxy_type not in ("http", "socks5", "socks4"):
         raise ProxyConfigurationError(
             f"Неподдерживаемый тип прокси: {proxy_type!r}. Прямое подключение не будет использоваться."
