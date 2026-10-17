@@ -5,6 +5,8 @@ FastAPI-приложение: HTML-админка, JSON API для управл�
 from __future__ import annotations
 
 import os
+import base64
+import hmac
 import re
 import time
 import asyncio
@@ -27,6 +29,9 @@ from proxy_check import (
     resolve_proxy_type,
 )
 from config import (
+    ADMIN_USERNAME,
+    ADMIN_PASSWORD,
+    API_HOST,
     ADMIN_HTML_PATH,
     APP_VERSION,
     BASE_DIR,
@@ -47,6 +52,87 @@ from state import bot_running
 
 db = get_db()
 app = FastAPI(title="API Panel Marej")
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    """Return True only for an unambiguously local bind/client address."""
+    normalized = (host or "").strip().lower().strip("[]")
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        # Hostnames other than the literal localhost are treated as exposed:
+        # do not rely on DNS resolution to decide whether authentication is needed.
+        return False
+
+
+def _unauthorized_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Требуется авторизация администратора"},
+        headers={"WWW-Authenticate": 'Basic realm="Content Factory", charset="UTF-8"'},
+    )
+
+
+@app.middleware("http")
+async def protect_admin_panel(request: Request, call_next):
+    """Protect every panel/API/static route when credentials are configured.
+
+    The app is intentionally local-first. A non-loopback bind without explicit
+    credentials fails closed; non-local clients must use HTTPS (normally via
+    a TLS-terminating reverse proxy).
+    """
+    has_username = bool(ADMIN_USERNAME)
+    has_password = bool(ADMIN_PASSWORD)
+    if has_username != has_password:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Настройте одновременно ADMIN_USERNAME и ADMIN_PASSWORD"},
+        )
+
+    auth_enabled = has_username and has_password
+    if not _is_loopback_host(API_HOST) and not auth_enabled:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": (
+                    "Панель привязана к внешнему интерфейсу без защиты. "
+                    "Задайте ADMIN_USERNAME и ADMIN_PASSWORD; используйте HTTPS."
+                )
+            },
+        )
+
+    client_host = request.client.host if request.client else None
+    if auth_enabled and not _is_loopback_host(client_host) and request.url.scheme != "https":
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Для удалённого доступа к панели требуется HTTPS"},
+        )
+
+    if auth_enabled:
+        header = request.headers.get("authorization", "")
+        scheme, _, encoded = header.partition(" ")
+        supplied_username = supplied_password = ""
+        if scheme.lower() == "basic" and encoded:
+            try:
+                raw_credentials = base64.b64decode(encoded, validate=True).decode("utf-8")
+                supplied_username, separator, supplied_password = raw_credentials.partition(":")
+                if not separator:
+                    supplied_username = supplied_password = ""
+            except (ValueError, UnicodeDecodeError):
+                supplied_username = supplied_password = ""
+
+        username_matches = hmac.compare_digest(
+            supplied_username.encode("utf-8"), ADMIN_USERNAME.encode("utf-8")
+        )
+        password_matches = hmac.compare_digest(
+            supplied_password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")
+        )
+        if not (username_matches and password_matches):
+            return _unauthorized_response()
+
+    return await call_next(request)
 
 _STATIC_ASSETS: dict[str, str] = {
     "favicon.png": "image/png",
