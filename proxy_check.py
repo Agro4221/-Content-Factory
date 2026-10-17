@@ -6,7 +6,7 @@ import base64
 import ipaddress
 import re
 from typing import Any, Optional, Type
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import aiohttp
 
@@ -52,6 +52,53 @@ def resolve_proxy_type(cfg: dict) -> str:
     if not configured and (cfg.get("mtproto_key") or "").strip():
         return "mtproto"
     return configured or "http"
+
+
+def normalize_mtproto_proxy_link(cfg: dict) -> dict:
+    """Expand t.me/proxy or tg://proxy links into host, port and secret fields."""
+    normalized = dict(cfg)
+    if resolve_proxy_type(normalized) != "mtproto":
+        return normalized
+
+    raw_host = (normalized.get("proxy_host") or "").strip()
+    candidate = raw_host
+    if candidate.startswith("t.me/") or candidate.startswith("telegram.me/"):
+        candidate = "https://" + candidate
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return normalized
+
+    host = (parsed.hostname or "").lower()
+    is_public_link = (
+        host in {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}
+        and parsed.path.rstrip("/").lower() == "/proxy"
+        and parsed.scheme.lower() in {"http", "https"}
+    )
+    is_deep_link = parsed.scheme.lower() == "tg" and parsed.netloc.lower() == "proxy"
+    if not (is_public_link or is_deep_link):
+        return normalized
+
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    server = (params.get("server") or [""])[0].strip()
+    port_raw = (params.get("port") or [""])[0].strip()
+    secret = (params.get("secret") or [""])[0].strip()
+    if not server:
+        raise ValueError("MTProto-ссылка не содержит параметр server")
+    if not _validate_port(port_raw):
+        raise ValueError("MTProto-ссылка содержит некорректный port")
+    if not secret:
+        raise ValueError("MTProto-ссылка не содержит secret")
+    try:
+        decode_mtproto_secret_full(secret)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"MTProto-ссылка содержит некорректный secret: {exc}") from exc
+
+    normalized["proxy_host"] = server
+    normalized["proxy_port"] = str(int(port_raw))
+    normalized["mtproto_key"] = secret
+    normalized["proxy_type"] = "mtproto"
+    return normalized
 
 
 def _friendly_error(exc: Exception) -> str:
