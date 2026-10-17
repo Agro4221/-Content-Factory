@@ -73,7 +73,11 @@ def try_reexec_via_venv() -> bool:
     if not _packages_ok(venv_python):
         return False
     print("--> [СИСТЕМА] Перезапуск через локальное окружение .venv ...")
-    os.execv(venv_python, [venv_python, *sys.argv])
+    try:
+        os.execv(venv_python, [venv_python, *sys.argv])
+    except OSError as exc:
+        print(f"!!! [СИСТЕМА] Не удалось перейти в .venv: {exc}")
+        return False
 
 
 def check_and_install_dependencies() -> None:
