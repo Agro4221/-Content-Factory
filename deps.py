@@ -112,10 +112,10 @@ def check_and_install_dependencies() -> None:
         print("--> [СИСТЕМА] Перезапуск для повторной загрузки конфигурации...")
         os.execv(sys.executable, [sys.executable, *sys.argv])
         return
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, OSError):
         pass
 
-    print("--> [СИСТЕМА] Системный pip недоступен (PEP 668). Создаю .venv рядом с приложением...")
+    print("--> [СИСТЕМА] Системный pip недоступен. Создаю .venv рядом с приложением...")
     try:
         venv_python = ensure_venv()
         _pip_install(venv_python, missing, use_requirements=True)
