@@ -147,20 +147,24 @@ def _contains_ad(text: str, words: list[str]) -> bool:
     return False
 
 
-def _make_socks_session(cfg: dict) -> Optional[AiohttpSession]:
+class ProxyConfigurationError(RuntimeError):
+    """Enabled proxy settings cannot be applied safely."""
+
+
+def _make_socks_session(cfg: dict) -> AiohttpSession:
     if not _HAS_SOCKS:
-        db.add_log("ERR-302", "Для SOCKS5 прокси нужен пакет aiohttp-socks. Бот-отправщик работает БЕЗ прокси.")
-        return None
+        raise ProxyConfigurationError(
+            "Для SOCKS нужен пакет aiohttp-socks; запуск без прокси запрещён."
+        )
 
     proxy_type = (cfg.get("proxy_type") or "socks5").strip().lower()
     if proxy_type not in ("socks5", "socks4"):
-        proxy_type = "socks5"
+        raise ProxyConfigurationError(f"Неподдерживаемый тип SOCKS-прокси: {proxy_type!r}")
 
     host = (cfg.get("proxy_host") or "").strip()
     port = _validate_port(str(cfg.get("proxy_port") or ""))
     if not host or port is None:
-        db.add_log("WARN-300", "SOCKS прокси не применён: host/port невалидны.")
-        return None
+        raise ProxyConfigurationError("Для SOCKS-прокси нужны корректные host и port.")
 
     user = cfg.get("proxy_user") or ""
     password = cfg.get("proxy_pass") or ""
@@ -173,9 +177,10 @@ def _make_socks_session(cfg: dict) -> Optional[AiohttpSession]:
     proxy_url = f"{proxy_type}://{auth}{url_host}:{port}"
     try:
         return AiohttpSession(proxy=proxy_url)
-    except Exception as e:
-        db.add_log("ERR-302", f"Не удалось инициализировать SOCKS сессию: {e}")
-        return None
+    except Exception as exc:
+        raise ProxyConfigurationError(
+            f"Не удалось инициализировать SOCKS-сессию: {exc}"
+        ) from exc
 
 
 def _validate_port(port_str: str) -> Optional[int]:
@@ -253,54 +258,74 @@ def _load_config() -> dict:
 
 
 def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[AiohttpSession]]:
-    if not cfg["use_proxy"] or not cfg["proxy_host"]:
+    if not cfg["use_proxy"]:
         return None, None, None
 
-    port = _validate_port(cfg["proxy_port"])
+    host = (cfg.get("proxy_host") or "").strip()
+    if not host:
+        raise ProxyConfigurationError(
+            "Прокси включён, но proxy_host пуст. Прямое подключение не будет использоваться."
+        )
+
+    port = _validate_port(str(cfg.get("proxy_port") or ""))
     if port is None:
-        db.add_log("WARN-300", f"Некорректный proxy_port: {cfg['proxy_port']!r}. Прокси отключён.")
-        return None, None, None
+        raise ProxyConfigurationError(
+            f"Прокси включён, но proxy_port некорректен: {cfg.get('proxy_port')!r}. "
+            "Прямое подключение не будет использоваться."
+        )
 
-    bot_session: Optional[AiohttpSession] = None
-
-    if cfg["mtproto_key"]:
+    if cfg.get("mtproto_key"):
         try:
             mtproto_kwargs = build_mtproto_client_kwargs(
-                cfg["proxy_host"],
+                host,
                 port,
                 cfg["mtproto_key"],
             )
         except ValueError as exc:
-            db.add_log("WARN-300", f"MTProto-секрет некорректен: {exc}. Прокси отключён.")
-            return None, None, None
-        db.add_log("WARN-300", "MTProto применён только к чтению каналов; бот-отправщик идёт напрямую.")
-        return None, mtproto_kwargs, bot_session
+            raise ProxyConfigurationError(
+                f"Секрет MTProto некорректен: {exc}. Прямое подключение не будет использоваться."
+            ) from exc
+        db.add_log(
+            "WARN-300",
+            "MTProto-прокси применяется только для чтения каналов; бот-отправщик подключается напрямую.",
+        )
+        return None, mtproto_kwargs, None
 
-    proxy_type = cfg["proxy_type"] or "http"
+    proxy_type = (cfg.get("proxy_type") or "http").strip().lower()
+    if proxy_type == "mtproto":
+        raise ProxyConfigurationError(
+            "Выбран MTProto, но секретный ключ не задан. Прямое подключение не будет использоваться."
+        )
+    if proxy_type not in ("http", "socks5", "socks4"):
+        raise ProxyConfigurationError(
+            f"Неподдерживаемый тип прокси: {proxy_type!r}. Прямое подключение не будет использоваться."
+        )
+
     telethon_proxy = {
         "proxy_type": proxy_type,
-        "addr": cfg["proxy_host"],
+        "addr": host,
         "port": port,
-        "username": cfg["proxy_user"] or None,
-        "password": cfg["proxy_pass"] or None,
+        "username": cfg.get("proxy_user") or None,
+        "password": cfg.get("proxy_pass") or None,
     }
     if proxy_type == "http":
-        proxy_host = format_proxy_host(cfg["proxy_host"])
-        if cfg["proxy_user"] and cfg["proxy_pass"]:
+        proxy_host = format_proxy_host(host)
+        if cfg.get("proxy_user") and cfg.get("proxy_pass"):
             proxy_user = quote(str(cfg["proxy_user"]), safe="")
             proxy_password = quote(str(cfg["proxy_pass"]), safe="")
             proxy_url = f"http://{proxy_user}:{proxy_password}@{proxy_host}:{port}"
         else:
             proxy_url = f"http://{proxy_host}:{port}"
-        bot_session = AiohttpSession(proxy=proxy_url)
-    elif proxy_type in ("socks5", "socks4"):
-        if not _HAS_SOCKS:
-            db.add_log("ERR-302", "Для SOCKS5 нужен aiohttp-socks. Бот-отправщик работает БЕЗ прокси.")
-        else:
-            bot_session = _make_socks_session(cfg)
+        try:
+            bot_session = AiohttpSession(proxy=proxy_url)
+        except Exception as exc:
+            raise ProxyConfigurationError(
+                f"Не удалось инициализировать HTTP-прокси: {exc}. Прямое подключение не будет использоваться."
+            ) from exc
+    else:
+        bot_session = _make_socks_session(cfg)
 
     return telethon_proxy, None, bot_session
-
 
 # ==========================================
 # ОБРАБОТКА ПОСТОВ
@@ -882,7 +907,13 @@ async def main() -> None:
             await asyncio.sleep(SLEEP_NO_CONFIG_S)
             continue
 
-        telethon_proxy, mtproto_kwargs, bot_session = _setup_proxy(cfg)
+        try:
+            telethon_proxy, mtproto_kwargs, bot_session = _setup_proxy(cfg)
+        except ProxyConfigurationError as proxy_error:
+            db.add_log("ERR-302", f"Невозможно запустить парсер: {proxy_error}")
+            print(f"!!! [ERR-302] {proxy_error}")
+            await asyncio.sleep(SLEEP_NO_CONFIG_S)
+            continue
 
         bot = Bot(
             token=cfg["bot_token"],
