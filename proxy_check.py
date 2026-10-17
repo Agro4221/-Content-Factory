@@ -33,9 +33,15 @@ def format_proxy_host(host: str) -> str:
 
 
 def _validate_port(port_str: str) -> Optional[int]:
-    if not port_str or not str(port_str).isascii() or not str(port_str).isdigit():
+    raw = str(port_str or "")
+    if (
+        not raw
+        or not raw.isascii()
+        or not raw.isdigit()
+        or len(raw) > len(str(MAX_PROXY_PORT))
+    ):
         return None
-    port = int(port_str)
+    port = int(raw)
     return port if MIN_PROXY_PORT <= port <= MAX_PROXY_PORT else None
 
 
