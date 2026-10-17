@@ -145,6 +145,18 @@ def _normalize_validated_setting(key: str, value) -> str:
     return "" if value is None else str(value)
 
 
+async def _read_json_object(request: Request) -> dict:
+    """Parse a JSON object and return a client error for malformed input."""
+    try:
+        data = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Некорректный JSON") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+    return data
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     if not os.path.exists(ADMIN_HTML_PATH):
@@ -395,9 +407,7 @@ async def _on_startup_refresh_proxy() -> None:
 
 @app.post("/api/settings")
 async def api_post_settings(request: Request, background_tasks: BackgroundTasks) -> dict:
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+    data = await _read_json_object(request)
 
     rejected: list[str] = []
     accepted: dict[str, str] = {}
