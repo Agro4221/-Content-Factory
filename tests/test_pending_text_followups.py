@@ -49,6 +49,30 @@ def test_followup_schema_is_migrated_and_queue_is_durable(tmp_path) -> None:
         db.conn.close()
 
 
+def test_existing_v6_database_migrates_the_followup_queue(tmp_path) -> None:
+    path = tmp_path / "upgrade-v6.sqlite3"
+    db = DB(str(path))
+    db.conn.execute("DROP TABLE pending_text_followups")
+    db.conn.execute("PRAGMA user_version = 6")
+    db.conn.close()
+
+    upgraded = DB(str(path))
+    try:
+        version = upgraded.conn.execute("PRAGMA user_version").fetchone()[0]
+        tables = {
+            row[0]
+            for row in upgraded.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+
+        assert version == 7
+        assert "pending_text_followups" in tables
+        assert upgraded.get_due_pending_text_followups() == []
+    finally:
+        upgraded.conn.close()
+
+
 def test_followup_and_published_markers_roll_back_atomically(tmp_path) -> None:
     db = _new_db(tmp_path)
     try:
