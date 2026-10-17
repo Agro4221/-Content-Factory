@@ -45,6 +45,9 @@ class FakeDB:
     def __init__(self) -> None:
         self.settings: dict[str, str] = {}
 
+    def get_all_settings(self) -> dict[str, str]:
+        return dict(self.settings)
+
     def set_setting(self, key: str, value: str) -> None:
         self.settings[key] = value
 
