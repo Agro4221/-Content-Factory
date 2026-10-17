@@ -32,7 +32,7 @@ PR #79 слит в `main` 17 октября 2026 года. Он затронул
 
 Проведён обзор дерева всех 104 отслеживаемых файлов, workflows, зависимостей и тестов; ключевые пути риска анализировались на уровне кода в `main.py`, `Site.py`, `database.py`, `config.py`, `proxy_check.py`, `deps.py`, `env_loader.py`, `startup.py`, `Auth.py`, `integrations/register.py`, `Parser.spec`, HTML/JS-активах. Это широкий статический аудит, а не формальное доказательство отсутствия ошибок во всех возможных исполнениях.
 
-### Исправления, подготовленные в этой ветке
+### Исправления, подготовленные в PR #80 и включённые в `main`
 
 1. **Внешний AI endpoint по обычному HTTP.** Ранее настройка `remote_url` разрешала HTTP для любого хоста. При заданном `remote_api_key` это позволяло отправлять Bearer-токен по незашифрованному соединению. Теперь HTTP разрешён только для `localhost`/loopback-адресов; для внешнего endpoint требуется HTTPS. Ограничение поставлено и в панели настроек, и в runtime-валидации.
 2. **Повреждённые числовые переменные окружения.** Прямые `int()`/`float()` во время импорта `config.py` могли остановить запуск из-за опечатки в `.env`, выхода значений за диапазон или значений вроде `nan`/`inf`. Добавлены ограниченные парсеры с безопасными значениями по умолчанию для `API_PORT`, задержки открытия браузера и legacy-параметров лицензии, а также проверка `API_LOG_LEVEL`.
@@ -46,9 +46,15 @@ PR #79 слит в `main` 17 октября 2026 года. Он затронул
 - [AI failure policy](https://github.com/Agro4221/-Content-Factory/actions/runs/39042352904): passed.
 - [Windows EXE build + smoke test](https://github.com/Agro4221/-Content-Factory/actions/runs/39042352935): EXE собран, запущен; API, HTML панели и favicon доступны.
 
-Эти результаты относятся к ревизии, указанной выше. Документирование в этой ветке и PR могут породить новые CI-запуски; перед merge следует убедиться, что последняя ревизия PR тоже зелёная.
+Эти результаты относятся к ревизии, указанной выше. PR #80 затем был слит в `main`; итоговый merge-коммит: `3a68c503603340b833dce83727e88c947771772e`.
 
-**Важно:** исправления и этот журнал пока находятся в audit-ветке / PR #80, а не в `main`, пока отдельный PR не будет слит.
+### Post-merge CI на актуальном `main`
+
+На merge-коммите все три workflow завершились успешно:
+
+- [Integrated local bugfix regression — run #435](https://github.com/Agro4221/-Content-Factory/actions/runs/39042660190): **373 теста прошли**, компиляция всех Python-файлов, проверка standalone `script.js` и JavaScript в `admin.html` прошли.
+- [AI failure policy — run #223](https://github.com/Agro4221/-Content-Factory/actions/runs/39042660231): passed.
+- [Windows EXE bundle — run #441](https://github.com/Agro4221/-Content-Factory/actions/runs/39042660154): сборка `Parser.exe`, запуск EXE, HTTP-проверки API, HTML панели и favicon прошли.
 
 ## 4. Остаточные замечания аудита
 
@@ -60,7 +66,7 @@ PR #79 слит в `main` 17 октября 2026 года. Он затронул
 
 ## 5. Что осталось до тестовой поставки
 
-Следующий шаг: дождаться зелёных CI на последней ревизии [PR #80](https://github.com/Agro4221/-Content-Factory/pull/80), после чего слить его в `main` и проверить CI на новом `main`. Затем следует создать версионный тег и запустить `Validate and publish Windows release`. Успешный выпуск должен содержать `Parser.exe` и `Parser.exe.sha256`; именно release asset лучше использовать для тестирования Windows-сборки.
+Следующий шаг — выпустить тестовый Windows build. Для этого следует создать версионный тег и запустить `Validate and publish Windows release`. Успешный выпуск должен содержать `Parser.exe` и `Parser.exe.sha256`; именно release asset лучше использовать для тестирования Windows-сборки.
 
 Архив исходного кода текущей ветки `main` можно скачать через публичный URL GitHub:
 
