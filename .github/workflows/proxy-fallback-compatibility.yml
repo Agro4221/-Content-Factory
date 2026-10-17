@@ -1,0 +1,29 @@
+name: Complete proxy URL and fallback regression tests
+
+on:
+  pull_request:
+    branches: [fix/ascii-proxy-port-validation-after-ipv6-formatting]
+  push:
+    branches: [fix/consistent-empty-proxy-type-after-port-validation]
+
+permissions:
+  contents: read
+
+jobs:
+  consistent-proxy-type-default:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run combined proxy regression tests
+        run: python -m pytest -q tests/test_http_proxy_url.py tests/test_ipv6_proxy_urls.py tests/test_ascii_proxy_port_validation.py tests/test_empty_proxy_type_default.py
