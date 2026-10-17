@@ -1,6 +1,7 @@
 """Regression tests for per-source Telegram polling cursors."""
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -97,36 +98,33 @@ def install_fakes(monkeypatch, db: FakeDB, messages: list):
     return client, processed
 
 
-@pytest.mark.asyncio
-async def test_processes_all_new_messages_after_cursor(monkeypatch) -> None:
+def test_processes_all_new_messages_after_cursor(monkeypatch) -> None:
     db = FakeDB(cursor=100)
     client, processed = install_fakes(
         monkeypatch, db, [message(n) for n in range(101, 116)]
     )
 
-    await main._process_one_source(client, SOURCE, {}, None, None)
+    asyncio.run(main._process_one_source(client, SOURCE, {}, None, None))
 
     assert processed == list(range(101, 116))
     assert client.calls == [{"min_id": 100, "reverse": True}]
     assert db.cursor() == 115
 
 
-@pytest.mark.asyncio
-async def test_first_scan_keeps_latest_ten_message_baseline(monkeypatch) -> None:
+def test_first_scan_keeps_latest_ten_message_baseline(monkeypatch) -> None:
     db = FakeDB()
     client, processed = install_fakes(
         monkeypatch, db, [message(n) for n in range(1, 16)]
     )
 
-    await main._process_one_source(client, SOURCE, {}, None, None)
+    asyncio.run(main._process_one_source(client, SOURCE, {}, None, None))
 
     assert processed == list(range(6, 16))
     assert client.calls == [{"limit": 10}]
     assert db.cursor() == 15
 
 
-@pytest.mark.asyncio
-async def test_cursor_stops_before_message_that_needs_retry(monkeypatch) -> None:
+def test_cursor_stops_before_message_that_needs_retry(monkeypatch) -> None:
     db = FakeDB(cursor=100)
     client = FakeClient([message(n) for n in range(101, 106)])
     processed: list[int] = []
@@ -142,21 +140,20 @@ async def test_cursor_stops_before_message_that_needs_retry(monkeypatch) -> None
     monkeypatch.setattr(main, "bot_running", RunningBot())
     monkeypatch.setattr(main, "_process_message_group", fake_process)
 
-    await main._process_one_source(client, SOURCE, {}, None, None)
+    asyncio.run(main._process_one_source(client, SOURCE, {}, None, None))
 
     assert processed == [101, 102, 103]
     assert db.cursor() == 102
 
     fail_id = -1
     processed.clear()
-    await main._process_one_source(client, SOURCE, {}, None, None)
+    asyncio.run(main._process_one_source(client, SOURCE, {}, None, None))
 
     assert processed == [103, 104, 105]
     assert db.cursor() == 105
 
 
-@pytest.mark.asyncio
-async def test_cursor_does_not_jump_over_interleaved_album_message(monkeypatch) -> None:
+def test_cursor_does_not_jump_over_interleaved_album_message(monkeypatch) -> None:
     db = FakeDB(cursor=100)
     client, processed = install_fakes(
         monkeypatch,
@@ -164,7 +161,7 @@ async def test_cursor_does_not_jump_over_interleaved_album_message(monkeypatch) 
         [message(101, grouped_id="album"), message(102), message(103, grouped_id="album")],
     )
 
-    await main._process_one_source(client, SOURCE, {}, None, None)
+    asyncio.run(main._process_one_source(client, SOURCE, {}, None, None))
 
     assert processed == [101, 103, 102]
     assert db.cursor() == 103
