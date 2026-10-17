@@ -244,7 +244,16 @@ def _is_valid_bot_token_format(token: str) -> bool:
 # ЗАГРУЗКА КОНФИГА
 # ==========================================
 def _load_config() -> dict:
-    ai_mode = (db.get_setting("ai_mode", "LOCAL") or "LOCAL").strip().upper()
+    get_all_settings = getattr(db, "get_all_settings", None)
+    snapshot = get_all_settings() if callable(get_all_settings) else None
+
+    def get_setting(key: str, default=""):
+        if snapshot is not None:
+            return snapshot.get(key, default)
+        # Compatibility for lightweight adapters/test doubles.
+        return db.get_setting(key, default)
+
+    ai_mode = (get_setting("ai_mode", "LOCAL") or "LOCAL").strip().upper()
     if ai_mode not in {"LOCAL", "REMOTE"}:
         raise ValueError(
             f"Некорректный ai_mode={ai_mode!r}; допустимы только LOCAL и REMOTE."
