@@ -219,6 +219,20 @@ def _is_valid_bot_token_format(token: str) -> bool:
 # ЗАГРУЗКА КОНФИГА
 # ==========================================
 def _load_config() -> dict:
+    ai_mode = (db.get_setting("ai_mode", "LOCAL") or "LOCAL").strip().upper()
+    if ai_mode not in {"LOCAL", "REMOTE"}:
+        raise ValueError(
+            f"Некорректный ai_mode={ai_mode!r}; допустимы только LOCAL и REMOTE."
+        )
+
+    local_host = (db.get_setting("local_host", "127.0.0.1") or "127.0.0.1").strip()
+    local_port_raw = str(db.get_setting("local_port", "1234") or "1234").strip()
+    local_port = _validate_port(local_port_raw)
+    if not local_host:
+        raise ValueError("local_host не может быть пустым.")
+    if local_port is None:
+        raise ValueError("local_port должен быть целым числом от 1 до 65535.")
+
     sources_raw = db.get_setting("sources", "")
     sources = [s.strip() for s in sources_raw.split("\n") if s.strip()] if sources_raw else []
 
@@ -243,10 +257,10 @@ def _load_config() -> dict:
         "api_id": _safe_int(db.get_setting("tg_api_id", "0"), 0),
         "api_hash": (db.get_setting("tg_api_hash", "") or "").strip(),
         "bot_token": (db.get_setting("bot_token", "") or "").strip(),
-        "ai_mode": (db.get_setting("ai_mode", "LOCAL") or "LOCAL").strip().upper(),
+        "ai_mode": ai_mode,
         "local_url": (
-            f"http://{db.get_setting('local_host', '127.0.0.1')}:"
-            f"{db.get_setting('local_port', '1234')}/v1/chat/completions"
+            f"http://{format_proxy_host(local_host)}:"
+            f"{local_port}/v1/chat/completions"
         ),
         "local_model": db.get_setting("local_model", ""),
         "remote_url": (db.get_setting("remote_url", "") or "").strip(),
@@ -321,9 +335,9 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
     }
     if proxy_type == "http":
         proxy_host = format_proxy_host(host)
-        if cfg.get("proxy_user") and cfg.get("proxy_pass"):
-            proxy_user = quote(str(cfg["proxy_user"]), safe="")
-            proxy_password = quote(str(cfg["proxy_pass"]), safe="")
+        if cfg.get("proxy_user") or cfg.get("proxy_pass"):
+            proxy_user = quote(str(cfg.get("proxy_user") or ""), safe="")
+            proxy_password = quote(str(cfg.get("proxy_pass") or ""), safe="")
             proxy_url = f"http://{proxy_user}:{proxy_password}@{proxy_host}:{port}"
         else:
             proxy_url = f"http://{proxy_host}:{port}"
