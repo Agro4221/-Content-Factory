@@ -122,3 +122,23 @@ def test_runtime_setup_normalizes_mtproto_url_before_validating_port(monkeypatch
     assert mtproto_kwargs is not None
     assert bot_session is None
     assert captured == [("proxy.example", 443, SECRET)]
+
+def test_proxy_checker_normalizes_legacy_saved_mtproto_link(monkeypatch) -> None:
+    captured: list[tuple[str, int, str]] = []
+
+    async def fake_test_mtproto(host: str, port: int, secret: str, timeout: float):
+        captured.append((host, port, secret))
+        return True, "Соединение установлено"
+
+    monkeypatch.setattr(proxy_check, "_test_mtproto", fake_test_mtproto)
+    result = asyncio.run(proxy_check.check_proxy({
+        "use_proxy": "1",
+        "proxy_type": "mtproto",
+        "proxy_host": f"https://t.me/proxy?server=proxy.example&port=443&secret={SECRET}",
+        "proxy_port": "",
+        "mtproto_key": "",
+    }))
+
+    assert result["ok"] is True
+    assert captured == [("proxy.example", 443, SECRET)]
+
