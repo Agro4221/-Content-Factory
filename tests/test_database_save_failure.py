@@ -195,3 +195,47 @@ def test_set_settings_commits_whole_batch() -> None:
     finally:
         db.conn.close()
 
+def test_save_skipped_post_propagates_non_duplicate_integrity_failures() -> None:
+    db = object.__new__(DB)
+    db._lock = threading.Lock()
+    db.conn = sqlite3.connect(":memory:")
+    try:
+        db.conn.execute(
+            """
+            CREATE TABLE skipped_posts (
+                post_key TEXT PRIMARY KEY,
+                post_id TEXT,
+                source_name TEXT,
+                reason TEXT CHECK (reason = 'allowed'),
+                created_at DATETIME
+            )
+            """
+        )
+        with pytest.raises(DatabaseWriteError, match="could not record skipped post"):
+            db.save_skipped_post("@source", 17, "invalid-reason")
+    finally:
+        db.conn.close()
+
+
+def test_save_skipped_post_treats_existing_key_as_idempotent() -> None:
+    db = object.__new__(DB)
+    db._lock = threading.Lock()
+    db.conn = sqlite3.connect(":memory:")
+    try:
+        db.conn.execute(
+            """
+            CREATE TABLE skipped_posts (
+                post_key TEXT PRIMARY KEY,
+                post_id TEXT,
+                source_name TEXT,
+                reason TEXT,
+                created_at DATETIME
+            )
+            """
+        )
+        db.save_skipped_post("@source", 17, "empty")
+        db.save_skipped_post("@source", 17, "empty")
+        assert db.conn.execute("SELECT COUNT(*) FROM skipped_posts").fetchone()[0] == 1
+    finally:
+        db.conn.close()
+
