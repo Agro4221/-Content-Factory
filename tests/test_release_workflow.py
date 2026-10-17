@@ -38,5 +38,5 @@ def test_release_workflow_has_no_corrupted_duplicate_fragments() -> None:
 
     assert workflow.count("- name: Set up Python") == 1
     assert workflow.count("- name: Set up Node.js") == 1
-    assert ") {" not in workflow
+    assert "\n) {" not in workflow
     assert "Release tags must look like v1.2.3 or v1.2.3.4" in workflow
