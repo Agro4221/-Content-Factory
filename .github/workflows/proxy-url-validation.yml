@@ -1,0 +1,29 @@
+name: Proxy URL and port validation
+
+on:
+  pull_request:
+    branches: [fix/ipv6-proxy-url-formatting-after-credentials]
+  push:
+    branches: [fix/ascii-proxy-port-validation-after-ipv6-formatting]
+
+permissions:
+  contents: read
+
+jobs:
+  ascii-proxy-port-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run proxy URL and port regression tests
+        run: python -m pytest -q tests/test_http_proxy_url.py tests/test_ipv6_proxy_urls.py tests/test_ascii_proxy_port_validation.py
