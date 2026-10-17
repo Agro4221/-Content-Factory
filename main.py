@@ -406,6 +406,12 @@ def _load_config() -> dict:
                 f"Некорректный целевой канал для категории {norm_key!r}: {exc}"
             ) from exc
         if norm_key and norm_val:
+            if norm_key in topic_channels:
+                raise ValueError(
+                    "topic_channels содержит дублирующиеся категории после "
+                    f"нормализации регистра: {norm_key!r}. Исправьте маршруты, "
+                    "чтобы посты не отправлялись в неверный канал."
+                )
             topic_channels[norm_key] = norm_val
 
     poll_delay_raw = str(
