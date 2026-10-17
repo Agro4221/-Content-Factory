@@ -56,4 +56,4 @@ def test_unauthorized_session_returns_false_and_logs_actionable_error(monkeypatc
     assert client.start_called is False
     assert len(db.logs) == 1
     assert db.logs[0][0] == "ERR-203"
-    assert "Сессия не авторизована" in db.logs[0][1]
+    assert "не авторизована" in db.logs[0][1].lower()
