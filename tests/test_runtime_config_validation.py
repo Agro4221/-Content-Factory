@@ -159,3 +159,22 @@ def test_source_invite_link_fails_closed(monkeypatch) -> None:
     with pytest.raises(ValueError, match="источник Telegram"):
         main._load_config()
 
+@pytest.mark.parametrize("poll_delay", ["0", "4", "3601", "-1", "１２３", "not-a-number"])
+def test_invalid_persisted_poll_delay_is_rejected(monkeypatch, poll_delay: str) -> None:
+    monkeypatch.setattr(main, "db", FakeDB(poll_delay=poll_delay))
+
+    with pytest.raises(ValueError, match="poll_delay"):
+        main._load_config()
+
+
+@pytest.mark.parametrize("poll_delay", ["5", "60", "3600"])
+def test_valid_persisted_poll_delay_is_kept(monkeypatch, poll_delay: str) -> None:
+    monkeypatch.setattr(main, "db", FakeDB(poll_delay=poll_delay))
+
+    assert main._load_config()["poll_delay"] == int(poll_delay)
+
+
+def test_empty_legacy_poll_delay_uses_default(monkeypatch) -> None:
+    monkeypatch.setattr(main, "db", FakeDB(poll_delay=""))
+
+    assert main._load_config()["poll_delay"] == main.POLL_DELAY_DEFAULT
