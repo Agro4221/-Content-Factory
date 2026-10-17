@@ -143,3 +143,38 @@ def test_valid_enabled_proxy_settings_are_saved(monkeypatch) -> None:
     assert fake_db.settings["use_proxy"] == "1"
     assert fake_db.settings["proxy_host"] == "proxy.example"
     assert fake_db.settings["proxy_port"] == "8080"
+
+def test_enabled_mtproto_requires_secret_before_settings_are_written(monkeypatch) -> None:
+    fake_db = FakeDB()
+    monkeypatch.setattr(Site, "db", fake_db)
+
+    result = call_settings({
+        "use_proxy": "1",
+        "proxy_type": "mtproto",
+        "proxy_host": "proxy.example",
+        "proxy_port": "443",
+        "mtproto_key": "",
+    })
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 422
+    assert fake_db.writes == []
+
+
+def test_enabled_mtproto_rejects_malformed_secret_before_settings_are_written(monkeypatch) -> None:
+    fake_db = FakeDB()
+    monkeypatch.setattr(Site, "db", fake_db)
+
+    result = call_settings({
+        "use_proxy": "1",
+        "proxy_type": "mtproto",
+        "proxy_host": "proxy.example",
+        "proxy_port": "443",
+        "mtproto_key": "bad-secret",
+    })
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 422
+    assert fake_db.writes == []
+    assert "mtproto_key" == "mtproto_key"
+
