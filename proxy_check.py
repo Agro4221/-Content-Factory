@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import re
 from typing import Any, Optional, Type
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import aiohttp
 
@@ -19,10 +20,28 @@ except ImportError:
     _HAS_SOCKS = False
 
 
+def format_proxy_host(host: str) -> str:
+    """Bracket IPv6 literals when they are embedded in proxy URLs."""
+    normalized = (host or "").strip()
+    if normalized.startswith("[") and normalized.endswith("]"):
+        return normalized
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return normalized
+    return f"[{normalized}]" if address.version == 6 else normalized
+
+
 def _validate_port(port_str: str) -> Optional[int]:
-    if not port_str or not str(port_str).isdigit():
+    raw = str(port_str or "")
+    if (
+        not raw
+        or not raw.isascii()
+        or not raw.isdigit()
+        or len(raw) > len(str(MAX_PROXY_PORT))
+    ):
         return None
-    port = int(port_str)
+    port = int(raw)
     return port if MIN_PROXY_PORT <= port <= MAX_PROXY_PORT else None
 
 
@@ -31,9 +50,65 @@ def _truthy(value: object) -> bool:
 
 
 def resolve_proxy_type(cfg: dict) -> str:
-    if (cfg.get("mtproto_key") or "").strip():
+    # An explicit type chosen in the UI wins over a stale hidden MTProto key.
+    # Older configs with an empty type can still infer MTProto from the key.
+    configured = (cfg.get("proxy_type") or "").strip().lower()
+    if configured in {"http", "socks5", "socks4", "mtproto"}:
+        return configured
+    if not configured and (cfg.get("mtproto_key") or "").strip():
         return "mtproto"
-    return (cfg.get("proxy_type") or "http").strip().lower()
+    return configured or "http"
+
+
+def normalize_mtproto_proxy_link(cfg: dict) -> dict:
+    """Expand t.me/proxy or tg://proxy links into host, port and secret fields."""
+    normalized = dict(cfg)
+    configured_type = (normalized.get("proxy_type") or "").strip().lower()
+    raw_host = (normalized.get("proxy_host") or "").strip()
+    candidate = raw_host
+    if candidate.startswith("t.me/") or candidate.startswith("telegram.me/"):
+        candidate = "https://" + candidate
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        parsed = urlsplit("")
+
+    host = (parsed.hostname or "").lower()
+    is_public_link = (
+        host in {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}
+        and parsed.path.rstrip("/").lower() == "/proxy"
+        and parsed.scheme.lower() in {"http", "https"}
+    )
+    is_deep_link = parsed.scheme.lower() == "tg" and parsed.netloc.lower() == "proxy"
+
+    # If a concrete non-MTProto type was explicitly selected, a stale/accidental
+    # link must not override that selection. Empty type is allowed for legacy
+    # configurations and is inferred from a recognized MTProto link.
+    if configured_type in {"http", "socks4", "socks5"}:
+        return normalized
+    if not (is_public_link or is_deep_link):
+        return normalized
+
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    server = (params.get("server") or [""])[0].strip()
+    port_raw = (params.get("port") or [""])[0].strip()
+    secret = (params.get("secret") or [""])[0].strip()
+    if not server:
+        raise ValueError("MTProto-ссылка не содержит параметр server")
+    if not _validate_port(port_raw):
+        raise ValueError("MTProto-ссылка содержит некорректный port")
+    if not secret:
+        raise ValueError("MTProto-ссылка не содержит secret")
+    try:
+        decode_mtproto_secret_full(secret)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"MTProto-ссылка содержит некорректный secret: {exc}") from exc
+
+    normalized["proxy_host"] = server
+    normalized["proxy_port"] = str(int(port_raw))
+    normalized["mtproto_key"] = secret
+    normalized["proxy_type"] = "mtproto"
+    return normalized
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -72,7 +147,8 @@ async def _test_http(
     auth = ""
     if user or password:
         auth = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
-    proxy_url = f"http://{auth}{host}:{port}"
+    url_host = format_proxy_host(host)
+    proxy_url = f"http://{auth}{url_host}:{port}"
     client_timeout = aiohttp.ClientTimeout(total=timeout)
     try:
         async with aiohttp.ClientSession(timeout=client_timeout) as session:
@@ -82,6 +158,10 @@ async def _test_http(
                 return False, f"Прокси ответил с кодом {resp.status}"
     except asyncio.TimeoutError as exc:
         raise exc
+    except aiohttp.ClientHttpProxyError as exc:
+        if getattr(exc, "status", None) == 407:
+            return False, "Прокси требует авторизацию: проверьте логин и пароль."
+        return False, _friendly_error(exc)
     except Exception as exc:
         return False, _friendly_error(exc)
 
@@ -101,7 +181,8 @@ async def _test_socks(
     auth = ""
     if user or password:
         auth = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
-    proxy_url = f"{scheme}://{auth}{host}:{port}"
+    url_host = format_proxy_host(host)
+    proxy_url = f"{scheme}://{auth}{url_host}:{port}"
     client_timeout = aiohttp.ClientTimeout(total=timeout)
     connector = ProxyConnector.from_url(proxy_url)
     try:
@@ -316,6 +397,18 @@ async def check_proxy(cfg: dict, timeout: float = 20.0) -> dict[str, Any]:
             "proxy_type": "",
         }
 
+    try:
+        cfg = normalize_mtproto_proxy_link(cfg)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "reachable": False,
+            "state": "error",
+            "message": str(exc),
+            "proxy_type": "MTProto" if resolve_proxy_type(cfg) == "mtproto" else "",
+        }
+
+    host = (cfg.get("proxy_host") or "").strip()
     if not host:
         return {
             "ok": False,
@@ -362,13 +455,7 @@ async def check_proxy(cfg: dict, timeout: float = 20.0) -> dict[str, Any]:
                 timeout,
             )
         else:
-            ok, message = await _test_http(
-                host,
-                port,
-                cfg.get("proxy_user") or "",
-                cfg.get("proxy_pass") or "",
-                timeout,
-            )
+            ok, message = False, f"Неподдерживаемый тип прокси: {proxy_type!r}"
     except asyncio.TimeoutError:
         ok, message = False, "Таймаут: сервер не отвечает"
     except Exception as exc:

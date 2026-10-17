@@ -1,0 +1,89 @@
+name: Validate and publish Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag format
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+(\.\d+)?$') {
+            throw "Release tags must look like v1.2.3 or v1.2.3.4"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Check admin panel JavaScript syntax
+        run: python tools/check_frontend.py
+
+      - name: Test proxy-check UI failures
+        run: node tests/test_proxy_connection_rejection.cjs
+
+      - name: Test topic settings UI
+        run: node tests/test_topic_channels_ui.cjs
+
+      - name: Run complete regression suite
+        run: python -m pytest -q tests
+
+      - name: Build Windows executable
+        run: python -m PyInstaller Parser.spec --clean --noconfirm
+
+      - name: Smoke-test built Windows executable
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/smoke_test_windows.ps1
+
+      - name: Verify executable and generate checksum
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/Parser.exe")) {
+            throw "PyInstaller finished without producing dist/Parser.exe"
+          }
+          $hash = (Get-FileHash "dist/Parser.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Parser.exe" | Set-Content -Encoding ascii "dist/Parser.exe.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Content-Factory-Windows-${{ github.run_number }}
+          path: |
+            dist/Parser.exe
+            dist/Parser.exe.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:GITHUB_REF_NAME" "dist/Parser.exe" "dist/Parser.exe.sha256" --title "Content Factory $env:GITHUB_REF_NAME" --generate-notes --verify-tag

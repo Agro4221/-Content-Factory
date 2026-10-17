@@ -1,0 +1,39 @@
+name: Integrated local bugfix regression
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, fix/local-bugfix-integration-2026-10-17]
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Check admin panel JavaScript syntax
+        run: python tools/check_frontend.py
+      - name: Test proxy-check UI failures
+        run: node tests/test_proxy_connection_rejection.cjs
+      - name: Test malformed topic settings in admin UI
+        run: node tests/test_topic_channels_ui.cjs
+      - name: Run all regression tests
+        run: python -m pytest -q tests

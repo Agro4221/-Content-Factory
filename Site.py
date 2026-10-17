@@ -5,10 +5,15 @@ FastAPI-приложение: HTML-админка, JSON API для управл�
 from __future__ import annotations
 
 import os
+import base64
+import hmac
 import re
 import time
 import asyncio
+import json
+import ipaddress
 from datetime import datetime
+from urllib.parse import urlsplit
 from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -17,8 +22,16 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from deps import check_and_install_dependencies
 check_and_install_dependencies()
 
-from proxy_check import check_proxy, resolve_proxy_type
+from proxy_check import (
+    check_proxy,
+    decode_mtproto_secret_full,
+    normalize_mtproto_proxy_link,
+    resolve_proxy_type,
+)
 from config import (
+    ADMIN_USERNAME,
+    ADMIN_PASSWORD,
+    API_HOST,
     ADMIN_HTML_PATH,
     APP_VERSION,
     BASE_DIR,
@@ -29,14 +42,105 @@ from config import (
     MIN_PROXY_PORT,
     MODULE_POSTS,
     POLL_DELAY_MAX,
+    normalize_target_chat,
     POLL_DELAY_MIN,
     SETTING_KEYS,
+    is_truthy,
 )
 from database import format_display_timestamp, get_db
 from state import bot_running
 
 db = get_db()
 app = FastAPI(title="API Panel Marej")
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    """Return True only for an unambiguously local bind/client address."""
+    normalized = (host or "").strip().lower().strip("[]")
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        # Hostnames other than the literal localhost are treated as exposed:
+        # do not rely on DNS resolution to decide whether authentication is needed.
+        return False
+
+
+def _unauthorized_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Требуется авторизация администратора"},
+        headers={"WWW-Authenticate": 'Basic realm="Content Factory", charset="UTF-8"'},
+    )
+
+
+@app.middleware("http")
+async def protect_admin_panel(request: Request, call_next):
+    """Protect every panel/API/static route when credentials are configured.
+
+    The app is intentionally local-first. A non-loopback bind without explicit
+    credentials fails closed; non-local clients must use HTTPS (normally via
+    a TLS-terminating reverse proxy).
+    """
+    has_username = bool(ADMIN_USERNAME)
+    has_password = bool(ADMIN_PASSWORD)
+    if has_username != has_password:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Настройте одновременно ADMIN_USERNAME и ADMIN_PASSWORD"},
+        )
+
+    auth_enabled = has_username and has_password
+    client_host = request.client.host if request.client else None
+    # Also detect exposure through a loopback-bound reverse proxy when Uvicorn
+    # has accepted a trusted forwarded client address. "testclient" is the
+    # in-process Starlette test transport, not a routable network client.
+    remote_client = bool(
+        client_host
+        and client_host != "testclient"
+        and not _is_loopback_host(client_host)
+    )
+    if not auth_enabled and (not _is_loopback_host(API_HOST) or remote_client):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": (
+                    "Панель доступна не только локально, но защита не настроена. "
+                    "Задайте ADMIN_USERNAME и ADMIN_PASSWORD; для удалённого доступа используйте HTTPS."
+                )
+            },
+        )
+
+    if auth_enabled and remote_client and request.url.scheme != "https":
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Для удалённого доступа к панели требуется HTTPS"},
+        )
+
+    if auth_enabled:
+        header = request.headers.get("authorization", "")
+        scheme, _, encoded = header.partition(" ")
+        supplied_username = supplied_password = ""
+        if scheme.lower() == "basic" and encoded:
+            try:
+                raw_credentials = base64.b64decode(encoded, validate=True).decode("utf-8")
+                supplied_username, separator, supplied_password = raw_credentials.partition(":")
+                if not separator:
+                    supplied_username = supplied_password = ""
+            except (ValueError, UnicodeDecodeError):
+                supplied_username = supplied_password = ""
+
+        username_matches = hmac.compare_digest(
+            supplied_username.encode("utf-8"), ADMIN_USERNAME.encode("utf-8")
+        )
+        password_matches = hmac.compare_digest(
+            supplied_password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")
+        )
+        if not (username_matches and password_matches):
+            return _unauthorized_response()
+
+    return await call_next(request)
 
 _STATIC_ASSETS: dict[str, str] = {
     "favicon.png": "image/png",
@@ -108,9 +212,23 @@ def _normalize_int_range(
         if allow_empty:
             return ""
         raise SettingsValidationError(field=field, msg=f"{field} не может быть пустым")
-    if not raw.isdigit():
+    if not raw.isascii() or not raw.isdigit():
         raise SettingsValidationError(field=field, msg=f"{field} должен быть целым числом")
-    value = int(raw)
+    # Python limits decimal-to-int conversion length to mitigate denial of
+    # service. Return a field validation error rather than leaking that ValueError
+    # as an HTTP 500 when an API client submits thousands of digits.
+    if len(raw) > 20:
+        raise SettingsValidationError(
+            field=field,
+            msg=f"{field} содержит слишком много цифр.",
+        )
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SettingsValidationError(
+            field=field,
+            msg=f"{field} должен быть допустимым целым числом.",
+        ) from exc
     if min_value is not None and value < min_value:
         raise SettingsValidationError(field=field, msg=f"{field} должен быть >= {min_value}")
     if max_value is not None and value > max_value:
@@ -122,6 +240,94 @@ def _normalize_validated_setting(key: str, value) -> str:
     """Валидирует оставшиеся глобальные ключи настроек."""
     raw = "" if value is None else str(value).strip()
 
+    if key == "ai_mode":
+        normalized = raw.upper()
+        if normalized in {"LOCAL", "REMOTE"}:
+            return normalized
+        raise SettingsValidationError(
+            field=key,
+            msg=f"{key} должен быть LOCAL или REMOTE",
+        )
+
+    if key == "sources":
+        normalized_sources: list[str] = []
+        for raw_source in raw.splitlines():
+            source = raw_source.strip()
+            if not source:
+                continue
+            try:
+                source = normalize_target_chat(source)
+            except ValueError as exc:
+                raise SettingsValidationError(
+                    field=key,
+                    msg=f"Некорректный источник {raw_source.strip()!r}: {exc}",
+                ) from exc
+            if source and source not in normalized_sources:
+                normalized_sources.append(source)
+        return "\n".join(normalized_sources)
+
+    if key == "topic_channels":
+        try:
+            topics = json.loads(raw or "{}")
+        except (TypeError, ValueError) as exc:
+            raise SettingsValidationError(
+                field=key,
+                msg="topic_channels должен содержать корректный JSON-объект категорий.",
+            ) from exc
+        if not isinstance(topics, dict):
+            raise SettingsValidationError(
+                field=key,
+                msg="topic_channels должен быть JSON-объектом, а не массивом или скаляром.",
+            )
+        normalized_topics: dict[str, str] = {}
+        seen_topic_keys: set[str] = set()
+        for topic, target in topics.items():
+            if not isinstance(topic, str) or not isinstance(target, str):
+                raise SettingsValidationError(
+                    field=key,
+                    msg="Названия категорий и целевые каналы должны быть строками.",
+                )
+            topic = topic.strip()
+            try:
+                target = normalize_target_chat(target)
+            except ValueError as exc:
+                raise SettingsValidationError(field=key, msg=str(exc)) from exc
+            if topic and target:
+                canonical_topic = topic.lower()
+                if canonical_topic in seen_topic_keys:
+                    raise SettingsValidationError(
+                        field=key,
+                        msg=(
+                            "Категории не должны повторяться с разным регистром: "
+                            f"{topic!r} конфликтует с существующей категорией."
+                        ),
+                    )
+                seen_topic_keys.add(canonical_topic)
+                normalized_topics[topic] = target
+        return json.dumps(normalized_topics, ensure_ascii=False)
+
+    if key == "proxy_type":
+        normalized = raw.lower()
+        if not normalized:
+            return ""
+        if normalized in {"http", "socks5", "socks4", "mtproto"}:
+            return normalized
+        raise SettingsValidationError(
+            field=key,
+            msg="proxy_type должен быть одним из: HTTP, SOCKS5, SOCKS4, MTProto",
+        )
+
+    if key == "use_proxy":
+        normalized = raw.lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return "1"
+        if normalized in {"0", "false", "no", "off"}:
+            return "0"
+        raise SettingsValidationError(
+            field=key,
+            msg="use_proxy должен быть логическим значением",
+        )
+
     if key == "poll_delay":
         return _normalize_int_range(
             "poll_delay",
@@ -129,6 +335,62 @@ def _normalize_validated_setting(key: str, value) -> str:
             min_value=POLL_DELAY_MIN,
             max_value=POLL_DELAY_MAX,
         )
+
+    if key == "local_port":
+        return _normalize_int_range(
+            "local_port",
+            raw,
+            min_value=1,
+            max_value=65535,
+        )
+
+    if key == "local_host":
+        if not raw:
+            return "127.0.0.1"
+        if any(char in raw for char in "/?#@") or any(char.isspace() for char in raw):
+            raise SettingsValidationError(
+                field=key,
+                msg="local_host должен быть именем хоста или IP-адресом, без URL-схемы и пути.",
+            )
+        bracketed = raw.startswith("[") or raw.endswith("]")
+        host_value = raw[1:-1] if raw.startswith("[") and raw.endswith("]") else raw
+        if bracketed:
+            try:
+                if ipaddress.ip_address(host_value).version != 6:
+                    raise ValueError("brackets are only valid for IPv6")
+            except ValueError as exc:
+                raise SettingsValidationError(
+                    field=key,
+                    msg="В квадратных скобках должен быть корректный IPv6-адрес.",
+                ) from exc
+        else:
+            try:
+                ipaddress.ip_address(host_value)
+            except ValueError:
+                if ":" in host_value or not re.fullmatch(r"[A-Za-z0-9.-]+", host_value):
+                    raise SettingsValidationError(
+                        field=key,
+                        msg="local_host должен быть корректным именем хоста или IP-адресом.",
+                    )
+        return raw
+
+    if key == "remote_url":
+        if not raw:
+            return ""
+        try:
+            parsed_url = urlsplit(raw)
+            valid_port = parsed_url.port is None or 1 <= parsed_url.port <= 65535
+        except ValueError as exc:
+            raise SettingsValidationError(
+                field=key,
+                msg="remote_url содержит некорректный адрес или порт.",
+            ) from exc
+        if parsed_url.scheme.lower() not in {"http", "https"} or not parsed_url.hostname or not valid_port:
+            raise SettingsValidationError(
+                field=key,
+                msg="remote_url должен быть корректным HTTP- или HTTPS-адресом.",
+            )
+        return raw
 
     if key == "proxy_port":
         return _normalize_int_range(
@@ -143,6 +405,18 @@ def _normalize_validated_setting(key: str, value) -> str:
         return _normalize_int_range("tg_api_id", raw, min_value=1, allow_empty=True)
 
     return "" if value is None else str(value)
+
+
+async def _read_json_object(request: Request) -> dict:
+    """Parse a JSON object and return a client error for malformed input."""
+    try:
+        data = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Некорректный JSON") from exc
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+    return data
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -310,7 +584,9 @@ async def api_bot_toggle() -> dict:
 # === Настройки ===
 @app.get("/api/settings")
 async def api_get_settings(module: Optional[str] = Query(default=None)) -> dict:
-    return db.get_all_settings()
+    settings = dict(db.get_all_settings())
+    settings["use_proxy"] = "1" if is_truthy(settings.get("use_proxy", "0")) else "0"
+    return settings
 
 
 PROXY_SETTING_KEYS = frozenset(
@@ -345,7 +621,7 @@ def get_proxy_runtime_status() -> dict:
 
 async def refresh_proxy_runtime_status(settings: Optional[dict] = None) -> dict:
     cfg = _proxy_cfg_from_settings(settings)
-    use_proxy = str(cfg.get("use_proxy", "0")).strip() in ("1", "true", "True")
+    use_proxy = is_truthy(cfg.get("use_proxy", "0"))
     host = (cfg.get("proxy_host") or "").strip()
 
     if not use_proxy:
@@ -395,9 +671,7 @@ async def _on_startup_refresh_proxy() -> None:
 
 @app.post("/api/settings")
 async def api_post_settings(request: Request, background_tasks: BackgroundTasks) -> dict:
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+    data = await _read_json_object(request)
 
     rejected: list[str] = []
     accepted: dict[str, str] = {}
@@ -414,8 +688,93 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
                 content={"status": "error", "field": e.field, "msg": e.msg},
             )
 
-    for key, normalized_value in accepted.items():
-        db.set_setting(key, normalized_value)
+    if accepted.keys() & PROXY_SETTING_KEYS:
+        effective_settings = db.get_all_settings()
+        effective_settings.update(accepted)
+        proxy_enabled = str(effective_settings.get("use_proxy", "0") or "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if proxy_enabled:
+            try:
+                normalized_proxy_settings = normalize_mtproto_proxy_link(effective_settings)
+            except ValueError as exc:
+                return JSONResponse(
+                    status_code=422,
+                    content={"status": "error", "field": "proxy_host", "msg": str(exc)},
+                )
+            # When an MTProto URL was pasted into the host field, persist its
+            # actual server, port, and secret atomically with the rest of the form.
+            for key in ("proxy_host", "proxy_port", "mtproto_key", "proxy_type"):
+                if normalized_proxy_settings.get(key) != effective_settings.get(key):
+                    effective_settings[key] = normalized_proxy_settings.get(key, "")
+                    accepted[key] = str(effective_settings[key] or "")
+            if not (effective_settings.get("proxy_host") or "").strip():
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "status": "error",
+                        "field": "proxy_host",
+                        "msg": "Укажите хост прокси, прежде чем включать прокси.",
+                    },
+                )
+            proxy_port = (effective_settings.get("proxy_port") or "").strip()
+            try:
+                _normalize_int_range(
+                    "proxy_port",
+                    proxy_port,
+                    min_value=MIN_PROXY_PORT,
+                    max_value=MAX_PROXY_PORT,
+                )
+            except (SettingsValidationError, ValueError):
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "status": "error",
+                        "field": "proxy_port",
+                        "msg": "Укажите корректный порт прокси в диапазоне 1–65535.",
+                    },
+                )
+
+            if resolve_proxy_type(effective_settings) == "mtproto":
+                secret = (effective_settings.get("mtproto_key") or "").strip()
+                if not secret:
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "status": "error",
+                            "field": "mtproto_key",
+                            "msg": "Для MTProto-прокси необходимо указать секретный ключ.",
+                        },
+                    )
+                try:
+                    decode_mtproto_secret_full(secret)
+                except (ValueError, TypeError) as exc:
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "status": "error",
+                            "field": "mtproto_key",
+                            "msg": f"Секрет MTProto некорректен: {exc}",
+                        },
+                    )
+
+    if accepted:
+        save_settings_batch = getattr(db, "set_settings", None)
+        try:
+            if callable(save_settings_batch):
+                save_settings_batch(accepted)
+            else:
+                # Compatibility for adapters/test doubles predating set_settings().
+                for key, normalized_value in accepted.items():
+                    db.set_setting(key, normalized_value)
+        except Exception:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "msg": "Не удалось сохранить настройки. Изменения отменены; проверьте доступность базы данных.",
+                },
+            )
 
     saved = len(accepted)
     if accepted.keys() & PROXY_SETTING_KEYS:
@@ -434,12 +793,21 @@ async def api_proxy_status() -> dict:
 
 @app.post("/api/proxy/test")
 async def api_proxy_test(request: Request) -> dict:
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Ожидается JSON-объект")
+    data = await _read_json_object(request)
 
     cfg = {key: str(data.get(key, "")) for key in PROXY_SETTING_KEYS}
-    result = await check_proxy(cfg)
+    try:
+        cfg = normalize_mtproto_proxy_link(cfg)
+    except ValueError as exc:
+        result = {
+            "ok": False,
+            "reachable": False,
+            "state": "error",
+            "message": str(exc),
+            "proxy_type": "MTProto",
+        }
+    else:
+        result = await check_proxy(cfg)
     _proxy_runtime_status.update(
         {
             "state": result.get("state", "unknown"),
@@ -464,17 +832,25 @@ async def api_server_time() -> dict[str, object]:
 
 
 # === Логи ===
+# Bound offset scans so an arbitrary page parameter cannot force huge SQLite work.
+MAX_LOGS_OFFSET = 1_000_000
+
+
 @app.get("/api/logs")
 async def api_get_logs(
     limit: int = LOGS_PAGE_SIZE,
     page: int = 1,
     module: Optional[str] = Query(default=None),
 ) -> list[dict]:
+    if limit < 1:
+        limit = 1
     if limit > 200:
         limit = 200
     if page < 1:
         page = 1
     offset = (page - 1) * limit
+    if offset > MAX_LOGS_OFFSET:
+        return []
     rows = db.get_logs(limit=limit, offset=offset)
     return [
         {
@@ -503,7 +879,7 @@ def _build_posts_stats() -> dict:
 
     skipped_by_reason = db.top_skipped_reasons(h24_iso)
 
-    successes_24h = db.count_logs_by_type(("OK", "SUCCESS", "SYS-"), h24_iso)
+    successes_24h = db.count_logs_by_type(("OK-", "SUCCESS"), h24_iso)
     errors_24h = db.count_logs_by_type(("ERR-",), h24_iso)
 
     last_ts, last_source = db.last_published()
@@ -535,12 +911,14 @@ def _build_posts_stats() -> dict:
     sources_raw = (settings.get("sources") or "").strip()
     sources_list = [s for s in sources_raw.split("\n") if s.strip()] if sources_raw else []
     sources_count = len(sources_list)
-    active_sources_24h = sum(1 for s in top_sources if s["count"] > 0)
+    active_sources_24h = db.count_active_published_sources_since(h24_iso)
 
     try:
         import json as _json
         topics = _json.loads(settings.get("topic_channels") or "{}")
-    except Exception:
+        if not isinstance(topics, dict):
+            topics = {}
+    except (TypeError, ValueError):
         topics = {}
     topics_count = len(topics)
     topics_with_target = sum(1 for v in topics.values() if v)
@@ -577,12 +955,10 @@ async def api_stats_posts() -> dict:
     try:
         return _build_posts_stats()
     except Exception as e:
-        return {
-            "error": str(e),
-            "bot_running": False,
-            "published_total": 0,
-            "skipped_total": 0,
-        }
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)},
+        )
 
 
 @app.on_event("startup")

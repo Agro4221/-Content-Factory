@@ -1468,7 +1468,7 @@
                             <div class="card-body">
                                 <div class="form-group full">
                                     <label class="form-label" for="sources">ID или ссылки доноров</label>
-                                    <textarea name="sources" id="sources" rows="5" placeholder="Channel1&#10;Channel2&#10;-100123456789" oninput="updateEmptyStates(_dashCache.settings || {}, (()=>{try{return JSON.parse(_dashCache.settings?.topic_channels||'{}')}catch(e){return{}}})())"></textarea>
+                                    <textarea name="sources" id="sources" rows="5" placeholder="Channel1&#10;Channel2&#10;-100123456789" oninput="updateEmptyStates(_dashCache.settings || {}, parseTopicChannels(_dashCache.settings?.topic_channels))"></textarea>
                                     <div class="form-hint">Каждый канал с новой строки. Бот должен иметь доступ на чтение.</div>
                                 </div>
                                 <div class="empty-state" id="sourcesEmpty" style="display:none;">
@@ -1790,9 +1790,17 @@ function aiModeIsLocal(mode) {
     return normalizeAiMode(mode) === 'LOCAL';
 }
 
+function parseTopicChannels(raw) {
+    try {
+        const value = JSON.parse(raw || '{}');
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    } catch (e) {
+        return {};
+    }
+}
+
 function buildOnboardState(settings, licenseActive) {
-    let topics = {};
-    try { topics = JSON.parse((settings && settings.topic_channels) || '{}'); } catch (e) {}
+    const topics = parseTopicChannels(settings && settings.topic_channels);
     const aiMode = normalizeAiMode(settings && settings.ai_mode);
     return {
         license: !!licenseActive,
@@ -1821,10 +1829,6 @@ const NAV_CONFIG = {
             'posts/proxy':    { title: 'VPN / Proxy',                crumb: 'VPN / Proxy' },
             'posts/logs':     { title: 'Консоль (логи)',             crumb: 'Консоль (логи)' },
             'posts/faq':      { title: 'Инструкция и FAQ',           crumb: 'Инструкция и FAQ' },
-        }
-    },
-        }
-    },
         }
     }
 };
@@ -1964,7 +1968,7 @@ function navigate(route) {
 
     // Модульные дашборды — подтягиваем данные при входе
     if (route === 'posts/dashboard') {
-        const mod = route.startsWith('posts') ? 'posts' : route.startsWith() ? : ;
+        const mod = 'posts';
         if (typeof renderModuleDashboard === 'function') renderModuleDashboard(mod);
     }
 
@@ -2852,42 +2856,6 @@ async function refreshBotStatus() {
     renderDashboardFromCache();
 }
 
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-    await handleModuleAction();
-    renderModuleDashboard();
-}
-
-            body: JSON.stringify({ lines }),
-        });
-        if (res.status === 403) {
-            toast({ type: 'warn', title: 'Лицензия', text: 'Сначала активируйте лицензию!' });
-            return;
-        }
-        const data = await res.json();
-        toast({
-            type: 'success',
-            title: 'Импорт аккаунтов',
-            text: `Создано: ${data.created || 0}, пропущено: ${data.skipped || 0}`,
-        });
-        input.value = '';
-        refreshReviewsStatus();
-        renderModuleDashboard();
-    } catch (e) {
-        toast({ type: 'danger', title: 'Ошибка', text: 'Не удалось импортировать аккаунты.' });
-    }
-}
-
 /* ============================================================
    ПРОКСИ — проверка соединения и индикатор в шапке
    ============================================================ */
@@ -2987,29 +2955,38 @@ function collectProxyFormData() {
 }
 
 async function testProxyConnection(data) {
-    const res = await fetch('/api/proxy/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    });
-    const result = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        if (res.status === 404) {
+    try {
+        const res = await fetch('/api/proxy/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            if (res.status === 404) {
+                return {
+                    ok: false,
+                    reachable: false,
+                    state: 'error',
+                    message: 'Проверка прокси недоступна — перезапустите приложение (main.py), чтобы подтянуть обновление.',
+                };
+            }
             return {
                 ok: false,
                 reachable: false,
                 state: 'error',
-                message: 'Проверка прокси недоступна — перезапустите приложение (main.py), чтобы подтянуть обновление.',
+                message: (result && (result.detail || result.msg)) || `HTTP ${res.status}`,
             };
         }
+        return result;
+    } catch (_) {
         return {
             ok: false,
             reachable: false,
             state: 'error',
-            message: (result && (result.detail || result.msg)) || `HTTP ${res.status}`,
+            message: 'Не удалось проверить соединение с прокси. Проверьте подключение и повторите попытку.',
         };
     }
-    return result;
 }
 
 function setupProxyPillNavigation() {
@@ -3060,8 +3037,7 @@ async function loadSettings() {
         fetchProxyStatus();
         renderProxyReadonly(data);
 
-        let topics = {};
-        try { topics = JSON.parse(data.topic_channels || '{}'); } catch (e) {}
+        const topics = parseTopicChannels(data.topic_channels);
 
         const catContainer = document.getElementById('categories-container');
         if (catContainer) {
@@ -3082,8 +3058,6 @@ async function loadSettings() {
         renderDashboardFromCache();
 
         // Модульные дашборды: подтягиваем реальные значения из настроек
-        syncBehaviorFormFromSettings(data);
-        syncReviewsFormFromSettings(data);
         // Обзор модулей рисуется из /api/stats/* — не перезаписываем карточки настройками.
         const route = state.currentRoute || '';
 
@@ -3114,7 +3088,7 @@ async function saveSettings(formId, sourceBtn) {
     const data = Object.fromEntries(formData.entries());
 
     if (formId === 'form-parsing') {
-        const topics = {};
+        const topics = Object.create(null);
         document.querySelectorAll('.dynamic-row').forEach(row => {
             const k = row.querySelector('.cat-key').value.trim();
             const v = row.querySelector('.cat-val').value.trim();
@@ -3256,7 +3230,7 @@ function addCategoryRow(catName = '', chanId = '') {
     removeBtn.onclick = () => {
         row.remove();
         // Пересчитать empty-state после удаления
-        const topics = {};
+        const topics = Object.create(null);
         document.querySelectorAll('.dynamic-row').forEach(r => {
             const k = r.querySelector('.cat-key').value.trim();
             const v = r.querySelector('.cat-val').value.trim();
@@ -3608,7 +3582,7 @@ function renderDashboard(licenseActive, botStatus, settings) {
             && (settings.tg_api_hash || '').trim()
             && (settings.bot_token || '').trim()
             && (settings.sources || '').trim()
-            && (() => { try { return Object.keys(JSON.parse(settings.topic_channels || '{}')).length > 0; } catch (e) { return false; } })();
+            && Object.keys(parseTopicChannels(settings.topic_channels)).length > 0;
         modCard.dataset.state = postsOk ? 'ok' : 'warn';
         modVal.textContent = postsOk ? 'Готов' : '1 / 3';
         modHint.textContent = postsOk ? 'парсер готов к работе' : 'основной модуль требует настройки';
@@ -3621,8 +3595,7 @@ function renderDashboard(licenseActive, botStatus, settings) {
             ? !!(settings.local_model || '').trim()
             : !!(settings.remote_model || '').trim() && !!(settings.remote_api_key || '').trim();
         const srcOk = !!(settings.sources || '').trim();
-        let topics = {};
-        try { topics = JSON.parse(settings.topic_channels || '{}'); } catch (e) {}
+        const topics = parseTopicChannels(settings.topic_channels);
         const tgtOk = Object.keys(topics).length > 0;
         const checks = [
             { ok: licenseActive, label: 'Лицензия' },
@@ -3775,23 +3748,21 @@ async function refreshPostsStats() {
    Источник истины — /api/stats/{posts|behavior|reviews}.
    ============================================================ */
 async function renderModuleDashboard(module) {
-    let url, stats = {};
+    if (module !== 'posts') return;
+
+    let stats = {};
     try {
-        url = module === 'posts'     ? '/api/stats/posts'
-            : null;
-        if (!url) return;
-        const res = await fetch(url);
+        const res = await fetch('/api/stats/posts');
         if (res.ok) stats = await res.json();
-    } catch (e) { /* silent */ }
-    // Дополнительно подтянем свежие логи модуля для «последних событий»
+    } catch (e) { /* best-effort dashboard refresh */ }
+
     let logs = [];
     try {
-        const r = await fetch(`/api/logs?module=${encodeURIComponent(module)}&limit=10`);
-        if (r.ok) logs = await r.json();
-    } catch (e) {}
-    if (module === 'posts')     renderPostsDashboard(stats, logs);
-    else if (module === ) renderBehaviorDashboard(stats, logs);
-    else if (module === )  renderReviewsDashboard(stats, logs);
+        const response = await fetch('/api/logs?module=posts&limit=10');
+        if (response.ok) logs = await response.json();
+    } catch (e) { /* best-effort dashboard refresh */ }
+
+    renderPostsDashboard(stats, logs);
 }
 
 /* ============================================================
@@ -3811,7 +3782,7 @@ async function renderModuleHealthForRoute(route) {
     // Подтягиваем stats для модуля (best-effort, GET — без проверки лицензии)
     let stats = {};
     try {
-        const url = module === 'posts'     ? '/api/stats/posts'
+        const url = module === 'posts' ? '/api/stats/posts' : null;
         if (url) {
             const res = await fetch(url);
             if (res.ok) stats = await res.json();
@@ -3836,46 +3807,23 @@ async function renderModuleHealthForRoute(route) {
    нет health-панели с ожидаемыми data-h, ничего не делает.
    ============================================================ */
 function renderModuleHealth(module, stats) {
-    if (!stats) return;
-    if (module === 'posts') {
-        if (stats.bot_running) _setHealthItem('bot', 'Работает',   'парсинг идёт', 'ok');
-        else                   _setHealthItem('bot', 'Остановлен', 'нажмите кнопку запуска в шапке', 'warn');
-        if (stats.ai_status === 'error') _setHealthItem('ai', `${stats.ai_mode || '—'}`, 'ошибка за последний час', 'err');
-        else if (stats.ai_model)         _setHealthItem('ai', stats.ai_mode || '—',   stats.ai_model, 'ok');
-        else                              _setHealthItem('ai', 'не настроен', 'модель не указана', 'warn');
-        if (stats.proxy_status) applyProxyStatusUI(stats.proxy_status);
-        const proxyDisplay = getProxyDisplayStatus(_dashCache.settings || {});
-        _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-        if ((stats.sources_count || 0) > 0) _setHealthItem('sources', `${stats.sources_count} каналов`, `${stats.active_sources_24h || 0} активных за 24ч`, 'ok');
-        else                                 _setHealthItem('sources', 'не заданы', 'добавьте в настройках парсинга', 'err');
-    } else if (module === ) {
-        if (stats.proxy_status) applyProxyStatusUI(stats.proxy_status);
-        const proxyDisplay = getProxyDisplayStatus(_dashCache.settings || {});
-        if (stats.implemented === false) {
-            _setHealthItem('bot',  'В разработке', 'бэкенд не подключён', 'dev');
-            _setHealthItem('ai',   '—',           'настройки преконфигурированы', 'dev');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources','настройки', 'URL и ключевые слова', 'warn');
-        } else {
-            _setHealthItem('bot', stats.running ? 'Работает' : 'Остановлен', stats.running ? 'сценарии выполняются' : 'запустите модуль', stats.running ? 'ok' : 'warn');
-            _setHealthItem('ai', `${stats.sessions_today || 0} за сегодня`, 'поведенческие сессии', (stats.sessions_today || 0) > 0 ? 'ok' : 'warn');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources', `${stats.targets_count || 0} целей`, (stats.last_session_at ? `последняя: ${formatLogTime(stats.last_session_at)}` : 'сессий пока нет'), (stats.targets_count || 0) > 0 ? 'ok' : 'warn');
-        }
-    } else if (module === ) {
-        if (stats.proxy_status) applyProxyStatusUI(stats.proxy_status);
-        const proxyDisplay = getProxyDisplayStatus(_dashCache.settings || {});
-        if (stats.implemented === false) {
-            _setHealthItem('bot',  'В разработке', 'бэкенд не подключён', 'dev');
-            _setHealthItem('ai',   '—',           'шаблоны и модели заданы', 'dev');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources','аккаунты',  'Google-аккаунты, пул', 'warn');
-        } else {
-            _setHealthItem('bot', stats.running ? 'Работает' : 'Остановлен', stats.running ? 'очередь в обработке' : 'запустите модуль', stats.running ? 'ok' : 'warn');
-            _setHealthItem('ai', `${stats.accounts_active || 0} активных`, 'аккаунты готовы к публикации', (stats.accounts_active || 0) > 0 ? 'ok' : 'warn');
-            _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
-            _setHealthItem('sources', `${stats.queue_pending || 0} в очереди`, stats.last_publish_at ? `последняя публикация ${formatLogTime(stats.last_publish_at)}` : 'публикаций пока нет', (stats.queue_pending || 0) > 0 ? 'ok' : 'warn');
-        }
+    if (!stats || module !== 'posts') return;
+
+    if (stats.bot_running) _setHealthItem('bot', 'Работает', 'парсинг идёт', 'ok');
+    else _setHealthItem('bot', 'Остановлен', 'нажмите кнопку запуска в шапке', 'warn');
+
+    if (stats.ai_status === 'error') _setHealthItem('ai', `${stats.ai_mode || '—'}`, 'ошибка за последний час', 'err');
+    else if (stats.ai_model) _setHealthItem('ai', stats.ai_mode || '—', stats.ai_model, 'ok');
+    else _setHealthItem('ai', 'не настроен', 'модель не указана', 'warn');
+
+    if (stats.proxy_status) applyProxyStatusUI(stats.proxy_status);
+    const proxyDisplay = getProxyDisplayStatus(_dashCache.settings || {});
+    _setHealthItem('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
+
+    if ((stats.sources_count || 0) > 0) {
+        _setHealthItem('sources', `${stats.sources_count} каналов`, `${stats.active_sources_24h || 0} активных за 24ч`, 'ok');
+    } else {
+        _setHealthItem('sources', 'не заданы', 'добавьте в настройках парсинга', 'err');
     }
 }
 
@@ -4110,7 +4058,18 @@ const LOG_TRANSLATIONS = {
     'ERR-203': 'Сессия Telegram аннулирована. Перезапустите парсер.',
     'ERR-204': 'Telegram выдал FloodWait — бот сам подождёт.',
     'ERR-205': 'Бот не добавлен в канал или не имеет прав публикации.',
+    'ERR-207': 'Повреждён курсор источника. Автоматический сброс запрещён, чтобы не потерять историю.',
     'ERR-301': 'Прокси не отвечает. Проверьте хост/порт или замените прокси.',
+    'ERR-408': 'Telegram отклонил публикацию. Исправьте права/получателя; запись оставлена для повтора.',
+    'ERR-DB-501': 'Публикация уже отправлена, но SQLite не записала её. Проверьте канал перед перезапуском.',
+    'OK-501': 'Публикация успешно отправлена и записана в SQLite.',
+    'WARN-400': 'Не настроен целевой канал для этой темы. Пост ожидает настройки маршрута.',
+    'WARN-404': 'AI вернул ответ неправильного формата. Пост оставлен для повторной обработки.',
+    'WARN-405': 'AI недоступен. Пост оставлен для повторной обработки.',
+    'WARN-406': 'Временная ошибка отправки Telegram. Пост ожидает повторной попытки.',
+    'WARN-407': 'Медиа отправлены, но дополнительный текст не доставлен. Проверьте сообщение в канале.',
+    'WARN-500': 'Текст сокращён до лимита Telegram.',
+    'WARN-501': 'Вложение не скачано. Пост оставлен для повторной попытки.',
     'ERR-302': 'Неверный логин или пароль прокси.',
     'ERR-401': 'LM Studio / Ollama недоступны. Запустите локальный сервер.',
     'ERR-402': 'Модель не загружена в LM Studio / Ollama.',
@@ -4229,7 +4188,7 @@ function classifyLog(type) {
     const t = (type || '').toUpperCase();
     if (t.startsWith('ERR-') || t === 'SYS-ERR') return 'error';
     if (t.startsWith('WARN-')) return 'warn';
-    if (t.startsWith('SYS-') || t === 'SUCCESS' || t === 'OK') return 'success';
+    if (t.startsWith('SYS-') || t.startsWith('OK-') || t === 'SUCCESS' || t === 'OK') return 'success';
     return 'info';
 }
 
@@ -4516,8 +4475,6 @@ window.addEventListener('DOMContentLoaded', () => {
         ['form-ai', 'form-parsing', 'form-proxy'].forEach(renderSaveMeta);
     });
     refreshPostsStats();
-    refreshBehaviorStatus();
-    refreshReviewsStatus();
     fetchProxyStatus();
     startSaveMetaTicker();
     startPollingTimers();

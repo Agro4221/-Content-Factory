@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import re
+from urllib.parse import urlsplit
 
 from env_loader import load_environment
 from paths import BASE_DIR, BUNDLE_DIR, is_frozen
@@ -10,9 +12,14 @@ load_environment()
 
 APP_VERSION = "1.28.3.6"
 
-API_HOST = os.environ.get("API_HOST", "127.0.0.1")
+API_HOST = os.environ.get("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 API_PORT = int(os.environ.get("API_PORT", "8000"))
 API_LOG_LEVEL = os.environ.get("API_LOG_LEVEL", "warning")
+# Optional HTTP Basic credentials for the local admin panel. If the API binds
+# to a non-loopback interface, both values are mandatory. Use HTTPS at the
+# reverse proxy when exposing the panel beyond localhost.
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 BROWSER_OPEN_ON_START = os.environ.get("BROWSER_OPEN_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
 BROWSER_OPEN_DELAY_S = float(os.environ.get("BROWSER_OPEN_DELAY_S", "2.5"))
 
@@ -80,7 +87,7 @@ REQUIRED_PACKAGES: dict[str, str] = {
     "uvicorn": "uvicorn>=0.27",
     "telethon": "telethon>=1.34",
     "TelethonFakeTLS": "TelethonFakeTLS>=2022.4.4",
-    "aiogram": "aiogram>=3.4",
+    "aiogram": "aiogram>=3.7.0",
     "aiohttp": "aiohttp>=3.9",
     "aiohttp_socks": "aiohttp-socks>=0.8.0",
     "dotenv": "python-dotenv>=1.0",
@@ -94,6 +101,76 @@ SLEEP_BOT_STOPPED_S = 2
 
 def make_post_key(source: str, post_id: int | str) -> str:
     return f"{source}:{post_id}"
+
+
+def normalize_target_chat(value: str | int | None) -> str:
+    """Normalize a Telegram channel ID/username/public link for Bot API sends."""
+    raw = "" if value is None else str(value).strip()
+    if not raw or re.fullmatch(r"-?[0-9]+", raw):
+        return raw
+    if raw.startswith("@"):
+        if re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", raw):
+            return raw.lower()
+        raise ValueError("Укажите корректный Telegram @username или числовой ID канала.")
+
+    candidate = raw
+    if candidate.startswith(("t.me/", "www.t.me/", "telegram.me/", "www.telegram.me/")):
+        candidate = "https://" + candidate
+    try:
+        parsed = urlsplit(candidate)
+        host = (parsed.hostname or "").lower()
+    except ValueError as exc:
+        if candidate.startswith(("http://", "https://", "tg://")):
+            raise ValueError("Некорректная ссылка на Telegram-канал.") from exc
+        raise ValueError("Укажите корректный @username, числовой ID или ссылку t.me.") from exc
+
+    telegram_hosts = {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}
+    if host not in telegram_hosts:
+        if parsed.scheme or parsed.netloc:
+            raise ValueError(
+                "Получатель должен быть Telegram-каналом: @username, числовой ID или ссылка t.me."
+            )
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", raw):
+            return f"@{raw.lower()}"
+        raise ValueError(
+            "Получатель должен быть корректным @username, числовым ID или ссылкой t.me."
+        )
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("Ссылка Telegram должна начинаться с https:// или быть обычным @username.")
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts:
+        raise ValueError("Ссылка Telegram не содержит имя или ID канала.")
+    if parts[0].lower() == "s":
+        parts = parts[1:]
+    if not parts:
+        raise ValueError("Ссылка Telegram не содержит имя канала.")
+
+    if parts[0].startswith("+") or parts[0].lower() == "joinchat":
+        raise ValueError(
+            "Ссылка-приглашение Telegram не является получателем публикации. "
+            "Укажите публичный @username или числовой ID канала."
+        )
+
+    # Private-channel post links use t.me/c/<channel_id>/<message_id>.
+    if parts[0].lower() == "c":
+        if len(parts) >= 2 and re.fullmatch(r"[0-9]+", parts[1]):
+            return f"-100{parts[1]}"
+        raise ValueError("В ссылке приватного канала Telegram не найден числовой ID.")
+
+    username = parts[0]
+    reserved_routes = {
+        "share", "proxy", "socks", "addstickers", "addemoji", "setlanguage",
+        "login", "confirmphone", "invoice", "boost", "giftcode", "addtheme",
+        "bg", "iv", "joinchat", "c", "s",
+    }
+    if username.lower() in reserved_routes:
+        raise ValueError(
+            "Эта ссылка Telegram не является ссылкой на канал. Укажите @username или ID."
+        )
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username):
+        return f"@{username.lower()}"
+    raise ValueError("Ссылка Telegram не содержит корректное имя или ID канала.")
 
 
 def runtime_label() -> str:

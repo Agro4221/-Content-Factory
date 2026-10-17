@@ -52,6 +52,20 @@ def format_display_timestamp(ts: str | None) -> str:
         return str(ts)
 
 
+def _anchor_sqlite_modifier(modifier: str) -> str:
+    """Resolves SQLite 'start of day/month/year' modifiers in local time."""
+    now = datetime.now()
+    midnight = {"hour": 0, "minute": 0, "second": 0, "microsecond": 0}
+    if modifier == "start of day":
+        anchored = now.replace(**midnight)
+    elif modifier == "start of month":
+        anchored = now.replace(day=1, **midnight)
+    elif modifier == "start of year":
+        anchored = now.replace(month=1, day=1, **midnight)
+    else:
+        raise ValueError(f"Unsupported SQLite anchor modifier: {modifier!r}")
+    return anchored.strftime("%Y-%m-%d %H:%M:%S")
+
 def _parse_sqlite_modifier(modifier: str) -> int:
     """Разбирает '+24 hours', '-7 days', '+300 seconds' в смещение в секундах."""
     raw = modifier.strip()
@@ -301,12 +315,68 @@ def _migration_v5(db: "DB") -> None:
     db.set_setting("logs_utc_to_local_done", "1")
 
 
+def _migration_v6(db: "DB") -> None:
+    """v6: normalize legacy UTC post timestamps to the local convention used by stats."""
+    if db._get_schema_version() >= 6:
+        return
+
+    # Explicit SQL transaction; the schema version commits with the timestamp
+    # update so an interrupted startup can never shift the same rows twice.
+    db.conn.execute("BEGIN IMMEDIATE")
+    try:
+        for table in ("published_posts", "skipped_posts"):
+            columns = {
+                row[1]
+                for row in db.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if "created_at" not in columns:
+                continue
+            db.conn.execute(
+                f"UPDATE {table} SET created_at = "
+                "CASE WHEN datetime(created_at) IS NOT NULL "
+                "THEN datetime(created_at, 'localtime') ELSE created_at END "
+                "WHERE created_at IS NOT NULL"
+            )
+        db.conn.execute("PRAGMA user_version = 6")
+        db.conn.commit()
+    except BaseException:
+        if db.conn.in_transaction:
+            db.conn.rollback()
+        raise
+
+
+def _migration_v7(db: "DB") -> None:
+    """v7: durable retry queue for caption text sent after media."""
+    db.conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_text_followups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_name TEXT NOT NULL,
+            post_id TEXT NOT NULL,
+            target_chat TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            next_attempt_at TEXT NOT NULL,
+            UNIQUE(source_name, post_id, target_chat)
+        )
+        """
+    )
+    db.conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pending_followups_due "
+        "ON pending_text_followups(next_attempt_at, id)"
+    )
+
+
 # Регистрируем миграции
 MIGRATIONS.append((1, _migration_v1))
 MIGRATIONS.append((2, _migration_v2))
 MIGRATIONS.append((3, _migration_v3))
 MIGRATIONS.append((4, _migration_v4))
 MIGRATIONS.append((5, _migration_v5))
+MIGRATIONS.append((6, _migration_v6))
+MIGRATIONS.append((7, _migration_v7))
 
 CURRENT_SCHEMA_VERSION: int = max(v for v, _ in MIGRATIONS)
 
@@ -359,6 +429,10 @@ _DEFAULT_SETTINGS: dict[str, str] = {
 _DEFAULT_SETTINGS = {**_DEFAULT_SETTINGS, **ALL_FUTURE_DEFAULTS}
 
 
+class DatabaseWriteError(RuntimeError):
+    """A database write failed after a post may already have been published."""
+
+
 class DB:
     """Потокобезопасная (через WAL+busy_timeout+threading.Lock) обёртка над SQLite.
 
@@ -387,6 +461,17 @@ class DB:
             isolation_level=None,  # autocommit; транзакции — через `with`
         )
         self._configure_pragmas()
+        # Refuse a database from a newer application before any helper attempts
+        # schema repair/backfill; even "helpful" ALTERs would mutate an unsupported DB.
+        schema_version = self._get_schema_version()
+        if schema_version > CURRENT_SCHEMA_VERSION:
+            self.conn.close()
+            raise RuntimeError(
+                f"Схема БД (v{schema_version}) новее поддерживаемой "
+                f"(v{CURRENT_SCHEMA_VERSION}). Обновите код или используйте "
+                "бэкап БД старой версии."
+            )
+        self._ensure_created_at_columns()
         self._run_migrations()
         self._migrate_legacy_post_keys()  # для очень старых БД до версионирования
 
@@ -397,6 +482,56 @@ class DB:
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.execute("PRAGMA busy_timeout=5000")
             self.conn.execute("PRAGMA foreign_keys=ON")
+
+    def _ensure_created_at_columns(self) -> None:
+        """Safely add timestamp columns before migrations touch populated legacy tables.
+
+        SQLite can reject ALTER TABLE ... DEFAULT CURRENT_TIMESTAMP when the
+        table already contains rows. Add the column without a default first;
+        timestamp backfill and indexes are safe to rerun.
+        """
+        table_indexes = {
+            "published_posts": (
+                "CREATE INDEX IF NOT EXISTS idx_published_created_at "
+                "ON published_posts(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
+                "ON published_posts(source_name, created_at)",
+            ),
+            "skipped_posts": (
+                "CREATE INDEX IF NOT EXISTS idx_skipped_created_at "
+                "ON skipped_posts(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_skipped_reason "
+                "ON skipped_posts(reason)",
+            ),
+        }
+        schema_version = self._get_schema_version()
+        for table, indexes in table_indexes.items():
+            columns = [
+                row[1]
+                for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            ]
+            if not columns:
+                continue
+            with self.conn:
+                if "created_at" not in columns:
+                    self.conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN created_at DATETIME"
+                    )
+                # Before v6, timestamps are normalized by migration v6. Backfill
+                # with the same UTC convention as SQLite CURRENT_TIMESTAMP so
+                # the migration can convert the values exactly once.
+                if schema_version < 6:
+                    self.conn.execute(
+                        f"UPDATE {table} SET created_at = CURRENT_TIMESTAMP "
+                        "WHERE created_at IS NULL"
+                    )
+                else:
+                    self.conn.execute(
+                        f"UPDATE {table} SET created_at = ? WHERE created_at IS NULL",
+                        (_local_now_str(),),
+                    )
+                for statement in indexes:
+                    self.conn.execute(statement)
 
     def _get_schema_version(self) -> int:
         """Читает PRAGMA user_version. 0 для свежей БД."""
@@ -491,44 +626,77 @@ class DB:
         """
         try:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(published_posts)").fetchall()]
-        except sqlite3.Error:
-            return
-        if "post_key" in cols:
-            return  # уже мигрировано
-        try:
-            with self.conn:
-                # Копируем старые данные с переименованием в новый формат
-                self.conn.execute("ALTER TABLE published_posts RENAME TO _published_posts_legacy")
-                self.conn.execute(
-                    """
-                    CREATE TABLE published_posts (
-                        post_key TEXT PRIMARY KEY,
-                        post_id TEXT,
-                        source_name TEXT
+        except sqlite3.Error as exc:
+            _logger.error("Could not inspect published_posts before legacy migration: %s", exc)
+            raise RuntimeError(
+                "Cannot inspect the legacy published_posts schema; database startup aborted."
+            ) from exc
+        if "post_key" not in cols:
+            try:
+                with self.conn:
+                    # DB uses isolation_level=None (autocommit), so explicitly
+                    # begin a transaction for this multi-statement schema change.
+                    self.conn.execute("BEGIN IMMEDIATE")
+                    # Копируем старые данные с переименованием в новый формат
+                    self.conn.execute("ALTER TABLE published_posts RENAME TO _published_posts_legacy")
+                    self.conn.execute(
+                        """
+                        CREATE TABLE published_posts (
+                            post_key TEXT PRIMARY KEY,
+                            post_id TEXT,
+                            source_name TEXT,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
                     )
-                    """
-                )
-                self.conn.execute(
-                    """
-                    INSERT OR IGNORE INTO published_posts (post_key, post_id, source_name)
-                    SELECT (source_name || ':' || post_id), post_id, source_name
-                    FROM _published_posts_legacy
-                    """
-                )
-                self.conn.execute("DROP TABLE _published_posts_legacy")
-                _logger.info("Migrated published_posts to composite key")
-        except sqlite3.Error as e:
-            _logger.warning("Migration of published_posts failed (non-fatal): %s", e)
+                    if "created_at" in cols:
+                        self.conn.execute(
+                            """
+                            INSERT OR IGNORE INTO published_posts (
+                                post_key, post_id, source_name, created_at
+                            )
+                            SELECT (source_name || ':' || post_id), post_id, source_name, created_at
+                            FROM _published_posts_legacy
+                            """
+                        )
+                    else:
+                        self.conn.execute(
+                            """
+                            INSERT OR IGNORE INTO published_posts (post_key, post_id, source_name)
+                            SELECT (source_name || ':' || post_id), post_id, source_name
+                            FROM _published_posts_legacy
+                            """
+                        )
+                    self.conn.execute("DROP TABLE _published_posts_legacy")
+                    self.conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_published_created_at "
+                        "ON published_posts(created_at)"
+                    )
+                    self.conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
+                        "ON published_posts(source_name, created_at)"
+                    )
+                    _logger.info("Migrated published_posts to composite key")
+            except sqlite3.Error as e:
+                _logger.error("Migration of published_posts failed; aborting startup: %s", e)
+                raise RuntimeError(
+                    "Legacy published_posts migration failed; refusing to run with an incompatible database."
+                ) from e
 
         # Та же история для skipped_posts — на случай, если в БД она была создана
         # ещё до моего фикса (там post_id как PK).
         try:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(skipped_posts)").fetchall()]
-        except sqlite3.Error:
-            cols = []
+        except sqlite3.Error as exc:
+            _logger.error("Could not inspect skipped_posts before legacy migration: %s", exc)
+            raise RuntimeError(
+                "Cannot inspect the legacy skipped_posts schema; database startup aborted."
+            ) from exc
         if cols and "post_key" not in cols:
             try:
                 with self.conn:
+                    # Keep the rename/create/copy/drop sequence atomic in autocommit mode.
+                    self.conn.execute("BEGIN IMMEDIATE")
                     self.conn.execute("ALTER TABLE skipped_posts RENAME TO _skipped_posts_legacy")
                     self.conn.execute(
                         """
@@ -536,21 +704,44 @@ class DB:
                             post_key TEXT PRIMARY KEY,
                             post_id TEXT,
                             source_name TEXT,
-                            reason TEXT
+                            reason TEXT,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                         )
                         """
                     )
-                    self.conn.execute(
-                        """
-                        INSERT OR IGNORE INTO skipped_posts (post_key, post_id, source_name, reason)
-                        SELECT (source_name || ':' || post_id), post_id, source_name, reason
-                        FROM _skipped_posts_legacy
-                        """
-                    )
+                    if "created_at" in cols:
+                        self.conn.execute(
+                            """
+                            INSERT OR IGNORE INTO skipped_posts (
+                                post_key, post_id, source_name, reason, created_at
+                            )
+                            SELECT (source_name || ':' || post_id), post_id, source_name, reason, created_at
+                            FROM _skipped_posts_legacy
+                            """
+                        )
+                    else:
+                        self.conn.execute(
+                            """
+                            INSERT OR IGNORE INTO skipped_posts (post_key, post_id, source_name, reason)
+                            SELECT (source_name || ':' || post_id), post_id, source_name, reason
+                            FROM _skipped_posts_legacy
+                            """
+                        )
                     self.conn.execute("DROP TABLE _skipped_posts_legacy")
+                    self.conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_skipped_created_at "
+                        "ON skipped_posts(created_at)"
+                    )
+                    self.conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_skipped_reason "
+                        "ON skipped_posts(reason)"
+                    )
                     _logger.info("Migrated skipped_posts to composite key")
             except sqlite3.Error as e:
-                _logger.warning("Migration of skipped_posts failed (non-fatal): %s", e)
+                _logger.error("Migration of skipped_posts failed; aborting startup: %s", e)
+                raise RuntimeError(
+                    "Legacy skipped_posts migration failed; refusing to run with an incompatible database."
+                ) from e
 
     def _init_default_settings(self) -> None:
         with self.conn:
@@ -581,6 +772,28 @@ class DB:
             cur = self.conn.cursor()
             cur.execute("SELECT key, value FROM bot_settings")
             return {row[0]: row[1] for row in cur.fetchall()}
+
+    def set_settings(self, settings: dict[str, Any]) -> None:
+        """Persist a batch of settings atomically or roll the entire batch back."""
+        if not settings:
+            return
+        rows = [(str(key), str(value)) for key, value in settings.items()]
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.executemany(
+                    "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+                    rows,
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                _logger.error("set_settings batch failed (%d keys): %s", len(rows), exc)
+                raise RuntimeError("could not save settings batch; transaction rolled back") from exc
 
     # ---------- credentials (reviews accounts) ----------
     def _credentials_seed(self) -> bytes:
@@ -657,18 +870,288 @@ class DB:
         return cur.fetchone() is not None
 
     def save_post(self, source: str, post_id: int | str) -> None:
-        """Помечает пост как успешно опубликованный."""
+        """Record a successful publication, raising if SQLite cannot persist it."""
+        post_key = make_post_key(source, post_id)
+        values = (post_key, str(post_id), source, _local_now_str())
         with self._lock:
             try:
                 with self.conn:
                     self.conn.execute(
-                        "INSERT INTO published_posts (post_key, post_id, source_name) VALUES (?, ?, ?)",
-                        (make_post_key(source, post_id), str(post_id), source),
+                        "INSERT INTO published_posts (post_key, post_id, source_name, created_at) VALUES (?, ?, ?, ?)",
+                        values,
                     )
-            except sqlite3.IntegrityError:
-                pass  # дубль — норма
-            except sqlite3.Error as e:
-                _logger.error("save_post failed for %s/%s: %s", source, post_id, e)
+            except sqlite3.IntegrityError as exc:
+                # A duplicate key is expected only when this post is already recorded.
+                try:
+                    existing = self.conn.execute(
+                        "SELECT 1 FROM published_posts WHERE post_key = ?",
+                        (post_key,),
+                    ).fetchone()
+                except sqlite3.Error as check_error:
+                    _logger.error(
+                        "save_post failed for %s/%s while checking duplicate: %s",
+                        source,
+                        post_id,
+                        check_error,
+                    )
+                    raise DatabaseWriteError(
+                        f"could not verify publication record for {source}/{post_id}"
+                    ) from check_error
+                if existing:
+                    return
+                _logger.error("save_post integrity failure for %s/%s: %s", source, post_id, exc)
+                raise DatabaseWriteError(
+                    f"could not record publication for {source}/{post_id}"
+                ) from exc
+            except sqlite3.Error as exc:
+                _logger.error("save_post failed for %s/%s: %s", source, post_id, exc)
+                raise DatabaseWriteError(
+                    f"could not record publication for {source}/{post_id}"
+                ) from exc
+
+    def save_posts(self, source: str, post_ids: list[int | str]) -> None:
+        """Atomically persist all IDs in one already-published Telegram message group.
+
+        Telegram sends an album as one logical post. If only some of its source
+        IDs were recorded before a SQLite error, a retry could resend the entire
+        album and duplicate media already delivered. The group records must commit
+        together or not at all.
+        """
+        if not post_ids:
+            return
+
+        now = _local_now_str()
+        rows = [
+            (make_post_key(source, post_id), str(post_id), source, now)
+            for post_id in post_ids
+        ]
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.executemany(
+                    """
+                    INSERT INTO published_posts (post_key, post_id, source_name, created_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(post_key) DO NOTHING
+                    """,
+                    rows,
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                _logger.error(
+                    "save_posts failed for group %s (%s IDs): %s",
+                    source,
+                    len(post_ids),
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not record publication group for {source}"
+                ) from exc
+
+    def save_posts_with_followup(
+        self,
+        source: str,
+        post_ids: list[int | str],
+        target_chat: str,
+        text: str,
+    ) -> None:
+        """Atomically record a delivered media post and its undelivered text tail.
+
+        The media has already been accepted by Telegram before this method is
+        called. Committing the deduplication markers and tail queue together
+        prevents a restart from resending the media while losing its tail.
+        """
+        if not post_ids:
+            return
+        if not target_chat or not text:
+            raise ValueError("target_chat and follow-up text must be non-empty")
+
+        now = _local_now_str()
+        rows = [
+            (make_post_key(source, post_id), str(post_id), source, now)
+            for post_id in post_ids
+        ]
+        followup = (
+            source,
+            str(post_ids[0]),
+            target_chat,
+            text,
+            now,
+            now,
+        )
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.executemany(
+                    """
+                    INSERT INTO published_posts (post_key, post_id, source_name, created_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(post_key) DO NOTHING
+                    """,
+                    rows,
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO pending_text_followups
+                        (source_name, post_id, target_chat, text, created_at, next_attempt_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_name, post_id, target_chat) DO NOTHING
+                    """,
+                    followup,
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                _logger.error(
+                    "save_posts_with_followup failed for %s/%s: %s",
+                    source,
+                    post_ids[0],
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not atomically record publication and text follow-up for {source}/{post_ids[0]}"
+                ) from exc
+
+    def get_due_pending_text_followups(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return follow-up messages whose persistent retry deadline has passed."""
+        bounded_limit = max(1, min(int(limit), 100))
+        now = _local_now_str()
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT id, source_name, post_id, target_chat, text, attempts
+                FROM pending_text_followups
+                WHERE next_attempt_at <= ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (now, bounded_limit),
+            ).fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "source_name": str(row[1]),
+                "post_id": str(row[2]),
+                "target_chat": str(row[3]),
+                "text": str(row[4]),
+                "attempts": int(row[5]),
+            }
+            for row in rows
+        ]
+
+    def mark_pending_text_followup_sent(self, followup_id: int) -> None:
+        """Remove a follow-up from the durable queue after Telegram accepts it."""
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.execute(
+                    "DELETE FROM pending_text_followups WHERE id = ?",
+                    (int(followup_id),),
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                raise DatabaseWriteError(
+                    f"could not acknowledge text follow-up {followup_id}"
+                ) from exc
+
+    def record_pending_text_followup_failure(
+        self,
+        followup_id: int,
+        error: str,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        """Keep failed text tails queued with exponential backoff."""
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                row = self.conn.execute(
+                    "SELECT attempts FROM pending_text_followups WHERE id = ?",
+                    (int(followup_id),),
+                ).fetchone()
+                if row is None:
+                    self.conn.commit()
+                    return
+                attempts = int(row[0]) + 1
+                if retry_after_seconds is not None:
+                    delay = max(1, min(int(retry_after_seconds), 86400))
+                else:
+                    delay = min(30 * (2 ** min(attempts - 1, 6)), 1800)
+                self.conn.execute(
+                    """
+                    UPDATE pending_text_followups
+                    SET attempts = ?, last_error = ?, next_attempt_at = ?
+                    WHERE id = ?
+                    """,
+                    (attempts, str(error)[:500], _local_datetime_str(delay), int(followup_id)),
+                )
+                self.conn.commit()
+            except (sqlite3.Error, TypeError, ValueError) as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                raise DatabaseWriteError(
+                    f"could not schedule retry for text follow-up {followup_id}"
+                ) from exc
+
+    def save_skipped_posts(
+        self,
+        source: str,
+        post_ids: list[int | str],
+        reason: str,
+    ) -> None:
+        """Record a whole skipped Telegram group atomically or roll it all back."""
+        if not post_ids:
+            return
+
+        now = _local_now_str()
+        rows = [
+            (make_post_key(source, post_id), str(post_id), source, reason, now)
+            for post_id in post_ids
+        ]
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.executemany(
+                    """
+                    INSERT INTO skipped_posts
+                        (post_key, post_id, source_name, reason, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(post_key) DO NOTHING
+                    """,
+                    rows,
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                _logger.error(
+                    "save_skipped_posts failed for group %s (%s IDs): %s",
+                    source,
+                    len(post_ids),
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not record skipped group for {source}"
+                ) from exc
 
     def save_skipped_post(self, source: str, post_id: int | str, reason: str) -> None:
         """Помечает пост как пропущенный (реклама/пустой)."""
@@ -676,13 +1159,46 @@ class DB:
             try:
                 with self.conn:
                     self.conn.execute(
-                        "INSERT INTO skipped_posts (post_key, post_id, source_name, reason) VALUES (?, ?, ?, ?)",
-                        (make_post_key(source, post_id), str(post_id), source, reason),
+                        "INSERT INTO skipped_posts (post_key, post_id, source_name, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (make_post_key(source, post_id), str(post_id), source, reason, _local_now_str()),
                     )
-            except sqlite3.IntegrityError:
-                pass
-            except sqlite3.Error as e:
-                _logger.error("save_skipped_post failed for %s/%s: %s", source, post_id, e)
+            except sqlite3.IntegrityError as exc:
+                try:
+                    existing = self.conn.execute(
+                        "SELECT 1 FROM skipped_posts WHERE post_key = ?",
+                        (make_post_key(source, post_id),),
+                    ).fetchone()
+                except sqlite3.Error as check_error:
+                    _logger.error(
+                        "save_skipped_post failed for %s/%s while checking duplicate: %s",
+                        source,
+                        post_id,
+                        check_error,
+                    )
+                    raise DatabaseWriteError(
+                        f"could not verify skipped record for {source}/{post_id}"
+                    ) from check_error
+                if existing:
+                    return
+                _logger.error(
+                    "save_skipped_post integrity failure for %s/%s: %s",
+                    source,
+                    post_id,
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not record skipped post for {source}/{post_id}"
+                ) from exc
+            except sqlite3.Error as exc:
+                _logger.error(
+                    "save_skipped_post failed for %s/%s: %s",
+                    source,
+                    post_id,
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not record skipped post for {source}/{post_id}"
+                ) from exc
 
     # ---------- logs ----------
     def add_log(self, log_type: str, message: str) -> None:
@@ -706,6 +1222,9 @@ class DB:
         """Возвращает локальное datetime для сравнения с created_at/timestamp."""
         if not modifier:
             return _local_now_str()
+        normalized = str(modifier).strip().lower()
+        if normalized in {"start of day", "start of month", "start of year"}:
+            return _anchor_sqlite_modifier(normalized)
         return _local_datetime_str(_parse_sqlite_modifier(str(modifier)))
 
     # ---------- агрегаты для модульных дашбордов ----------
@@ -781,6 +1300,18 @@ class DB:
                 (since_iso, int(limit)),
             )
             return [(row[0], int(row[1])) for row in cur.fetchall()]
+
+    def count_active_published_sources_since(self, since_iso: str) -> int:
+        """Counts distinct non-empty sources with a published post since a timestamp."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT COUNT(DISTINCT source_name) FROM published_posts "
+                "WHERE created_at >= ? AND source_name IS NOT NULL AND source_name <> ''",
+                (since_iso,),
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
 
     def top_skipped_reasons(self, since_iso: str) -> dict[str, int]:
         """Распределение причин пропуска за период: {reason: count}."""
