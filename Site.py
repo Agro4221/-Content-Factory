@@ -172,6 +172,7 @@ def _normalize_validated_setting(key: str, value) -> str:
                 msg="topic_channels должен быть JSON-объектом, а не массивом или скаляром.",
             )
         normalized_topics: dict[str, str] = {}
+        seen_topic_keys: set[str] = set()
         for topic, target in topics.items():
             if not isinstance(topic, str) or not isinstance(target, str):
                 raise SettingsValidationError(
@@ -184,6 +185,16 @@ def _normalize_validated_setting(key: str, value) -> str:
             except ValueError as exc:
                 raise SettingsValidationError(field=key, msg=str(exc)) from exc
             if topic and target:
+                canonical_topic = topic.lower()
+                if canonical_topic in seen_topic_keys:
+                    raise SettingsValidationError(
+                        field=key,
+                        msg=(
+                            "Категории не должны повторяться с разным регистром: "
+                            f"{topic!r} конфликтует с существующей категорией."
+                        ),
+                    )
+                seen_topic_keys.add(canonical_topic)
                 normalized_topics[topic] = target
         return json.dumps(normalized_topics, ensure_ascii=False)
 
