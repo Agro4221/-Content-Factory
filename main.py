@@ -1130,7 +1130,24 @@ def _load_source_cursors() -> dict[str, int]:
             raise SourceCursorStateError(
                 f"Некорректная запись курсора для источника {source!r}"
             )
-        normalized[source] = value
+
+        source_key = source.strip()
+        # Earlier versions stored the exact user-entered link as the cursor
+        # key (for example, https://t.me/Channel/123). Runtime config now uses
+        # canonical @usernames/peer IDs; keep the old cursor so upgrading does
+        # not accidentally trigger the "first scan: latest ten posts" baseline.
+        try:
+            source_key = normalize_target_chat(source_key) or source_key
+        except ValueError:
+            # A stale cursor for a removed/malformed source should not block
+            # unrelated channels. It simply will not match a valid configured source.
+            pass
+
+        previous = normalized.get(source_key)
+        # If legacy aliases collide, rewind to the earliest known cursor. Already
+        # published IDs are deduplicated in SQLite; choosing the later cursor could
+        # skip posts that were pending when the aliases diverged.
+        normalized[source_key] = value if previous is None else min(previous, value)
     return normalized
 
 
