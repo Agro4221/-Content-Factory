@@ -391,6 +391,18 @@ async def check_proxy(cfg: dict, timeout: float = 20.0) -> dict[str, Any]:
             "proxy_type": "",
         }
 
+    try:
+        cfg = normalize_mtproto_proxy_link(cfg)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "reachable": False,
+            "state": "error",
+            "message": str(exc),
+            "proxy_type": "MTProto" if resolve_proxy_type(cfg) == "mtproto" else "",
+        }
+
+    host = (cfg.get("proxy_host") or "").strip()
     if not host:
         return {
             "ok": False,
