@@ -44,9 +44,14 @@ def _truthy(value: object) -> bool:
 
 
 def resolve_proxy_type(cfg: dict) -> str:
-    if (cfg.get("mtproto_key") or "").strip():
+    # An explicit type chosen in the UI wins over a stale hidden MTProto key.
+    # Older configs with an empty type can still infer MTProto from the key.
+    configured = (cfg.get("proxy_type") or "").strip().lower()
+    if configured in {"http", "socks5", "socks4", "mtproto"}:
+        return configured
+    if not configured and (cfg.get("mtproto_key") or "").strip():
         return "mtproto"
-    return (cfg.get("proxy_type") or "http").strip().lower()
+    return configured or "http"
 
 
 def _friendly_error(exc: Exception) -> str:
