@@ -89,6 +89,25 @@ def test_cannot_enable_proxy_without_valid_port(monkeypatch) -> None:
     assert fake_db.writes == []
 
 
+def test_partial_update_rejects_existing_invalid_port_while_proxy_enabled(monkeypatch) -> None:
+    fake_db = FakeDB({
+        "use_proxy": "1",
+        "proxy_type": "HTTP",
+        "proxy_host": "proxy.example",
+        "proxy_port": "not-a-port",
+        "proxy_user": "",
+    })
+    monkeypatch.setattr(Site, "db", fake_db)
+
+    result = call_settings({"proxy_user": "alice"})
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 422
+    assert fake_db.settings["proxy_port"] == "not-a-port"
+    assert fake_db.settings["proxy_user"] == ""
+    assert fake_db.writes == []
+
+
 def test_disabling_proxy_can_clear_host_and_port(monkeypatch) -> None:
     fake_db = FakeDB({
         "use_proxy": "1",
