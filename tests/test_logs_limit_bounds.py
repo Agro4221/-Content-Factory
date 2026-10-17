@@ -40,3 +40,18 @@ def test_logs_endpoint_clamps_limit(
 
     assert result == []
     assert captured == {"limit": expected_limit, "offset": 0}
+
+def test_logs_endpoint_rejects_extreme_page_offset_without_querying_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_get_logs(*, limit: int, offset: int):
+        raise AssertionError("an excessive log offset must not reach SQLite")
+
+    monkeypatch.setattr(Site.db, "get_logs", unexpected_get_logs)
+
+    result = asyncio.run(
+        Site.api_get_logs(limit=200, page=10**100, module=None)
+    )
+
+    assert result == []
+
