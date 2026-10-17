@@ -703,6 +703,10 @@ async def _process_message_group(
 
     try:
         media_list, temp_paths = await _download_media(messages, final_text)
+    except FloodWaitError:
+        # Let the main loop honor Telegram's required cooldown instead of
+        # retrying this download on every polling cycle.
+        raise
     except Exception as exc:
         db.add_log(
             "WARN-501",
@@ -1188,6 +1192,9 @@ async def _process_one_source(
         db.add_log("ERR-200", f"Нет доступа к каналу {source!r}: {e}")
         print(f"!!! Ошибка доступа к {source}: канал приватный или бот не подписан.")
         return False
+    except FloodWaitError:
+        # Propagate to main(), which sleeps for the server-provided duration.
+        raise
     except Exception as e:
         db.add_log("ERR-200", f"Не удалось прочитать {source}: {e}")
         print(f"!!! Ошибка доступа к {source}: {e}")
