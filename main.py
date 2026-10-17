@@ -749,7 +749,7 @@ def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
         raise AIResponseFormatError("отсутствует обязательный раздел ТЕКСТ:")
     topic = (t_m.group(1).strip().lower() if t_m else "общее").split("\n")[0].strip()
     full = c_m.group(1).strip()
-    clean = re.split(r"ХЭШТЕГИ\\s*:", full, maxsplit=1, flags=re.I)[0].strip()
+    clean = re.split(r"ХЭШТЕГИ\s*:", full, maxsplit=1, flags=re.I)[0].strip()
     if not clean:
         raise AIResponseFormatError("раздел ТЕКСТ: пуст")
     tags = h_m.group(1).strip() if h_m else ""
