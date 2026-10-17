@@ -29,7 +29,7 @@ def test_save_post_treats_an_existing_composite_key_as_duplicate() -> None:
     db.conn = sqlite3.connect(":memory:")
     try:
         db.conn.execute(
-            "CREATE TABLE published_posts (post_key TEXT PRIMARY KEY, post_id TEXT, source_name TEXT)"
+            "CREATE TABLE published_posts (post_key TEXT PRIMARY KEY, post_id TEXT, source_name TEXT, created_at DATETIME)"
         )
         db.save_post("@source", 17)
         db.save_post("@source", 17)
