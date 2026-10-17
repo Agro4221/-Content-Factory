@@ -110,6 +110,18 @@ def _is_downloadable_media(media) -> bool:
     }
 
 
+def _save_skipped_group(source: str, messages: list[Message], reason: str) -> None:
+    """Record all IDs from one logical post together when supported by the DB."""
+    post_ids = [message.id for message in messages]
+    save_group = getattr(db, "save_skipped_posts", None)
+    if callable(save_group):
+        save_group(source, post_ids, reason)
+        return
+    # Compatibility for lightweight adapters and older DB implementations.
+    for post_id in post_ids:
+        db.save_skipped_post(source, post_id, reason)
+
+
 class MediaDownloadError(RuntimeError):
     """A downloadable Telegram attachment was not retrieved successfully."""
 
@@ -624,13 +636,11 @@ async def _process_message_group(
             for m in messages
         )
         reason = "unsupported_media" if has_unsupported_media else "empty"
-        for m in messages:
-            db.save_skipped_post(source, m.id, reason)
+        _save_skipped_group(source, messages, reason)
         return
 
     if raw_text and cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
-        for m in messages:
-            db.save_skipped_post(source, m.id, "ads_word")
+        _save_skipped_group(source, messages, "ads_word")
         return
 
     if not bot_running.is_set():
