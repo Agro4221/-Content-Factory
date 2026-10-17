@@ -123,6 +123,11 @@ def normalize_target_chat(value: str | int | None) -> str:
         parts = parts[1:]
     if not parts:
         return raw
+    if parts[0].startswith("+") or parts[0].lower() == "joinchat":
+        raise ValueError(
+            "Ссылка-приглашение Telegram не является получателем публикации. "
+            "Укажите публичный @username или числовой ID канала."
+        )
 
     # Private-channel post links use t.me/c/<channel_id>/<message_id>.
     if len(parts) >= 2 and parts[0].lower() == "c" and re.fullmatch(r"[0-9]+", parts[1]):
