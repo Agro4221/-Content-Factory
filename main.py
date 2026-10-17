@@ -367,7 +367,7 @@ async def _process_message_group(
                     await bot.send_video(
                         chat_id=target_chat,
                         video=single.media,
-                        caption=single.caption or final_text,
+                        caption=single.caption or final_text or None,
                     )
             else:
                 await bot.send_media_group(chat_id=target_chat, media=media_list)
