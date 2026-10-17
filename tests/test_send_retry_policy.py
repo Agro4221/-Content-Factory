@@ -107,3 +107,73 @@ def test_permanent_forbidden_send_failure_stays_skipped(monkeypatch) -> None:
     assert skipped == [("@source", 43, "send_failed")]
     assert published == []
     assert not any(entry[0] == "WARN-406" for entry in logs)
+
+def test_caption_tail_failure_does_not_retry_already_sent_media(monkeypatch) -> None:
+    """A failed second message must not cause the successfully sent media to be duplicated."""
+    logs: list[tuple[str, str]] = []
+    published: list[tuple[str, int]] = []
+    skipped: list[tuple[str, int, str]] = []
+    photos: list[dict] = []
+    messages_sent: list[dict] = []
+    long_text = "x" * 1100
+
+    class FakeInputMediaPhoto:
+        def __init__(self, *, media, caption=None) -> None:
+            self.media = media
+            self.caption = caption
+
+    class FakeDB:
+        def add_log(self, log_type: str, message: str) -> None:
+            logs.append((log_type, message))
+
+        def save_post(self, source: str, post_id: int) -> None:
+            published.append((source, post_id))
+
+        def save_skipped_post(self, source: str, post_id: int, reason: str) -> None:
+            skipped.append((source, post_id, reason))
+
+    class Running:
+        @staticmethod
+        def is_set() -> bool:
+            return True
+
+    class FakeBot:
+        async def send_photo(self, **kwargs) -> None:
+            photos.append(kwargs)
+
+        async def send_message(self, **kwargs) -> None:
+            messages_sent.append(kwargs)
+            raise RuntimeError("temporary failure sending caption remainder")
+
+    async def successful_rewrite(*_args, **_kwargs) -> tuple[str, str]:
+        return "news", long_text
+
+    async def downloaded_media(*_args, **_kwargs):
+        return [FakeInputMediaPhoto(media="photo-file", caption="x" * 1020)], []
+
+    monkeypatch.setattr(main, "db", FakeDB())
+    monkeypatch.setattr(main, "bot_running", Running())
+    monkeypatch.setattr(main, "InputMediaPhoto", FakeInputMediaPhoto)
+    monkeypatch.setattr(main, "_ai_rewrite", successful_rewrite)
+    monkeypatch.setattr(main, "_download_media", downloaded_media)
+    monkeypatch.setattr(main, "SLEEP_BETWEEN_POSTS_S", 0)
+
+    cfg = {
+        "ads_words": [],
+        "watermark": "",
+        "topic_channels": {"news": "@target"},
+    }
+    source_message = SimpleNamespace(id=72, message="source text", media=object())
+
+    asyncio.run(
+        main._process_message_group(
+            None, "@source", [source_message], cfg, FakeBot(), None
+        )
+    )
+
+    assert len(photos) == 1
+    assert len(messages_sent) == 1
+    assert published == [("@source", 72)]
+    assert skipped == []
+    assert any(entry[0] == "WARN-407" for entry in logs)
+
