@@ -134,3 +134,28 @@ def test_load_config_reads_one_consistent_settings_snapshot(monkeypatch) -> None
     assert cfg["topic_channels"] == {"news": "@target"}
     assert cfg["sources"] == ["@source"]
 
+def test_source_links_are_normalized_and_duplicate_sources_removed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main,
+        "db",
+        FakeDB(
+            sources="https://t.me/news_channel/123\\n@news_channel\\n-100123456789",
+            ai_mode="LOCAL",
+        ),
+    )
+
+    cfg = main._load_config()
+
+    assert cfg["sources"] == ["@news_channel", "-100123456789"]
+
+
+def test_source_invite_link_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main,
+        "db",
+        FakeDB(sources="https://t.me/+privateinvite", ai_mode="LOCAL"),
+    )
+
+    with pytest.raises(ValueError, match="источник Telegram"):
+        main._load_config()
+
