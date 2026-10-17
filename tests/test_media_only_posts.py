@@ -193,3 +193,42 @@ def test_truly_empty_message_is_still_skipped(monkeypatch) -> None:
     assert fake_db.skipped == [("@source", 43, "empty")]
     assert fake_db.published == []
     assert bot.photos == []
+
+def test_unsupported_media_without_text_is_skipped_instead_of_sending_empty_text(monkeypatch) -> None:
+    class MessageMediaPoll:
+        pass
+
+    fake_db = FakeDB()
+    bot = FakeBot()
+
+    async def unexpected_download(messages, caption):
+        raise AssertionError("unsupported media must not be passed to the downloader")
+
+    async def unexpected_ai(*_args, **_kwargs):
+        raise AssertionError("a media-only poll must not call AI")
+
+    monkeypatch.setattr(main, "db", fake_db)
+    monkeypatch.setattr(main, "_download_media", unexpected_download)
+    monkeypatch.setattr(main, "_ai_rewrite", unexpected_ai)
+    cfg = {
+        "ads_words": [],
+        "watermark": "",
+        "topic_channels": {"общее": "@destination"},
+    }
+    main.bot_running.clear()
+    main.bot_running.set()
+    try:
+        asyncio.run(
+            main._process_message_group(
+                None, "@source", [FakeMessage(45, MessageMediaPoll())], cfg, bot, None
+            )
+        )
+    finally:
+        main.bot_running.clear()
+
+    assert fake_db.skipped == [("@source", 45, "unsupported_media")]
+    assert fake_db.published == []
+    assert bot.messages == []
+    assert bot.photos == []
+    assert bot.videos == []
+
