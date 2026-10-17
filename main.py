@@ -797,6 +797,20 @@ async def _wait_for_settings() -> None:
     await asyncio.sleep(SLEEP_NO_CONFIG_S)
 
 
+async def _connect_authorized_client(client: TelegramClient) -> bool:
+    """Connect without invoking Telethon's interactive phone/code login flow."""
+    await client.connect()
+    if await client.is_user_authorized():
+        return True
+    db.add_log(
+        "ERR-203",
+        "Telegram-сессия не авторизована. Создайте/переавторизуйте session-файл "
+        "интерактивно, затем снова запустите парсер.",
+    )
+    print("!!! [ERR-203] Telegram-сессия не авторизована; интерактивный вход не запускался.")
+    return False
+
+
 async def _wait_for_db() -> None:
     print("!!! [БАЗА ДАННЫХ] Ошибка загрузки настроек. Повтор через 10 сек.")
     await asyncio.sleep(SLEEP_DB_ERROR_S)
@@ -1022,11 +1036,13 @@ async def main() -> None:
         try:
             session_file = SESSION_PATH + ".session"
             if not os.path.exists(session_file):
-                db.add_log("ERR-203", "Сессия Telegram не найдена. Запустите парсер в интерактивном режиме один раз для создания сессии, либо положите готовый .session в BASE_DIR.")
+                db.add_log("ERR-203", "Сессия Telegram не найдена. Создайте её интерактивно один раз или положите готовый .session в каталог приложения.")
                 print("!!! [ERR-203] Сессия Telegram не найдена — запуск в headless-режиме невозможен.")
-                await asyncio.sleep(SLEEP_API_ERROR_S)
+                bot_running.clear()
                 continue
-            await client.start()
+            if not await _connect_authorized_client(client):
+                bot_running.clear()
+                continue
             print("\n=== КРУГ ОБХОДА ИСТОЧНИКОВ НАЧАТ ===")
             for source in cfg["sources"]:
                 if await _process_one_source(client, source, cfg, bot, ai_session):
