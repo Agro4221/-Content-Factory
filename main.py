@@ -24,6 +24,7 @@ from typing import Optional
 import aiohttp
 import uvicorn
 from aiogram import Bot
+from aiogram.utils.token import TokenValidationError, validate_token
 from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
@@ -190,6 +191,13 @@ def _safe_int(value, default: int) -> int:
     except (TypeError, ValueError):
         return default
 
+
+def _is_valid_bot_token_format(token: str) -> bool:
+    try:
+        validate_token(token)
+    except TokenValidationError:
+        return False
+    return True
 
 # ==========================================
 # ЗАГРУЗКА КОНФИГА
@@ -845,6 +853,12 @@ async def main() -> None:
 
         if not cfg["bot_token"] or not cfg["api_id"] or not cfg["api_hash"]:
             await _wait_for_settings()
+            continue
+
+        if not _is_valid_bot_token_format(cfg["bot_token"]):
+            db.add_log("ERR-202", "Неверный формат токена бота. Проверьте значение bot_token в настройках.")
+            print("!!! [ERR-202] Неверный формат токена бота — проверьте настройки и повторите.")
+            await asyncio.sleep(SLEEP_NO_CONFIG_S)
             continue
 
         telethon_proxy, mtproto_kwargs, bot_session = _setup_proxy(cfg)
