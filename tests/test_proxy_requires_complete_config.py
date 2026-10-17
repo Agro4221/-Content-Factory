@@ -178,3 +178,39 @@ def test_enabled_mtproto_rejects_malformed_secret_before_settings_are_written(mo
     assert fake_db.writes == []
     assert b'"field":"mtproto_key"' in result.body
 
+def test_mtproto_link_is_normalized_and_saved_as_host_port_secret(monkeypatch) -> None:
+    fake_db = FakeDB()
+    monkeypatch.setattr(Site, "db", fake_db)
+    secret = "00112233445566778899aabbccddeeff"
+
+    result = call_settings({
+        "use_proxy": "1",
+        "proxy_type": "mtproto",
+        "proxy_host": f"https://t.me/proxy?server=proxy.example&port=443&secret={secret}",
+        "proxy_port": "",
+        "mtproto_key": "",
+    })
+
+    assert result == {"status": "success", "saved": 5}
+    assert fake_db.settings["proxy_host"] == "proxy.example"
+    assert fake_db.settings["proxy_port"] == "443"
+    assert fake_db.settings["mtproto_key"] == secret
+    assert fake_db.settings["proxy_type"] == "mtproto"
+
+
+def test_malformed_mtproto_link_is_rejected_without_saving(monkeypatch) -> None:
+    fake_db = FakeDB()
+    monkeypatch.setattr(Site, "db", fake_db)
+
+    result = call_settings({
+        "use_proxy": "1",
+        "proxy_type": "mtproto",
+        "proxy_host": "https://t.me/proxy?server=proxy.example&port=bad&secret=00112233445566778899aabbccddeeff",
+        "proxy_port": "",
+        "mtproto_key": "",
+    })
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 422
+    assert fake_db.writes == []
+
