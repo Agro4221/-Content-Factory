@@ -164,3 +164,38 @@ def test_long_html_caption_prefix_and_remainder_have_no_content_gap() -> None:
 
     assert visible_prefix + remainder == body
     assert len(prefix + "…") <= 1024
+
+
+
+def test_long_nested_html_caption_preserves_all_visible_content() -> None:
+    from html.parser import HTMLParser
+
+    class VisibleText(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.parts: list[str] = []
+
+        def handle_data(self, data: str) -> None:
+            self.parts.append(data)
+
+        def visible(self, fragment: str) -> str:
+            self.feed(fragment)
+            self.close()
+            return "".join(self.parts)
+
+    source = main._sanitize_telegram_html(
+        "<blockquote><b>"
+        + ("Первое &amp; второе <i>третье и четвёртое</i> " * 120)
+        + "</b></blockquote>"
+    )
+    prefix = main._media_caption_prefix(source)
+    remainder = main._media_caption_remainder(source)
+
+    expected = VisibleText().visible(source)
+    actual = VisibleText().visible(prefix) + VisibleText().visible(remainder)
+
+    # The split may discard boundary whitespace, but it must never drop words
+    # or entity-decoded text when HTML tags are balanced on both fragments.
+    assert " ".join(actual.split()) == " ".join(expected.split())
+    assert len(prefix + "…") <= 1024
+    assert main._sanitize_telegram_html(prefix) == prefix
