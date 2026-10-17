@@ -215,6 +215,22 @@ def _safe_int(value, default: int) -> int:
         return default
 
 
+def _source_entity(source: str) -> str | int:
+    """Pass numeric Telegram peer IDs to Telethon as integers, not phone-like strings."""
+    normalized = str(source).strip()
+    if re.fullmatch(r"-?[0-9]+", normalized):
+        return int(normalized)
+    return normalized
+
+
+def _target_chat_id(value: str | int) -> str | int:
+    """Bot API accepts numeric chat IDs as integers and public usernames as strings."""
+    normalized = str(value).strip()
+    if re.fullmatch(r"-?[0-9]+", normalized):
+        return int(normalized)
+    return normalized
+
+
 def _is_valid_bot_token_format(token: str) -> bool:
     try:
         validate_token(token)
@@ -461,6 +477,8 @@ async def _process_message_group(
         or cfg["topic_channels"].get(topic)
         or cfg["topic_channels"].get("общее")
     )
+    if target_chat:
+        target_chat = _target_chat_id(target_chat)
     if not target_chat:
         reason = f"no_target:{topic}"
         for m in messages:
@@ -904,11 +922,11 @@ async def _process_one_source(
         if cursor is None:
             # Keep the established first-scan behaviour: seed from the latest ten
             # posts rather than publishing an entire historical channel.
-            async for message in client.iter_messages(source, limit=10):
+            async for message in client.iter_messages(_source_entity(source), limit=10):
                 source_messages.append(message)
         else:
             # Subsequent scans catch every newer message, not just the newest ten.
-            async for message in client.iter_messages(source, min_id=cursor, reverse=True):
+            async for message in client.iter_messages(_source_entity(source), min_id=cursor, reverse=True):
                 source_messages.append(message)
     except (AuthKeyUnregisteredError, SessionPasswordNeededError) as e:
         db.add_log("ERR-203", f"Сессия Telegram невалидна ({type(e).__name__}): {e}")
