@@ -387,6 +387,7 @@ class DB:
             isolation_level=None,  # autocommit; транзакции — через `with`
         )
         self._configure_pragmas()
+        self._ensure_created_at_columns()
         self._run_migrations()
         self._migrate_legacy_post_keys()  # для очень старых БД до версионирования
 
@@ -397,6 +398,46 @@ class DB:
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.execute("PRAGMA busy_timeout=5000")
             self.conn.execute("PRAGMA foreign_keys=ON")
+
+    def _ensure_created_at_columns(self) -> None:
+        """Safely add timestamp columns before migrations touch populated legacy tables.
+
+        SQLite can reject ALTER TABLE ... DEFAULT CURRENT_TIMESTAMP when the
+        table already contains rows. Add the column without a default first;
+        timestamp backfill and indexes are safe to rerun.
+        """
+        table_indexes = {
+            "published_posts": (
+                "CREATE INDEX IF NOT EXISTS idx_published_created_at "
+                "ON published_posts(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
+                "ON published_posts(source_name, created_at)",
+            ),
+            "skipped_posts": (
+                "CREATE INDEX IF NOT EXISTS idx_skipped_created_at "
+                "ON skipped_posts(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_skipped_reason "
+                "ON skipped_posts(reason)",
+            ),
+        }
+        for table, indexes in table_indexes.items():
+            columns = [
+                row[1]
+                for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            ]
+            if not columns:
+                continue
+            with self.conn:
+                if "created_at" not in columns:
+                    self.conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN created_at DATETIME"
+                    )
+                self.conn.execute(
+                    f"UPDATE {table} SET created_at = CURRENT_TIMESTAMP "
+                    "WHERE created_at IS NULL"
+                )
+                for statement in indexes:
+                    self.conn.execute(statement)
 
     def _get_schema_version(self) -> int:
         """Читает PRAGMA user_version. 0 для свежей БД."""
@@ -504,18 +545,38 @@ class DB:
                     CREATE TABLE published_posts (
                         post_key TEXT PRIMARY KEY,
                         post_id TEXT,
-                        source_name TEXT
+                        source_name TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
                     """
                 )
-                self.conn.execute(
-                    """
-                    INSERT OR IGNORE INTO published_posts (post_key, post_id, source_name)
-                    SELECT (source_name || ':' || post_id), post_id, source_name
-                    FROM _published_posts_legacy
-                    """
-                )
+                if "created_at" in cols:
+                    self.conn.execute(
+                        """
+                        INSERT OR IGNORE INTO published_posts (
+                            post_key, post_id, source_name, created_at
+                        )
+                        SELECT (source_name || ':' || post_id), post_id, source_name, created_at
+                        FROM _published_posts_legacy
+                        """
+                    )
+                else:
+                    self.conn.execute(
+                        """
+                        INSERT OR IGNORE INTO published_posts (post_key, post_id, source_name)
+                        SELECT (source_name || ':' || post_id), post_id, source_name
+                        FROM _published_posts_legacy
+                        """
+                    )
                 self.conn.execute("DROP TABLE _published_posts_legacy")
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_published_created_at "
+                    "ON published_posts(created_at)"
+                )
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
+                    "ON published_posts(source_name, created_at)"
+                )
                 _logger.info("Migrated published_posts to composite key")
         except sqlite3.Error as e:
             _logger.warning("Migration of published_posts failed (non-fatal): %s", e)
@@ -536,18 +597,38 @@ class DB:
                             post_key TEXT PRIMARY KEY,
                             post_id TEXT,
                             source_name TEXT,
-                            reason TEXT
+                            reason TEXT,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                         )
                         """
                     )
-                    self.conn.execute(
-                        """
-                        INSERT OR IGNORE INTO skipped_posts (post_key, post_id, source_name, reason)
-                        SELECT (source_name || ':' || post_id), post_id, source_name, reason
-                        FROM _skipped_posts_legacy
-                        """
-                    )
+                    if "created_at" in cols:
+                        self.conn.execute(
+                            """
+                            INSERT OR IGNORE INTO skipped_posts (
+                                post_key, post_id, source_name, reason, created_at
+                            )
+                            SELECT (source_name || ':' || post_id), post_id, source_name, reason, created_at
+                            FROM _skipped_posts_legacy
+                            """
+                        )
+                    else:
+                        self.conn.execute(
+                            """
+                            INSERT OR IGNORE INTO skipped_posts (post_key, post_id, source_name, reason)
+                            SELECT (source_name || ':' || post_id), post_id, source_name, reason
+                            FROM _skipped_posts_legacy
+                            """
+                        )
                     self.conn.execute("DROP TABLE _skipped_posts_legacy")
+                    self.conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_skipped_created_at "
+                        "ON skipped_posts(created_at)"
+                    )
+                    self.conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_skipped_reason "
+                        "ON skipped_posts(reason)"
+                    )
                     _logger.info("Migrated skipped_posts to composite key")
             except sqlite3.Error as e:
                 _logger.warning("Migration of skipped_posts failed (non-fatal): %s", e)
@@ -662,8 +743,8 @@ class DB:
             try:
                 with self.conn:
                     self.conn.execute(
-                        "INSERT INTO published_posts (post_key, post_id, source_name) VALUES (?, ?, ?)",
-                        (make_post_key(source, post_id), str(post_id), source),
+                        "INSERT INTO published_posts (post_key, post_id, source_name, created_at) VALUES (?, ?, ?, ?)",
+                        (make_post_key(source, post_id), str(post_id), source, _local_now_str()),
                     )
             except sqlite3.IntegrityError:
                 pass  # дубль — норма
@@ -676,8 +757,8 @@ class DB:
             try:
                 with self.conn:
                     self.conn.execute(
-                        "INSERT INTO skipped_posts (post_key, post_id, source_name, reason) VALUES (?, ?, ?, ?)",
-                        (make_post_key(source, post_id), str(post_id), source, reason),
+                        "INSERT INTO skipped_posts (post_key, post_id, source_name, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (make_post_key(source, post_id), str(post_id), source, reason, _local_now_str()),
                     )
             except sqlite3.IntegrityError:
                 pass
