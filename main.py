@@ -285,12 +285,13 @@ async def _process_message_group(
     captions = [m.message for m in messages if m.message]
     raw_text = "\n".join(captions).strip()
 
-    if not raw_text:
+    has_media = any(not _is_media_skippable(m.media) for m in messages)
+    if not raw_text and not has_media:
         for m in messages:
             db.save_skipped_post(source, m.id, "empty")
         return
 
-    if cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
+    if raw_text and cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
         for m in messages:
             db.save_skipped_post(source, m.id, "ads_word")
         return
@@ -299,22 +300,26 @@ async def _process_message_group(
         return
 
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
-    try:
-        topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
-    except AIResponseFormatError as exc:
-        db.add_log(
-            "WARN-404",
-            f"Пост {source}/{messages[0].id} не опубликован: AI вернул неверный формат ({exc}). Оставлен для повтора.",
-        )
-        print(f"!!! AI вернул неверный формат для {source}/{messages[0].id}; пост оставлен для повтора.")
-        return
-    except AIRewriteError as exc:
-        db.add_log(
-            "WARN-405",
-            f"Пост {source}/{messages[0].id} не опубликован: AI недоступен ({exc}). Повторим на следующем проходе.",
-        )
-        print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
-        return
+    if raw_text:
+        try:
+            topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+        except AIResponseFormatError as exc:
+            db.add_log(
+                "WARN-404",
+                f"Пост {source}/{messages[0].id} не опубликован: AI вернул неверный формат ({exc}). Оставлен для повтора.",
+            )
+            print(f"!!! AI вернул неверный формат для {source}/{messages[0].id}; пост оставлен для повтора.")
+            return
+        except AIRewriteError as exc:
+            db.add_log(
+                "WARN-405",
+                f"Пост {source}/{messages[0].id} не опубликован: AI недоступен ({exc}). Повторим на следующем проходе.",
+            )
+            print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
+            return
+    else:
+        # Media-only source posts have no text to rewrite.
+        topic, final_text = "общее", ""
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
@@ -356,7 +361,7 @@ async def _process_message_group(
                     await bot.send_photo(
                         chat_id=target_chat,
                         photo=single.media,
-                        caption=single.caption or final_text,
+                        caption=single.caption or final_text or None,
                     )
                 else:
                     await bot.send_video(
