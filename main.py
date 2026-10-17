@@ -179,23 +179,39 @@ def _last_safe_text_space(value: str) -> int:
 
 
 def _media_caption_cut_index(text: str, max_chars: int = 1020) -> int:
-    """Choose a truncation boundary outside HTML tags and character entities."""
+    """Choose one safe split point for both the caption and its continuation."""
     if len(text) <= max_chars:
         return len(text)
-    prefix = text[:max_chars]
-    if _last_safe_text_space(prefix) > 0:
-        prefix = prefix[:_last_safe_text_space(prefix)]
-    cut = len(prefix)
-    # Never leave a partial tag or HTML entity at the end of the caption.
-    last_open = prefix.rfind("<")
-    last_close = prefix.rfind(">")
-    if last_open > last_close:
-        cut = min(cut, last_open)
-    entity_start = prefix.rfind("&")
-    entity_end = prefix.rfind(";")
-    if entity_start > entity_end:
-        cut = min(cut, entity_start)
-    return max(0, cut)
+
+    def raw_safe_cut(limit: int) -> int:
+        prefix = text[:limit]
+        space = _last_safe_text_space(prefix)
+        if space > 0:
+            prefix = prefix[:space]
+        cut = len(prefix)
+
+        # Never leave a partial tag or HTML entity at the end of the caption.
+        last_open = prefix.rfind("<")
+        last_close = prefix.rfind(">")
+        if last_open > last_close:
+            cut = min(cut, last_open)
+        entity_start = prefix.rfind("&")
+        entity_end = prefix.rfind(";")
+        if entity_start > entity_end:
+            cut = min(cut, entity_start)
+        return max(0, cut)
+
+    cut = raw_safe_cut(max_chars)
+    while cut > 0:
+        # Balancing open HTML tags and escaping plain text can make the rendered
+        # prefix longer than its source slice. Account for that here so callers
+        # calculating the continuation receive this exact same split point.
+        rendered_prefix = _sanitize_telegram_html(text[:cut].rstrip())
+        if len(rendered_prefix) <= max_chars:
+            return cut
+        overflow = len(rendered_prefix) - max_chars
+        cut = raw_safe_cut(max(0, cut - max(1, overflow)))
+    return 0
 
 
 def _media_caption_prefix(text: str, max_chars: int = 1020) -> str:
