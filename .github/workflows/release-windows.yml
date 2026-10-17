@@ -3,6 +3,7 @@ name: Validate and publish Windows release
 on:
   push:
     branches:
+      - main
       - fix/local-bugfix-integration-2026-10-17
     tags:
       - "v*"
