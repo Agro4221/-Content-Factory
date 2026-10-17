@@ -98,6 +98,15 @@ def _classify_extension(path: str):
     return InputMediaPhoto
 
 
+def _media_caption_remainder(text: str) -> str:
+    """Return text omitted from the Telegram media-caption limit."""
+    caption = (text or "").strip()
+    if len(caption) <= 1024:
+        return ""
+    displayed_prefix = caption[:1020].rsplit(" ", 1)[0]
+    return caption[len(displayed_prefix):].lstrip()
+
+
 def _progress_bar(current: int, total: int) -> None:
     if not total or total <= 0:
         print(f"\r--> [DOWNLOAD] {current/1024/1024:.1f}MB", end="", flush=True)
@@ -334,6 +343,8 @@ async def _process_message_group(
             f"Текст ответа ИИ обрезан с {original_len} до {len(final_text)} символов для Telegram.",
         )
 
+    caption_remainder = _media_caption_remainder(final_text)
+
     try:
         if media_list:
             if len(media_list) == 1:
@@ -352,10 +363,13 @@ async def _process_message_group(
                     )
             else:
                 await bot.send_media_group(chat_id=target_chat, media=media_list)
-                if final_text and not any(
-                    getattr(item, "caption", None) for item in media_list
-                ):
-                    await bot.send_message(chat_id=target_chat, text=final_text)
+
+            if caption_remainder:
+                await bot.send_message(chat_id=target_chat, text=caption_remainder)
+            elif final_text and not any(
+                getattr(item, "caption", None) for item in media_list
+            ):
+                await bot.send_message(chat_id=target_chat, text=final_text)
         else:
             await bot.send_message(chat_id=target_chat, text=final_text)
         for m in messages:
