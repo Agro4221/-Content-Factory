@@ -14,7 +14,11 @@ def client(monkeypatch):
     monkeypatch.setattr(Site, "API_HOST", "127.0.0.1")
     monkeypatch.setattr(Site, "ADMIN_USERNAME", "")
     monkeypatch.setattr(Site, "ADMIN_PASSWORD", "")
-    with TestClient(Site.app, raise_server_exceptions=False) as test_client:
+    with TestClient(
+        Site.app,
+        client=("127.0.0.1", 12345),
+        raise_server_exceptions=False,
+    ) as test_client:
         yield test_client
 
 
