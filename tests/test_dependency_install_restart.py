@@ -95,3 +95,30 @@ def test_existing_venv_exec_oserror_falls_back_instead_of_crashing(monkeypatch) 
 
     assert deps.try_reexec_via_venv() is False
 
+def test_old_aiogram_without_default_properties_is_marked_missing(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(deps.importlib.util, "find_spec", lambda _mod: object())
+
+    def fake_import_module(name: str):
+        if name == "aiogram.client.default":
+            return SimpleNamespace()
+        return SimpleNamespace()
+
+    monkeypatch.setattr(deps.importlib, "import_module", fake_import_module)
+
+    assert "aiogram>=3.7.0" in deps.find_missing_packages()
+
+
+def test_dependency_health_check_verifies_required_aiogram_api(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_check_call(command, **_kwargs) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(deps.subprocess, "check_call", fake_check_call)
+
+    assert deps._packages_ok("/python")
+
+    script = commands[0][2]
+    assert "from aiogram.client.default import DefaultBotProperties" in script
