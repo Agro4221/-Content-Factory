@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import re
+from urllib.parse import urlsplit
 
 from env_loader import load_environment
 from paths import BASE_DIR, BUNDLE_DIR, is_frozen
@@ -94,6 +96,44 @@ SLEEP_BOT_STOPPED_S = 2
 
 def make_post_key(source: str, post_id: int | str) -> str:
     return f"{source}:{post_id}"
+
+
+def normalize_target_chat(value: str | int | None) -> str:
+    """Normalize a Telegram channel ID/username/public link for Bot API sends."""
+    raw = "" if value is None else str(value).strip()
+    if not raw or re.fullmatch(r"-?[0-9]+", raw) or raw.startswith("@"):
+        return raw
+
+    candidate = raw
+    if candidate.startswith("t.me/") or candidate.startswith("telegram.me/"):
+        candidate = "https://" + candidate
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return raw
+
+    host = (parsed.hostname or "").lower()
+    if host not in {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}:
+        return raw
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts:
+        return raw
+    if parts[0].lower() == "s":
+        parts = parts[1:]
+    if not parts:
+        return raw
+
+    # Private-channel post links use t.me/c/<channel_id>/<message_id>.
+    if len(parts) >= 2 and parts[0].lower() == "c" and re.fullmatch(r"[0-9]+", parts[1]):
+        return f"-100{parts[1]}"
+
+    username = parts[0]
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username):
+        return f"@{username}"
+    # Invite links (+hash/joinchat/hash) are not valid chat_id values for send methods.
+    # Keep them unchanged so settings validation can identify/reject them explicitly.
+    return raw
 
 
 def runtime_label() -> str:
