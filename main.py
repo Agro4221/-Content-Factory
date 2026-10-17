@@ -247,23 +247,30 @@ def _load_config() -> dict:
     ads_words = [w.strip() for w in ads_raw.split("\n") if w.strip()] if ads_raw else []
 
     try:
-        raw_topics = json.loads(db.get_setting("topic_channels", "{}"))
-    except (TypeError, ValueError):
-        raw_topics = {}
+        raw_topics = json.loads(db.get_setting("topic_channels", "{}") or "{}")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "topic_channels содержит повреждённый JSON; настройки не применены, "
+            "чтобы не отправлять посты в неверный канал."
+        ) from exc
+    if not isinstance(raw_topics, dict):
+        raise ValueError(
+            "topic_channels должен быть JSON-объектом категорий; настройки не применены."
+        )
+
     topic_channels: dict[str, str] = {}
-    if isinstance(raw_topics, dict):
-        for key, value in raw_topics.items():
-            if key is None or value is None:
-                continue
-            norm_key = str(key).strip().lower()
-            try:
-                norm_val = normalize_target_chat(str(value).strip())
-            except ValueError as exc:
-                raise ValueError(
-                    f"Некорректный целевой канал для категории {norm_key!r}: {exc}"
-                ) from exc
-            if norm_key and norm_val:
-                topic_channels[norm_key] = norm_val
+    for key, value in raw_topics.items():
+        if key is None or value is None:
+            continue
+        norm_key = str(key).strip().lower()
+        try:
+            norm_val = normalize_target_chat(str(value).strip())
+        except ValueError as exc:
+            raise ValueError(
+                f"Некорректный целевой канал для категории {norm_key!r}: {exc}"
+            ) from exc
+        if norm_key and norm_val:
+            topic_channels[norm_key] = norm_val
 
     return {
         "api_id": _safe_int(db.get_setting("tg_api_id", "0"), 0),
