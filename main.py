@@ -71,7 +71,7 @@ from config import (
 from database import get_db
 from Site import app
 from state import bot_running
-from proxy_check import build_mtproto_client_kwargs
+from proxy_check import build_mtproto_client_kwargs, format_proxy_host
 
 try:
     from aiohttp_socks import ProxyConnector as SocksConnector
@@ -145,7 +145,8 @@ def _make_socks_session(cfg: dict) -> Optional[AiohttpSession]:
     else:
         auth = ""
 
-    proxy_url = f"{proxy_type}://{auth}{host}:{port}"
+    url_host = format_proxy_host(host)
+    proxy_url = f"{proxy_type}://{auth}{url_host}:{port}"
     try:
         return AiohttpSession(proxy=proxy_url)
     except Exception as e:
@@ -253,12 +254,13 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
         "password": cfg["proxy_pass"] or None,
     }
     if proxy_type == "http":
+        proxy_host = format_proxy_host(cfg["proxy_host"])
         if cfg["proxy_user"] and cfg["proxy_pass"]:
             proxy_user = quote(str(cfg["proxy_user"]), safe="")
             proxy_password = quote(str(cfg["proxy_pass"]), safe="")
-            proxy_url = f"http://{proxy_user}:{proxy_password}@{cfg['proxy_host']}:{port}"
+            proxy_url = f"http://{proxy_user}:{proxy_password}@{proxy_host}:{port}"
         else:
-            proxy_url = f"http://{cfg['proxy_host']}:{port}"
+            proxy_url = f"http://{proxy_host}:{port}"
         bot_session = AiohttpSession(proxy=proxy_url)
     elif proxy_type in ("socks5", "socks4"):
         if not _HAS_SOCKS:
