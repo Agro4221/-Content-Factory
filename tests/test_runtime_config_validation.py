@@ -178,3 +178,20 @@ def test_empty_legacy_poll_delay_uses_default(monkeypatch) -> None:
     monkeypatch.setattr(main, "db", FakeDB(poll_delay=""))
 
     assert main._load_config()["poll_delay"] == main.POLL_DELAY_DEFAULT
+
+def test_ambiguous_legacy_topic_routes_fail_closed(monkeypatch) -> None:
+    import json
+
+    monkeypatch.setattr(
+        main,
+        "db",
+        FakeDB(
+            topic_channels=json.dumps(
+                {"News": "@target_one", "news": "@target_two"},
+                ensure_ascii=False,
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="topic_channels"):
+        main._load_config()
