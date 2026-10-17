@@ -12,6 +12,8 @@ check_and_install_dependencies()
 # ==========================================
 import asyncio
 import json
+import html
+from html.parser import HTMLParser
 import os
 import re
 import shutil
@@ -391,6 +393,101 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
 # ==========================================
 # ОБРАБОТКА ПОСТОВ
 # ==========================================
+class _TelegramHTMLSanitizer(HTMLParser):
+    """Keep only Telegram-supported HTML and always emit balanced, escaped markup."""
+
+    _ALLOWED_TAGS = {
+        "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+        "code", "pre", "a", "blockquote", "tg-spoiler", "tg-emoji",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.stack: list[tuple[str, bool]] = []
+
+    @staticmethod
+    def _safe_href(value: str) -> bool:
+        from urllib.parse import urlsplit
+
+        try:
+            scheme = urlsplit(value).scheme.lower()
+        except ValueError:
+            return False
+        return scheme in {"http", "https", "tg", "mailto"}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag not in self._ALLOWED_TAGS:
+            return
+
+        attributes = dict(attrs)
+        rendered = True
+        attr_text = ""
+        if tag == "a":
+            href = attributes.get("href") or ""
+            if not self._safe_href(href):
+                rendered = False
+            else:
+                attr_text = f' href="{html.escape(href, quote=True)}"'
+        elif tag == "code":
+            language = attributes.get("class") or ""
+            if re.fullmatch(r"language-[A-Za-z0-9_+-]{1,40}", language):
+                attr_text = f' class="{html.escape(language, quote=True)}"'
+        elif tag == "tg-emoji":
+            emoji_id = attributes.get("emoji-id") or ""
+            if re.fullmatch(r"[0-9]+", emoji_id):
+                attr_text = f' emoji-id="{emoji_id}"'
+            else:
+                rendered = False
+        elif tag == "blockquote" and "expandable" in attributes:
+            attr_text = " expandable"
+
+        self.stack.append((tag, rendered))
+        if rendered:
+            self.parts.append(f"<{tag}{attr_text}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        matching_index = next(
+            (index for index in range(len(self.stack) - 1, -1, -1)
+             if self.stack[index][0] == tag),
+            None,
+        )
+        if matching_index is None:
+            return
+        while len(self.stack) > matching_index:
+            open_tag, rendered = self.stack.pop()
+            if rendered:
+                self.parts.append(f"</{open_tag}>")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(html.escape(data, quote=False))
+
+    def handle_comment(self, data: str) -> None:
+        # Telegram HTML does not support comments.
+        return
+
+    def result(self) -> str:
+        while self.stack:
+            tag, rendered = self.stack.pop()
+            if rendered:
+                self.parts.append(f"</{tag}>")
+        return "".join(self.parts)
+
+
+def _sanitize_telegram_html(text: str) -> str:
+    """Preserve supported Telegram formatting while preventing malformed HTML."""
+    parser = _TelegramHTMLSanitizer()
+    try:
+        parser.feed(text or "")
+        parser.close()
+    except Exception:
+        # A malformed HTML fragment must not make the publication loop crash.
+        return html.escape(text or "", quote=False)
+    return parser.result()
+
+
 def _truncate_telegram_text(text: str, max_length: int = 4096) -> str:
     """Keep as much content as possible while respecting Telegram text limits."""
     marker = "\n\n[…обрезано…]"
@@ -470,6 +567,7 @@ async def _process_message_group(
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
+    final_text = _sanitize_telegram_html(final_text)
 
     topic_key = (topic or "").strip().lower()
     target_chat = (
