@@ -9,9 +9,13 @@ import pytest
 import main
 
 
+class MessageMediaPhoto:
+    pass
+
+
 class FakeMediaMessage:
     def __init__(self, path: Path, *, fail: bool = False) -> None:
-        self.media = object()
+        self.media = MessageMediaPhoto()
         self.path = path
         self.fail = fail
 
