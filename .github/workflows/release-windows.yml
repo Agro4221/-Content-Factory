@@ -24,11 +24,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+(\.\d+)?') {
+          if ($env:GITHUB_REF_NAME -match '^v\d+\.\d+\.\d+(\.\d+)?') {
+            if ($Matches[0].Length -ne $env:GITHUB_REF_NAME.Length) {
+              throw "Release tag contains invalid version characters"
+            }
+          } else {
             throw "Release tags must look like v1.2.3 or v1.2.3.4"
-          }
-          if ($Matches[0].Length -ne $env:GITHUB_REF_NAME.Length) {
-            throw "Release tag contains invalid version characters"
           }
 
       - name: Set up Python
