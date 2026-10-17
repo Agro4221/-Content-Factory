@@ -1,0 +1,29 @@
+name: IPv6 proxy URL formatting
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, fix/ipv6-proxy-url-formatting]
+
+permissions:
+  contents: read
+
+jobs:
+  ipv6-proxy-url-formatting:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run IPv6 proxy regression tests
+        run: python -m pytest -q tests/test_ipv6_proxy_urls.py
