@@ -64,3 +64,16 @@ def test_ascii_integer_settings_remain_valid(
     expected: str,
 ) -> None:
     assert Site._normalize_validated_setting(key, value) == expected
+
+@pytest.mark.parametrize("key", ["poll_delay", "proxy_port", "tg_api_id", "local_port"])
+def test_oversized_integer_setting_returns_422_instead_of_500(key: str) -> None:
+    response = asyncio.run(
+        Site.api_post_settings(
+            make_json_request({key: "9" * 5000}),
+            BackgroundTasks(),
+        )
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 422
+    assert json.loads(response.body)["field"] == key
