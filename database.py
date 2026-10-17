@@ -345,6 +345,30 @@ def _migration_v6(db: "DB") -> None:
         raise
 
 
+def _migration_v7(db: "DB") -> None:
+    """v7: durable retry queue for caption text sent after media."""
+    db.conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_text_followups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_name TEXT NOT NULL,
+            post_id TEXT NOT NULL,
+            target_chat TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            next_attempt_at TEXT NOT NULL,
+            UNIQUE(source_name, post_id, target_chat)
+        )
+        """
+    )
+    db.conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pending_followups_due "
+        "ON pending_text_followups(next_attempt_at, id)"
+    )
+
+
 # Регистрируем миграции
 MIGRATIONS.append((1, _migration_v1))
 MIGRATIONS.append((2, _migration_v2))
@@ -352,6 +376,7 @@ MIGRATIONS.append((3, _migration_v3))
 MIGRATIONS.append((4, _migration_v4))
 MIGRATIONS.append((5, _migration_v5))
 MIGRATIONS.append((6, _migration_v6))
+MIGRATIONS.append((7, _migration_v7))
 
 CURRENT_SCHEMA_VERSION: int = max(v for v, _ in MIGRATIONS)
 
@@ -926,6 +951,162 @@ class DB:
                 )
                 raise DatabaseWriteError(
                     f"could not record publication group for {source}"
+                ) from exc
+
+    def save_posts_with_followup(
+        self,
+        source: str,
+        post_ids: list[int | str],
+        target_chat: str,
+        text: str,
+    ) -> None:
+        """Atomically record a delivered media post and its undelivered text tail.
+
+        The media has already been accepted by Telegram before this method is
+        called. Committing the deduplication markers and tail queue together
+        prevents a restart from resending the media while losing its tail.
+        """
+        if not post_ids:
+            return
+        if not target_chat or not text:
+            raise ValueError("target_chat and follow-up text must be non-empty")
+
+        now = _local_now_str()
+        rows = [
+            (make_post_key(source, post_id), str(post_id), source, now)
+            for post_id in post_ids
+        ]
+        followup = (
+            source,
+            str(post_ids[0]),
+            target_chat,
+            text,
+            now,
+            now,
+        )
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.executemany(
+                    """
+                    INSERT INTO published_posts (post_key, post_id, source_name, created_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(post_key) DO NOTHING
+                    """,
+                    rows,
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO pending_text_followups
+                        (source_name, post_id, target_chat, text, created_at, next_attempt_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_name, post_id, target_chat) DO NOTHING
+                    """,
+                    followup,
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                _logger.error(
+                    "save_posts_with_followup failed for %s/%s: %s",
+                    source,
+                    post_ids[0],
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not atomically record publication and text follow-up for {source}/{post_ids[0]}"
+                ) from exc
+
+    def get_due_pending_text_followups(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return follow-up messages whose persistent retry deadline has passed."""
+        bounded_limit = max(1, min(int(limit), 100))
+        now = _local_now_str()
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT id, source_name, post_id, target_chat, text, attempts
+                FROM pending_text_followups
+                WHERE next_attempt_at <= ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (now, bounded_limit),
+            ).fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "source_name": str(row[1]),
+                "post_id": str(row[2]),
+                "target_chat": str(row[3]),
+                "text": str(row[4]),
+                "attempts": int(row[5]),
+            }
+            for row in rows
+        ]
+
+    def mark_pending_text_followup_sent(self, followup_id: int) -> None:
+        """Remove a follow-up from the durable queue after Telegram accepts it."""
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.execute(
+                    "DELETE FROM pending_text_followups WHERE id = ?",
+                    (int(followup_id),),
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                raise DatabaseWriteError(
+                    f"could not acknowledge text follow-up {followup_id}"
+                ) from exc
+
+    def record_pending_text_followup_failure(
+        self,
+        followup_id: int,
+        error: str,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        """Keep failed text tails queued with exponential backoff."""
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                row = self.conn.execute(
+                    "SELECT attempts FROM pending_text_followups WHERE id = ?",
+                    (int(followup_id),),
+                ).fetchone()
+                if row is None:
+                    self.conn.commit()
+                    return
+                attempts = int(row[0]) + 1
+                if retry_after_seconds is not None:
+                    delay = max(1, min(int(retry_after_seconds), 86400))
+                else:
+                    delay = min(30 * (2 ** min(attempts - 1, 6)), 1800)
+                self.conn.execute(
+                    """
+                    UPDATE pending_text_followups
+                    SET attempts = ?, last_error = ?, next_attempt_at = ?
+                    WHERE id = ?
+                    """,
+                    (attempts, str(error)[:500], _local_datetime_str(delay), int(followup_id)),
+                )
+                self.conn.commit()
+            except (sqlite3.Error, TypeError, ValueError) as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                raise DatabaseWriteError(
+                    f"could not schedule retry for text follow-up {followup_id}"
                 ) from exc
 
     def save_skipped_posts(
