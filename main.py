@@ -501,13 +501,22 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
 
 
 def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
+    """Accept only structured responses with non-empty, publishable rewritten text."""
+    if not isinstance(res, str) or not res.strip():
+        raise AIRewriteError("AI вернул пустой ответ")
+
     t_m = re.search(r"ТЕМА:\s*(.*)", res, re.I)
     c_m = re.search(r"ТЕКСТ:\s*(.*)", res, re.S | re.I)
     h_m = re.search(r"ХЭШТЕГИ:\s*(.*)", res, re.I)
+    if not c_m:
+        raise AIRewriteError("отсутствует обязательный раздел ТЕКСТ:")
 
     topic = (t_m.group(1).strip().lower() if t_m else "общее").split("\n")[0].strip()
-    full = c_m.group(1).strip() if c_m else res
-    clean = full.split("ХЭШТЕГИ:")[0].strip()
+    full = c_m.group(1).strip()
+    clean = re.split(r"ХЭШТЕГИ\s*:", full, maxsplit=1, flags=re.I)[0].strip()
+    if not clean:
+        raise AIRewriteError("раздел ТЕКСТ: пуст")
+
     tags = h_m.group(1).strip() if h_m else ""
     return topic, f"{clean}\n\n{tags}"
 
