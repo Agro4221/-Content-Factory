@@ -52,6 +52,21 @@ def format_display_timestamp(ts: str | None) -> str:
         return str(ts)
 
 
+def _anchor_sqlite_modifier(modifier: str) -> str:
+    """Resolves SQLite 'start of day/month/year' modifiers in local time."""
+    now = datetime.now()
+    midnight = {"hour": 0, "minute": 0, "second": 0, "microsecond": 0}
+    if modifier == "start of day":
+        anchored = now.replace(**midnight)
+    elif modifier == "start of month":
+        anchored = now.replace(day=1, **midnight)
+    elif modifier == "start of year":
+        anchored = now.replace(month=1, day=1, **midnight)
+    else:
+        raise ValueError(f"Unsupported SQLite anchor modifier: {modifier!r}")
+    return anchored.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _parse_sqlite_modifier(modifier: str) -> int:
     """Разбирает '+24 hours', '-7 days', '+300 seconds' в смещение в секундах."""
     raw = modifier.strip()
@@ -706,6 +721,9 @@ class DB:
         """Возвращает локальное datetime для сравнения с created_at/timestamp."""
         if not modifier:
             return _local_now_str()
+        normalized = str(modifier).strip().lower()
+        if normalized in {"start of day", "start of month", "start of year"}:
+            return _anchor_sqlite_modifier(normalized)
         return _local_datetime_str(_parse_sqlite_modifier(str(modifier)))
 
     # ---------- агрегаты для модульных дашбордов ----------
