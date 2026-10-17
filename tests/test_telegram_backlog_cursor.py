@@ -246,3 +246,38 @@ def test_cursor_alias_collision_uses_earliest_value_to_avoid_losing_backlog(monk
     monkeypatch.setattr(main, "db", db)
 
     assert main._get_source_cursor(SOURCE) == 100
+
+def test_revoked_session_stops_parser_instead_of_reconnecting_forever(monkeypatch) -> None:
+    class FakeAuthKeyUnregisteredError(Exception):
+        pass
+
+    class ToggleRunningBot:
+        def __init__(self) -> None:
+            self.active = True
+
+        def is_set(self) -> bool:
+            return self.active
+
+        def clear(self) -> None:
+            self.active = False
+
+    class AuthFailClient:
+        def iter_messages(self, _source, **_kwargs):
+            async def generate():
+                raise FakeAuthKeyUnregisteredError("session revoked")
+                yield message(101)
+
+            return generate()
+
+    db = FakeDB(cursor=100)
+    running = ToggleRunningBot()
+    monkeypatch.setattr(main, "db", db)
+    monkeypatch.setattr(main, "bot_running", running)
+    monkeypatch.setattr(main, "AuthKeyUnregisteredError", FakeAuthKeyUnregisteredError)
+
+    result = asyncio.run(main._process_one_source(AuthFailClient(), SOURCE, {}, None, None))
+
+    assert result is False
+    assert running.is_set() is False
+    assert db.logs and db.logs[-1][0] == "ERR-203"
+    assert db.cursor() == 100
