@@ -80,3 +80,18 @@ def test_system_pip_oserror_falls_back_to_venv(monkeypatch) -> None:
         ("execv", "/project/.venv/bin/python", ["/project/.venv/bin/python", "main.py"]),
     ]
 
+def test_existing_venv_exec_oserror_falls_back_instead_of_crashing(monkeypatch) -> None:
+    monkeypatch.setattr(deps, "venv_python_path", lambda: "/project/.venv/bin/python")
+    monkeypatch.setattr(deps.os.path, "isfile", lambda _path: True)
+    monkeypatch.setattr(deps.os.path, "realpath", lambda path: path)
+    monkeypatch.setattr(deps, "_packages_ok", lambda _python: True)
+    monkeypatch.setattr(deps.sys, "executable", "/system/python")
+    monkeypatch.setattr(deps.sys, "argv", ["main.py"])
+
+    def fail_exec(*_args) -> None:
+        raise OSError("venv interpreter could not be started")
+
+    monkeypatch.setattr(deps.os, "execv", fail_exec)
+
+    assert deps.try_reexec_via_venv() is False
+
