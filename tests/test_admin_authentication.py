@@ -41,6 +41,22 @@ def test_external_bind_without_credentials_fails_closed(client: TestClient, monk
     assert "ADMIN_USERNAME" in response.json()["detail"]
 
 
+def test_remote_client_through_loopback_proxy_is_rejected_without_auth(monkeypatch) -> None:
+    monkeypatch.setattr(Site, "API_HOST", "127.0.0.1")
+    monkeypatch.setattr(Site, "ADMIN_USERNAME", "")
+    monkeypatch.setattr(Site, "ADMIN_PASSWORD", "")
+    with TestClient(
+        Site.app,
+        base_url="http://127.0.0.1",
+        client=("203.0.113.10", 12345),
+        raise_server_exceptions=False,
+    ) as client:
+        response = client.get("/api/bot/status")
+
+    assert response.status_code == 503
+    assert "защита не настроена" in response.json()["detail"]
+
+
 def test_partial_admin_credentials_fail_closed(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(Site, "ADMIN_USERNAME", "admin")
 
