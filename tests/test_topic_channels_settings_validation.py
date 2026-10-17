@@ -67,6 +67,7 @@ def test_topic_channels_object_is_trimmed_and_saved_as_valid_json(monkeypatch) -
     ("raw_target", "normalized"),
     [
         ("https://t.me/news_channel", "@news_channel"),
+        ("news_channel", "@news_channel"),
         ("t.me/news_channel/123", "@news_channel"),
         ("https://t.me/s/news_channel/123", "@news_channel"),
         ("https://t.me/c/123456789/12", "-100123456789"),
@@ -116,6 +117,8 @@ def test_telegram_invite_link_is_rejected_as_publication_target(
         "https://t.me/proxy?server=proxy.example&port=443&secret=00112233445566778899aabbccddeeff",
         "ftp://t.me/news_channel",
         "https://t.me/c/not-a-number/123",
+        "https://example.com/channel",
+        "not a valid channel",
     ],
 )
 def test_non_channel_telegram_links_are_rejected_as_targets(
