@@ -24,6 +24,11 @@ from typing import Optional
 import aiohttp
 import uvicorn
 from aiogram import Bot
+from aiogram.exceptions import (
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import FSInputFile, InputMediaDocument, InputMediaPhoto, InputMediaVideo
@@ -400,6 +405,7 @@ async def _process_message_group(
 
     caption_remainder = _media_caption_remainder(final_text)
 
+    retry_delay_s = 0
     try:
         if media_list:
             if len(media_list) == 1:
@@ -436,8 +442,26 @@ async def _process_message_group(
 
     except Exception as send_error:
         _log_send_error(send_error, target_chat)
-        for m in messages:
-            db.save_skipped_post(source, m.id, "send_failed")
+        retryable = isinstance(
+            send_error,
+            (
+                asyncio.TimeoutError,
+                aiohttp.ClientError,
+                TelegramNetworkError,
+                TelegramServerError,
+                TelegramRetryAfter,
+            ),
+        )
+        if retryable:
+            retry_delay_s = max(0, int(getattr(send_error, "retry_after", 0)))
+            db.add_log(
+                "WARN-406",
+                f"Пост {source}/{messages[0].id} не отправлен из-за временной ошибки "
+                f"({type(send_error).__name__}); оставлен для повторной попытки.",
+            )
+        else:
+            for m in messages:
+                db.save_skipped_post(source, m.id, "send_failed")
     else:
         failed_post_id = messages[0].id
         try:
@@ -466,7 +490,7 @@ async def _process_message_group(
                 os.remove(p)
             except OSError:
                 pass
-    await asyncio.sleep(SLEEP_BETWEEN_POSTS_S)
+    await asyncio.sleep(max(SLEEP_BETWEEN_POSTS_S, retry_delay_s))
 
 
 async def _download_media(messages: list[Message], caption: str = "") -> tuple[list, list[str]]:
