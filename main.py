@@ -26,7 +26,7 @@ import uvicorn
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
+from aiogram.types import FSInputFile, InputMediaDocument, InputMediaPhoto, InputMediaVideo
 from telethon import TelegramClient
 from telethon.errors import (
     ApiIdInvalidError,
@@ -95,7 +95,9 @@ def _classify_extension(path: str):
     ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
     if ext in ("mp4", "mov", "gif", "mkv", "webm"):
         return InputMediaVideo
-    return InputMediaPhoto
+    if ext in ("jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"):
+        return InputMediaPhoto
+    return InputMediaDocument
 
 
 def _progress_bar(current: int, total: int) -> None:
@@ -344,10 +346,16 @@ async def _process_message_group(
                         photo=single.media,
                         caption=single.caption or final_text,
                     )
-                else:
+                elif isinstance(single, InputMediaVideo):
                     await bot.send_video(
                         chat_id=target_chat,
                         video=single.media,
+                        caption=single.caption or final_text,
+                    )
+                else:
+                    await bot.send_document(
+                        chat_id=target_chat,
+                        document=single.media,
                         caption=single.caption or final_text,
                     )
             else:
