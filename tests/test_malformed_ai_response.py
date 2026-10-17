@@ -153,3 +153,12 @@ def test_ai_parser_removes_hashtag_heading_case_insensitively(hashtag_label: str
     assert topic == "новости"
     assert text == "Переработанный текст.\n\n#новости"
 
+def test_ai_parser_does_not_add_trailing_blank_lines_without_hashtags() -> None:
+    topic, text = main._parse_ai_response(
+        "ТЕМА: Новости\\nТЕКСТ: Переработанный текст.",
+        "original source text",
+    )
+
+    assert topic == "новости"
+    assert text == "Переработанный текст."
+
