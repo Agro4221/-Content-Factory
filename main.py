@@ -1174,6 +1174,86 @@ async def _wait_for_settings() -> None:
     await asyncio.sleep(SLEEP_NO_CONFIG_S)
 
 
+async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
+    """Retry durable caption tails without re-publishing their already-sent media."""
+    get_due = getattr(db, "get_due_pending_text_followups", None)
+    if not callable(get_due):
+        return
+
+    try:
+        pending = get_due(limit)
+    except Exception as exc:
+        bot_running.clear()
+        try:
+            db.add_log(
+                "ERR-DB-502",
+                f"Не удалось прочитать очередь остатков текста ({type(exc).__name__}: {exc}); парсер остановлен.",
+            )
+        except Exception:
+            pass
+        return
+
+    for item in pending:
+        if not bot_running.is_set():
+            return
+        followup_id = int(item["id"])
+        try:
+            await bot.send_message(
+                chat_id=item["target_chat"],
+                text=item["text"],
+            )
+        except Exception as send_error:
+            retry_after = getattr(send_error, "retry_after", None)
+            try:
+                db.record_pending_text_followup_failure(
+                    followup_id,
+                    f"{type(send_error).__name__}: {send_error}",
+                    retry_after_seconds=retry_after,
+                )
+            except Exception as db_error:
+                bot_running.clear()
+                try:
+                    db.add_log(
+                        "ERR-DB-503",
+                        f"Не удалось запланировать повтор остатка текста #{followup_id} "
+                        f"({db_error}); парсер остановлен.",
+                    )
+                except Exception:
+                    pass
+                return
+
+            db.add_log(
+                "WARN-407",
+                f"Остаток текста для {item['source_name']}/{item['post_id']} "
+                f"не доставлен ({type(send_error).__name__}); повтор отложен.",
+            )
+            if isinstance(send_error, TelegramRetryAfter):
+                # Honor the API's rate limit and avoid processing more queued
+                # messages in the same pass.
+                break
+        else:
+            try:
+                db.mark_pending_text_followup_sent(followup_id)
+            except Exception as db_error:
+                bot_running.clear()
+                try:
+                    db.add_log(
+                        "ERR-DB-504",
+                        f"Telegram принял остаток текста #{followup_id}, но SQLite не смог "
+                        f"удалить его из очереди ({db_error}). Парсер остановлен; "
+                        "перед перезапуском проверьте канал, чтобы избежать возможного дубля.",
+                    )
+                except Exception:
+                    pass
+                return
+
+            db.add_log(
+                "OK-502",
+                f"Остаток текста для {item['source_name']}/{item['post_id']} "
+                "доставлен из очереди повторных отправок.",
+            )
+
+
 def _stdin_is_interactive() -> bool:
     """Return whether a phone/code login prompt can be safely shown to the user."""
     try:
@@ -1460,6 +1540,11 @@ async def main() -> None:
                 session=bot_session,
                 default=DefaultBotProperties(parse_mode="HTML"),
             )
+            # Drain text tails left by a successful media send before scanning
+            # sources. A tail retry must never resend the corresponding media.
+            await _retry_pending_text_followups(bot)
+            if not bot_running.is_set():
+                continue
             if mtproto_kwargs:
                 client = TelegramClient(
                     SESSION_PATH,
