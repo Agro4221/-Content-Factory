@@ -65,10 +65,11 @@ class FakeClient:
         async def generate():
             messages = sorted(self.messages, key=lambda m: m.id)
             if "min_id" in kwargs:
-                messages = [
-                    m for m in messages if m.id > kwargs["min_id"]
-                ]
+                messages = [m for m in messages if m.id > kwargs["min_id"]]
                 # reverse=True requests chronological (oldest-first) order.
+            elif "max_id" in kwargs:
+                messages = [m for m in messages if m.id < kwargs["max_id"]]
+                messages = list(reversed(messages))[:kwargs.get("limit", len(messages))]
             else:
                 messages = list(reversed(messages))[:kwargs.get("limit", len(messages))]
             for message in messages:
@@ -183,4 +184,19 @@ def test_corrupt_cursor_does_not_reset_to_latest_ten_messages(monkeypatch, raw: 
     assert client.calls == []
     assert db.settings[CURSOR_KEY] == raw
     assert db.logs and db.logs[-1][0] == "ERR-207"
+
+def test_first_scan_fetches_the_older_half_of_a_cut_off_album(monkeypatch) -> None:
+    db = FakeDB()
+    album = [message(n, grouped_id="album") for n in range(100, 110)]
+    later = [message(n) for n in range(110, 116)]
+    client, processed = install_fakes(monkeypatch, db, album + later)
+
+    asyncio.run(main._process_one_source(client, SOURCE, {}, None, None))
+
+    assert processed == list(range(100, 116))
+    assert client.calls == [
+        {"limit": 10},
+        {"max_id": 106, "limit": 100},
+    ]
+    assert db.cursor() == 115
 
