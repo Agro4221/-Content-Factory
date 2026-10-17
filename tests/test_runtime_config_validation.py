@@ -195,3 +195,52 @@ def test_ambiguous_legacy_topic_routes_fail_closed(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="topic_channels"):
         main._load_config()
+
+@pytest.mark.parametrize(
+    "host",
+    ["http://localhost", "localhost/path", "bad host", "::not-ipv6", "[127.0.0.1]"],
+)
+def test_invalid_persisted_local_ai_host_is_rejected(monkeypatch, host: str) -> None:
+    monkeypatch.setattr(main, "db", FakeDB(local_host=host))
+
+    with pytest.raises(ValueError, match="local_host"):
+        main._load_config()
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "",
+        "ftp://api.example.com/chat",
+        "http://",
+        "https://api.example.com:99999/chat",
+        "https://api.example.com:not-a-port/chat",
+        "not-a-url",
+    ],
+)
+def test_invalid_persisted_remote_ai_endpoint_is_rejected(
+    monkeypatch, remote_url: str
+) -> None:
+    monkeypatch.setattr(
+        main,
+        "db",
+        FakeDB(ai_mode="REMOTE", remote_url=remote_url),
+    )
+
+    with pytest.raises(ValueError, match="remote_url"):
+        main._load_config()
+
+
+def test_valid_persisted_remote_ai_endpoint_is_accepted(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main,
+        "db",
+        FakeDB(
+            ai_mode="REMOTE",
+            remote_url="https://api.example.com:443/v1/chat/completions",
+        ),
+    )
+
+    assert main._load_config()["remote_url"] == (
+        "https://api.example.com:443/v1/chat/completions"
+    )
