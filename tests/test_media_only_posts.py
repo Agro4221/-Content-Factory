@@ -7,7 +7,11 @@ import main
 
 
 class MessageMediaPhoto:
-    """Mimic Telegram's media class name used by _is_media_skippable."""
+    """Mimic Telegram's photo media class name used by _is_media_skippable."""
+
+
+class MessageMediaVideo:
+    """Mimic Telegram's video media class name used by _is_media_skippable."""
 
 
 class FakeMessage:
