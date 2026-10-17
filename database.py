@@ -601,8 +601,11 @@ class DB:
         """
         try:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(published_posts)").fetchall()]
-        except sqlite3.Error:
-            return
+        except sqlite3.Error as exc:
+            _logger.error("Could not inspect published_posts before legacy migration: %s", exc)
+            raise RuntimeError(
+                "Cannot inspect the legacy published_posts schema; database startup aborted."
+            ) from exc
         if "post_key" not in cols:
             try:
                 with self.conn:
@@ -647,14 +650,20 @@ class DB:
                     )
                     _logger.info("Migrated published_posts to composite key")
             except sqlite3.Error as e:
-                _logger.warning("Migration of published_posts failed (non-fatal): %s", e)
+                _logger.error("Migration of published_posts failed; aborting startup: %s", e)
+                raise RuntimeError(
+                    "Legacy published_posts migration failed; refusing to run with an incompatible database."
+                ) from e
 
         # Та же история для skipped_posts — на случай, если в БД она была создана
         # ещё до моего фикса (там post_id как PK).
         try:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(skipped_posts)").fetchall()]
-        except sqlite3.Error:
-            cols = []
+        except sqlite3.Error as exc:
+            _logger.error("Could not inspect skipped_posts before legacy migration: %s", exc)
+            raise RuntimeError(
+                "Cannot inspect the legacy skipped_posts schema; database startup aborted."
+            ) from exc
         if cols and "post_key" not in cols:
             try:
                 with self.conn:
@@ -699,7 +708,10 @@ class DB:
                     )
                     _logger.info("Migrated skipped_posts to composite key")
             except sqlite3.Error as e:
-                _logger.warning("Migration of skipped_posts failed (non-fatal): %s", e)
+                _logger.error("Migration of skipped_posts failed; aborting startup: %s", e)
+                raise RuntimeError(
+                    "Legacy skipped_posts migration failed; refusing to run with an incompatible database."
+                ) from e
 
     def _init_default_settings(self) -> None:
         with self.conn:
