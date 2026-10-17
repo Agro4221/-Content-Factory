@@ -538,52 +538,51 @@ class DB:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(published_posts)").fetchall()]
         except sqlite3.Error:
             return
-        if "post_key" in cols:
-            return  # уже мигрировано
-        try:
-            with self.conn:
-                # Копируем старые данные с переименованием в новый формат
-                self.conn.execute("ALTER TABLE published_posts RENAME TO _published_posts_legacy")
-                self.conn.execute(
-                    """
-                    CREATE TABLE published_posts (
-                        post_key TEXT PRIMARY KEY,
-                        post_id TEXT,
-                        source_name TEXT,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """
-                )
-                if "created_at" in cols:
+        if "post_key" not in cols:
+            try:
+                with self.conn:
+                    # Копируем старые данные с переименованием в новый формат
+                    self.conn.execute("ALTER TABLE published_posts RENAME TO _published_posts_legacy")
                     self.conn.execute(
                         """
-                        INSERT OR IGNORE INTO published_posts (
-                            post_key, post_id, source_name, created_at
+                        CREATE TABLE published_posts (
+                            post_key TEXT PRIMARY KEY,
+                            post_id TEXT,
+                            source_name TEXT,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                         )
-                        SELECT (source_name || ':' || post_id), post_id, source_name, created_at
-                        FROM _published_posts_legacy
                         """
                     )
-                else:
+                    if "created_at" in cols:
+                        self.conn.execute(
+                            """
+                            INSERT OR IGNORE INTO published_posts (
+                                post_key, post_id, source_name, created_at
+                            )
+                            SELECT (source_name || ':' || post_id), post_id, source_name, created_at
+                            FROM _published_posts_legacy
+                            """
+                        )
+                    else:
+                        self.conn.execute(
+                            """
+                            INSERT OR IGNORE INTO published_posts (post_key, post_id, source_name)
+                            SELECT (source_name || ':' || post_id), post_id, source_name
+                            FROM _published_posts_legacy
+                            """
+                        )
+                    self.conn.execute("DROP TABLE _published_posts_legacy")
                     self.conn.execute(
-                        """
-                        INSERT OR IGNORE INTO published_posts (post_key, post_id, source_name)
-                        SELECT (source_name || ':' || post_id), post_id, source_name
-                        FROM _published_posts_legacy
-                        """
+                        "CREATE INDEX IF NOT EXISTS idx_published_created_at "
+                        "ON published_posts(created_at)"
                     )
-                self.conn.execute("DROP TABLE _published_posts_legacy")
-                self.conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_published_created_at "
-                    "ON published_posts(created_at)"
-                )
-                self.conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
-                    "ON published_posts(source_name, created_at)"
-                )
-                _logger.info("Migrated published_posts to composite key")
-        except sqlite3.Error as e:
-            _logger.warning("Migration of published_posts failed (non-fatal): %s", e)
+                    self.conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
+                        "ON published_posts(source_name, created_at)"
+                    )
+                    _logger.info("Migrated published_posts to composite key")
+            except sqlite3.Error as e:
+                _logger.warning("Migration of published_posts failed (non-fatal): %s", e)
 
         # Та же история для skipped_posts — на случай, если в БД она была создана
         # ещё до моего фикса (там post_id как PK).
