@@ -114,7 +114,8 @@ def test_long_media_caption_is_sent_as_caption_plus_continuation(
     assert len(bot.photo["caption"]) <= 1024
     assert bot.texts == [expected_remainder]
     assert db.published == [("@source", 17)]
-    assert not db.logs
+    assert len(db.logs) == 1
+    assert db.logs[0][0] == "OK-501"
 
 def test_unbroken_long_caption_keeps_prefix_and_sends_only_the_tail() -> None:
     text = "X" * 1500
