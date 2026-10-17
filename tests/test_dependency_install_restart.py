@@ -47,3 +47,36 @@ def test_existing_dependencies_do_not_force_restart(monkeypatch) -> None:
     deps.check_and_install_dependencies()
 
     assert events == ["reload-env"]
+
+def test_system_pip_oserror_falls_back_to_venv(monkeypatch) -> None:
+    events: list[object] = []
+
+    monkeypatch.setattr(deps, "is_frozen", lambda: False)
+    monkeypatch.setattr(deps, "find_missing_packages", lambda: ["fastapi>=0.110"])
+    monkeypatch.setattr(deps, "try_reexec_via_venv", lambda: False)
+    monkeypatch.setattr(deps.sys, "executable", "/system/python")
+    monkeypatch.setattr(deps.sys, "argv", ["main.py"])
+
+    def fake_install(python, packages, *, use_requirements=False):
+        events.append(("install", python, use_requirements))
+        if python == "/system/python":
+            raise OSError("system Python launcher is unavailable")
+
+    monkeypatch.setattr(deps, "_pip_install", fake_install)
+    monkeypatch.setattr(deps, "ensure_venv", lambda: "/project/.venv/bin/python")
+    monkeypatch.setattr(deps, "_packages_ok", lambda _python: True)
+    monkeypatch.setattr(deps, "_reload_env_after_deps", lambda: None)
+    monkeypatch.setattr(
+        deps.os,
+        "execv",
+        lambda executable, args: events.append(("execv", executable, args)),
+    )
+
+    deps.check_and_install_dependencies()
+
+    assert events == [
+        ("install", "/system/python", False),
+        ("install", "/project/.venv/bin/python", True),
+        ("execv", "/project/.venv/bin/python", ["/project/.venv/bin/python", "main.py"]),
+    ]
+
