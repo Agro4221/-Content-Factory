@@ -239,3 +239,64 @@ def test_save_skipped_post_treats_existing_key_as_idempotent() -> None:
     finally:
         db.conn.close()
 
+def test_save_skipped_posts_rolls_back_entire_group_when_one_insert_fails() -> None:
+    db = object.__new__(DB)
+    db._lock = threading.Lock()
+    db.conn = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        db.conn.execute(
+            """
+            CREATE TABLE skipped_posts (
+                post_key TEXT PRIMARY KEY,
+                post_id TEXT,
+                source_name TEXT,
+                reason TEXT CHECK (reason <> 'reject'),
+                created_at DATETIME
+            )
+            """
+        )
+        db.conn.execute(
+            """
+            CREATE TRIGGER reject_skipped_group_item
+            BEFORE INSERT ON skipped_posts
+            WHEN NEW.post_id = '18'
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated disk full');
+            END;
+            """
+        )
+
+        with pytest.raises(DatabaseWriteError, match="could not record skipped group"):
+            db.save_skipped_posts("@source", [17, 18, 19], "empty")
+
+        assert db.conn.execute("SELECT COUNT(*) FROM skipped_posts").fetchone()[0] == 0
+        assert not db.conn.in_transaction
+    finally:
+        db.conn.close()
+
+
+def test_save_skipped_posts_is_idempotent_for_already_recorded_group_items() -> None:
+    db = object.__new__(DB)
+    db._lock = threading.Lock()
+    db.conn = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        db.conn.execute(
+            """
+            CREATE TABLE skipped_posts (
+                post_key TEXT PRIMARY KEY,
+                post_id TEXT,
+                source_name TEXT,
+                reason TEXT,
+                created_at DATETIME
+            )
+            """
+        )
+
+        db.save_skipped_posts("@source", [17, 18], "ads_word")
+        db.save_skipped_posts("@source", [17, 18], "ads_word")
+
+        assert db.conn.execute("SELECT COUNT(*) FROM skipped_posts").fetchone()[0] == 2
+        assert not db.conn.in_transaction
+    finally:
+        db.conn.close()
+
