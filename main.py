@@ -1274,29 +1274,34 @@ async def main() -> None:
             await asyncio.sleep(SLEEP_NO_CONFIG_S)
             continue
 
-        bot = Bot(
-            token=cfg["bot_token"],
-            session=bot_session,
-            default=DefaultBotProperties(parse_mode="HTML"),
-        )
-        if mtproto_kwargs:
-            client = TelegramClient(
-                SESSION_PATH,
-                cfg["api_id"],
-                cfg["api_hash"],
-                **mtproto_kwargs,
-            )
-        else:
-            client = TelegramClient(
-                SESSION_PATH,
-                cfg["api_id"],
-                cfg["api_hash"],
-                proxy=telethon_proxy,
-            )
-        ai_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=AI_REQUEST_TIMEOUT_S))
-
+        bot = None
+        client = None
+        ai_session = None
         need_reconnect = False
         try:
+            bot = Bot(
+                token=cfg["bot_token"],
+                session=bot_session,
+                default=DefaultBotProperties(parse_mode="HTML"),
+            )
+            if mtproto_kwargs:
+                client = TelegramClient(
+                    SESSION_PATH,
+                    cfg["api_id"],
+                    cfg["api_hash"],
+                    **mtproto_kwargs,
+                )
+            else:
+                client = TelegramClient(
+                    SESSION_PATH,
+                    cfg["api_id"],
+                    cfg["api_hash"],
+                    proxy=telethon_proxy,
+                )
+            ai_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=AI_REQUEST_TIMEOUT_S)
+            )
+
             session_file = SESSION_PATH + ".session"
             allow_interactive_login = _stdin_is_interactive()
             if not os.path.exists(session_file) and not allow_interactive_login:
@@ -1346,17 +1351,27 @@ async def main() -> None:
                 print(f"!!! КРИТИЧЕСКИЙ СБОЙ: {loop_error}")
             await asyncio.sleep(SLEEP_API_ERROR_S)
         finally:
-            for closer in (
-                lambda: client.disconnect() if getattr(client, "_connected", False) else None,
-                lambda: bot.session.close() if bot and getattr(bot, "session", None) else None,
-                lambda: ai_session.close() if (ai_session and not ai_session.closed) else None,
-            ):
+            closers = []
+            if client is not None:
+                closers.append(
+                    lambda: client.disconnect()
+                    if getattr(client, "_connected", False)
+                    else None
+                )
+            if bot is not None and getattr(bot, "session", None):
+                closers.append(lambda: bot.session.close())
+            elif bot_session is not None:
+                closers.append(lambda: bot_session.close())
+            if ai_session is not None and not ai_session.closed:
+                closers.append(lambda: ai_session.close())
+
+            for closer in closers:
                 try:
                     res = closer()
                     if asyncio.iscoroutine(res):
                         await res
-                except Exception:
-                    pass
+                except Exception as cleanup_error:
+                    print(f"!!! [CLEANUP] Не удалось закрыть ресурс: {cleanup_error}")
 
         if not bot_running.is_set():
             continue
