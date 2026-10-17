@@ -401,38 +401,38 @@ async def _process_message_group(
     caption_remainder = _media_caption_remainder(final_text)
 
     try:
-            if media_list:
-                if len(media_list) == 1:
-                    single = media_list[0]
-                    if isinstance(single, InputMediaPhoto):
-                        await bot.send_photo(
-                            chat_id=target_chat,
-                            photo=single.media,
-                            caption=single.caption or final_text or None,
-                        )
-                    elif isinstance(single, InputMediaVideo):
-                        await bot.send_video(
-                            chat_id=target_chat,
-                            video=single.media,
-                            caption=single.caption or final_text or None,
-                        )
-                    else:
-                        await bot.send_document(
-                            chat_id=target_chat,
-                            document=single.media,
-                            caption=single.caption or final_text or None,
-                        )
+        if media_list:
+            if len(media_list) == 1:
+                single = media_list[0]
+                if isinstance(single, InputMediaPhoto):
+                    await bot.send_photo(
+                        chat_id=target_chat,
+                        photo=single.media,
+                        caption=single.caption or final_text or None,
+                    )
+                elif isinstance(single, InputMediaVideo):
+                    await bot.send_video(
+                        chat_id=target_chat,
+                        video=single.media,
+                        caption=single.caption or final_text or None,
+                    )
                 else:
-                    await bot.send_media_group(chat_id=target_chat, media=media_list)
-
-                if caption_remainder:
-                    await bot.send_message(chat_id=target_chat, text=caption_remainder)
-                elif final_text and not any(
-                    getattr(item, "caption", None) for item in media_list
-                ):
-                    await bot.send_message(chat_id=target_chat, text=final_text)
+                    await bot.send_document(
+                        chat_id=target_chat,
+                        document=single.media,
+                        caption=single.caption or final_text or None,
+                    )
             else:
+                await bot.send_media_group(chat_id=target_chat, media=media_list)
+
+            if caption_remainder:
+                await bot.send_message(chat_id=target_chat, text=caption_remainder)
+            elif final_text and not any(
+                getattr(item, "caption", None) for item in media_list
+            ):
                 await bot.send_message(chat_id=target_chat, text=final_text)
+        else:
+            await bot.send_message(chat_id=target_chat, text=final_text)
 
     except Exception as send_error:
         _log_send_error(send_error, target_chat)
