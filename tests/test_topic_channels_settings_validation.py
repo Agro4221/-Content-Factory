@@ -150,3 +150,16 @@ def test_www_telegram_channel_link_is_normalized(monkeypatch) -> None:
     assert result == {"status": "success", "saved": 1}
     assert json.loads(db.settings["topic_channels"]) == {"news": "@news_channel"}
 
+def test_case_insensitive_duplicate_topics_are_rejected_without_writes(monkeypatch) -> None:
+    db = FakeDB()
+    monkeypatch.setattr(Site, "db", db)
+
+    result = _save({
+        "topic_channels": json.dumps(
+            {"News": "@target_one", "news": "@target_two"}, ensure_ascii=False
+        )
+    })
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 422
+    assert db.writes == []
