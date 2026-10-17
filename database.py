@@ -782,6 +782,18 @@ class DB:
             )
             return [(row[0], int(row[1])) for row in cur.fetchall()]
 
+    def count_active_published_sources_since(self, since_iso: str) -> int:
+        """Counts distinct non-empty sources with a published post since a timestamp."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT COUNT(DISTINCT source_name) FROM published_posts "
+                "WHERE created_at >= ? AND source_name IS NOT NULL AND source_name <> ''",
+                (since_iso,),
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
     def top_skipped_reasons(self, since_iso: str) -> dict[str, int]:
         """Распределение причин пропуска за период: {reason: count}."""
         with self._lock:
