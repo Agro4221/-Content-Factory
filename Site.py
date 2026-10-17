@@ -583,16 +583,14 @@ def _build_posts_stats() -> dict:
 
 
 @app.get("/api/stats/posts")
-async def api_stats_posts() -> dict:
+async def api_stats_posts() -> dict | JSONResponse:
     try:
         return _build_posts_stats()
     except Exception as e:
-        return {
-            "error": str(e),
-            "bot_running": False,
-            "published_total": 0,
-            "skipped_total": 0,
-        }
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)},
+        )
 
 
 @app.on_event("startup")
