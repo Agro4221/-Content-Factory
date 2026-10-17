@@ -139,7 +139,7 @@ def test_source_links_are_normalized_and_duplicate_sources_removed(monkeypatch) 
         main,
         "db",
         FakeDB(
-            sources="https://t.me/News_Channel/123\\n@NEWS_CHANNEL\\nNews_Channel\\n-100123456789",
+            sources="https://t.me/News_Channel/123\n@NEWS_CHANNEL\nNews_Channel\n-100123456789",
             ai_mode="LOCAL",
         ),
     )
