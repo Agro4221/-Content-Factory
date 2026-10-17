@@ -16,7 +16,7 @@ python -m PyInstaller Parser.spec --clean
 
 Parser.spec содержит настройки анализа, hidden imports и включения admin.html.
 
-В текущем snapshot нет отдельного installer, CI workflow для релизов, подписанного executable или гарантированно воспроизводимого release environment.
+Отдельного installer и подписанного executable пока нет. CI workflow для версионных релизов реализован в `.github/workflows/release-windows.yml`; однако зависимости не закреплены lock-файлом, поэтому release environment пока не гарантирует побитово воспроизводимую сборку.
 
 ## Runtime-файлы
 
