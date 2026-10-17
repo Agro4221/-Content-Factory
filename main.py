@@ -114,13 +114,24 @@ def _classify_extension(path: str):
     return InputMediaDocument
 
 
+def _media_caption_prefix(text: str, max_chars: int = 1020) -> str:
+    """Return a caption prefix that fits alongside an ellipsis in Telegram."""
+    caption = (text or "").strip()
+    if len(caption) <= max_chars:
+        return caption
+    prefix = caption[:max_chars]
+    last_space = prefix.rfind(" ")
+    if last_space > 0:
+        prefix = prefix[:last_space]
+    return prefix.rstrip()
+
+
 def _media_caption_remainder(text: str) -> str:
     """Return text omitted from Telegram's media-caption limit."""
     caption = (text or "").strip()
     if len(caption) <= 1024:
         return ""
-    displayed_prefix = caption[:1020].rsplit(" ", 1)[0]
-    return caption[len(displayed_prefix):].lstrip()
+    return caption[len(_media_caption_prefix(caption)):].lstrip()
 
 
 def _progress_bar(current: int, total: int) -> None:
@@ -552,7 +563,7 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
     temp_paths = []
     cap_text = (caption or "").strip()
     if cap_text and len(cap_text) > 1024:
-        cap_text = cap_text[:1020].rsplit(" ", 1)[0] + "…"
+        cap_text = _media_caption_prefix(cap_text) + "…"
     caption_assigned = False
     try:
         for m in messages:
