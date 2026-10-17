@@ -594,22 +594,28 @@ def _sanitize_telegram_html(text: str) -> str:
 
 
 def _truncate_telegram_text(text: str, max_length: int = 4096) -> str:
-    """Keep as much content as possible while respecting Telegram text limits."""
+    """Truncate text while preserving valid Telegram HTML and the full length cap."""
     marker = "\n\n[…обрезано…]"
     if len(text) <= max_length:
         return text
+    if max_length <= len(marker):
+        return marker[-max_length:] if max_length > 0 else ""
 
-    content_limit = max(max_length - len(marker), 0)
-    prefix = text[:content_limit]
-    last_space = prefix.rfind(" ")
-    if last_space > 0:
-        prefix = prefix[:last_space]
-    else:
-        # A URL/token may not contain spaces; hard-cut it rather than dropping it.
-        prefix = prefix.rstrip()
-    if not prefix and content_limit:
-        prefix = text[:content_limit]
-    return prefix.rstrip() + marker
+    content_limit = max_length - len(marker)
+    cut = _media_caption_cut_index(text, content_limit)
+    while cut > 0:
+        raw_prefix = text[:cut].rstrip()
+        prefix = _sanitize_telegram_html(raw_prefix)
+        if len(prefix) <= content_limit:
+            result = prefix + marker
+            if len(result) <= max_length and _sanitize_telegram_html(result) == result:
+                return result
+        # Closing tags and escaping a partial entity can add characters, so
+        # reduce the source slice and retry rather than slicing the sanitized HTML.
+        next_limit = max(1, cut - max(8, len(prefix) - content_limit + 8))
+        cut = _media_caption_cut_index(text[:cut], next_limit)
+
+    return marker
 
 
 async def _process_message_group(
