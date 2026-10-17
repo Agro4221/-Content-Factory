@@ -101,28 +101,36 @@ def make_post_key(source: str, post_id: int | str) -> str:
 def normalize_target_chat(value: str | int | None) -> str:
     """Normalize a Telegram channel ID/username/public link for Bot API sends."""
     raw = "" if value is None else str(value).strip()
-    if not raw or re.fullmatch(r"-?[0-9]+", raw) or raw.startswith("@"):
+    if not raw or re.fullmatch(r"-?[0-9]+", raw):
         return raw
+    if raw.startswith("@"):
+        if re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", raw):
+            return raw
+        raise ValueError("Укажите корректный Telegram @username или числовой ID канала.")
 
     candidate = raw
-    if candidate.startswith("t.me/") or candidate.startswith("telegram.me/"):
+    if candidate.startswith(("t.me/", "www.t.me/", "telegram.me/", "www.telegram.me/")):
         candidate = "https://" + candidate
     try:
         parsed = urlsplit(candidate)
+        host = (parsed.hostname or "").lower()
     except ValueError:
         return raw
 
-    host = (parsed.hostname or "").lower()
-    if host not in {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}:
+    telegram_hosts = {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}
+    if host not in telegram_hosts:
         return raw
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("Ссылка Telegram должна начинаться с https:// или быть обычным @username.")
 
     parts = [part for part in parsed.path.split("/") if part]
     if not parts:
-        return raw
+        raise ValueError("Ссылка Telegram не содержит имя или ID канала.")
     if parts[0].lower() == "s":
         parts = parts[1:]
     if not parts:
-        return raw
+        raise ValueError("Ссылка Telegram не содержит имя канала.")
+
     if parts[0].startswith("+") or parts[0].lower() == "joinchat":
         raise ValueError(
             "Ссылка-приглашение Telegram не является получателем публикации. "
@@ -130,15 +138,24 @@ def normalize_target_chat(value: str | int | None) -> str:
         )
 
     # Private-channel post links use t.me/c/<channel_id>/<message_id>.
-    if len(parts) >= 2 and parts[0].lower() == "c" and re.fullmatch(r"[0-9]+", parts[1]):
-        return f"-100{parts[1]}"
+    if parts[0].lower() == "c":
+        if len(parts) >= 2 and re.fullmatch(r"[0-9]+", parts[1]):
+            return f"-100{parts[1]}"
+        raise ValueError("В ссылке приватного канала Telegram не найден числовой ID.")
 
     username = parts[0]
+    reserved_routes = {
+        "share", "proxy", "socks", "addstickers", "addemoji", "setlanguage",
+        "login", "confirmphone", "invoice", "boost", "giftcode", "addtheme",
+        "bg", "iv", "joinchat", "c", "s",
+    }
+    if username.lower() in reserved_routes:
+        raise ValueError(
+            "Эта ссылка Telegram не является ссылкой на канал. Укажите @username или ID."
+        )
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username):
         return f"@{username}"
-    # Invite links (+hash/joinchat/hash) are not valid chat_id values for send methods.
-    # Keep them unchanged so settings validation can identify/reject them explicitly.
-    return raw
+    raise ValueError("Ссылка Telegram не содержит корректное имя или ID канала.")
 
 
 def runtime_label() -> str:
