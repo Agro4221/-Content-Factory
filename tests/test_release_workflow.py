@@ -30,3 +30,4 @@ def test_release_validates_tests_before_packaging_or_publishing() -> None:
     assert "dist/Parser.exe.sha256" in workflow
     assert "gh release create" in workflow
     assert "--verify-tag" in workflow
+    assert r"^v\d+\.\d+\.\d+(\.\d+)?$" in workflow
