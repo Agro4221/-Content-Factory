@@ -18,7 +18,10 @@ import main
         ("photo.png", InputMediaPhoto),
         ("photo.webp", InputMediaPhoto),
         ("clip.mp4", InputMediaVideo),
-        ("clip.mov", InputMediaVideo),
+        ("clip.mov", InputMediaDocument),
+        ("clip.gif", InputMediaDocument),
+        ("clip.mkv", InputMediaDocument),
+        ("clip.webm", InputMediaDocument),
         ("report.pdf", InputMediaDocument),
         ("track.mp3", InputMediaDocument),
         ("voice.ogg", InputMediaDocument),
@@ -98,3 +101,36 @@ def test_single_document_is_sent_with_send_document(
     assert sent[0]["document"] is media.media
     assert sent[0]["caption"] == "rewritten caption"
     assert saved == [("@source", 7)]
+
+def test_mixed_document_and_visual_album_is_normalized_to_documents() -> None:
+    media = [
+        InputMediaPhoto(media="photo-file-id", caption="album caption"),
+        InputMediaDocument(media="document-file-id"),
+        InputMediaVideo(media="video-file-id"),
+    ]
+
+    normalized = main._prepare_media_group(media)
+
+    assert len(normalized) == 3
+    assert all(isinstance(item, InputMediaDocument) for item in normalized)
+    assert [item.media for item in normalized] == [
+        "photo-file-id",
+        "document-file-id",
+        "video-file-id",
+    ]
+    assert normalized[0].caption == "album caption"
+    assert normalized[1].caption is None
+    assert normalized[2].caption is None
+
+
+def test_photo_video_only_album_keeps_native_media_types() -> None:
+    media = [
+        InputMediaPhoto(media="photo-file-id"),
+        InputMediaVideo(media="video-file-id"),
+    ]
+
+    normalized = main._prepare_media_group(media)
+
+    assert isinstance(normalized[0], InputMediaPhoto)
+    assert isinstance(normalized[1], InputMediaVideo)
+
