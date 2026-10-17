@@ -122,6 +122,15 @@ def _normalize_validated_setting(key: str, value) -> str:
     """Валидирует оставшиеся глобальные ключи настроек."""
     raw = "" if value is None else str(value).strip()
 
+    if key == "ai_mode":
+        normalized = raw.upper()
+        if normalized in {"LOCAL", "REMOTE"}:
+            return normalized
+        raise SettingsValidationError(
+            field=key,
+            msg=f"{key} должен быть LOCAL или REMOTE",
+        )
+
     if key == "poll_delay":
         return _normalize_int_range(
             "poll_delay",
