@@ -1,6 +1,7 @@
 """Конфигурация приложения Project MaryJane / Parser v1.28.3.6."""
 from __future__ import annotations
 
+import math
 import os
 import re
 from urllib.parse import urlsplit
@@ -8,20 +9,54 @@ from urllib.parse import urlsplit
 from env_loader import load_environment
 from paths import BASE_DIR, BUNDLE_DIR, is_frozen
 
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    """Read a bounded integer from the environment without crashing app import."""
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        if not raw.isascii() or not raw.isdigit():
+            raise ValueError("not an ASCII integer")
+        value = int(raw)
+    except ValueError:
+        print(f"[WARN] Некорректный {name}; используется значение по умолчанию.")
+        return default
+    if not minimum <= value <= maximum:
+        print(f"[WARN] {name} вне допустимого диапазона; используется значение по умолчанию.")
+        return default
+    return value
+
+
+def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    """Read a finite bounded float from the environment without crashing app import."""
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        print(f"[WARN] Некорректный {name}; используется значение по умолчанию.")
+        return default
+    if not math.isfinite(value) or not minimum <= value <= maximum:
+        print(f"[WARN] {name} вне допустимого диапазона; используется значение по умолчанию.")
+        return default
+    return value
+
+
 load_environment()
 
 APP_VERSION = "1.28.3.6"
 
 API_HOST = os.environ.get("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
-API_PORT = int(os.environ.get("API_PORT", "8000"))
-API_LOG_LEVEL = os.environ.get("API_LOG_LEVEL", "warning")
+API_PORT = _env_int("API_PORT", 8000, minimum=1, maximum=65535)
+API_LOG_LEVEL = os.environ.get("API_LOG_LEVEL", "warning").strip().lower()
+if API_LOG_LEVEL not in {"critical", "error", "warning", "info", "debug", "trace"}:
+    print("[WARN] Некорректный API_LOG_LEVEL; используется значение по умолчанию.")
+    API_LOG_LEVEL = "warning"
 # Optional HTTP Basic credentials for the local admin panel. If the API binds
 # to a non-loopback interface, both values are mandatory. Use HTTPS at the
 # reverse proxy when exposing the panel beyond localhost.
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 BROWSER_OPEN_ON_START = os.environ.get("BROWSER_OPEN_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
-BROWSER_OPEN_DELAY_S = float(os.environ.get("BROWSER_OPEN_DELAY_S", "2.5"))
+BROWSER_OPEN_DELAY_S = _env_float("BROWSER_OPEN_DELAY_S", 2.5, minimum=0.0, maximum=60.0)
 
 DB_PATH = os.path.join(BASE_DIR, "bot_storage.db")
 SESSION_PATH = os.path.join(BASE_DIR, "session_name")
@@ -33,8 +68,12 @@ ACTIVATE_HTML_PATH = os.path.join(BUNDLE_DIR, "activate.html")
 LEGACY_LICENSE_SALT = (os.environ.get("LEGACY_LICENSE_SALT", "") or "").strip()
 LICENSE_SIGNING_SECRET = (os.environ.get("LICENSE_SIGNING_SECRET", "") or "").strip()
 LICENSE_SERVER_URL = (os.environ.get("LICENSE_SERVER_URL", "") or "").strip().rstrip("/")
-LICENSE_ONLINE_REFRESH_SECONDS = int(os.environ.get("LICENSE_ONLINE_REFRESH_SECONDS", "3600"))
-LICENSE_SERVER_TIMEOUT_S = float(os.environ.get("LICENSE_SERVER_TIMEOUT_S", "15"))
+LICENSE_ONLINE_REFRESH_SECONDS = _env_int(
+    "LICENSE_ONLINE_REFRESH_SECONDS", 3600, minimum=60, maximum=86400
+)
+LICENSE_SERVER_TIMEOUT_S = _env_float(
+    "LICENSE_SERVER_TIMEOUT_S", 15.0, minimum=0.5, maximum=120.0
+)
 LICENSE_VERIFY_ON_STARTUP = os.environ.get("LICENSE_VERIFY_ON_STARTUP", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 MODULE_POSTS = "posts"
