@@ -153,3 +153,14 @@ def test_truncation_does_not_split_html_tags_or_entities() -> None:
         assert len(prefix) <= 1020
         assert main._sanitize_telegram_html(prefix) == prefix
 
+def test_long_html_caption_prefix_and_remainder_have_no_content_gap() -> None:
+    body = "x" * 1500
+    text = "<blockquote><b>" + body + "</b></blockquote>"
+
+    prefix = main._media_caption_prefix(text)
+    remainder = main._media_caption_remainder(text)
+    visible_prefix = prefix.replace("<blockquote>", "").replace("</blockquote>", "")
+    visible_prefix = visible_prefix.replace("<b>", "").replace("</b>", "")
+
+    assert visible_prefix + remainder == body
+    assert len(prefix + "…") <= 1024
