@@ -1,0 +1,170 @@
+"""Regression tests for per-source Telegram polling cursors."""
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+import pytest
+
+import main
+
+
+CURSOR_KEY = "_internal_source_cursors_json"
+SOURCE = "@sample"
+
+
+class FakeDB:
+    def __init__(self, cursor: int | None = None) -> None:
+        self.settings = (
+            {CURSOR_KEY: json.dumps({SOURCE: cursor})}
+            if cursor is not None
+            else {}
+        )
+        self.published: set[tuple[str, int]] = set()
+        self.skipped: set[tuple[str, int]] = set()
+
+    def get_setting(self, key: str, default=None):
+        return self.settings.get(key, default)
+
+    def set_setting(self, key: str, value) -> None:
+        self.settings[key] = str(value)
+
+    def is_published(self, source: str, message_id: int) -> bool:
+        return (source, message_id) in self.published
+
+    def is_skipped(self, source: str, message_id: int) -> bool:
+        return (source, message_id) in self.skipped
+
+    def save_post(self, source: str, message_id: int) -> None:
+        self.published.add((source, message_id))
+
+    def save_skipped_post(self, source: str, message_id: int, _reason: str) -> None:
+        self.skipped.add((source, message_id))
+
+    def cursor(self) -> int | None:
+        raw = self.settings.get(CURSOR_KEY)
+        if not raw:
+            return None
+        values = json.loads(raw)
+        return values.get(SOURCE)
+
+
+class FakeClient:
+    def __init__(self, messages: list) -> None:
+        self.messages = messages
+        self.calls: list[dict] = []
+
+    def iter_messages(self, _source: str, **kwargs):
+        self.calls.append(kwargs)
+
+        async def generate():
+            messages = sorted(self.messages, key=lambda m: m.id)
+            if "min_id" in kwargs:
+                messages = [
+                    m for m in messages if m.id > kwargs["min_id"]
+                ]
+                # reverse=True requests chronological (oldest-first) order.
+            else:
+                messages = list(reversed(messages))[:kwargs.get("limit", len(messages))]
+            for message in messages:
+                yield message
+
+        return generate()
+
+
+class RunningBot:
+    @staticmethod
+    def is_set() -> bool:
+        return True
+
+
+def message(message_id: int, grouped_id=None):
+    return SimpleNamespace(id=message_id, grouped_id=grouped_id)
+
+
+def install_fakes(monkeypatch, db: FakeDB, messages: list):
+    client = FakeClient(messages)
+    processed: list[int] = []
+
+    async def fake_process(_client, source, group, _cfg, _bot, _session):
+        for item in sorted(group, key=lambda m: m.id):
+            processed.append(item.id)
+            db.save_post(source, item.id)
+
+    monkeypatch.setattr(main, "db", db)
+    monkeypatch.setattr(main, "bot_running", RunningBot())
+    monkeypatch.setattr(main, "_process_message_group", fake_process)
+    return client, processed
+
+
+@pytest.mark.asyncio
+async def test_processes_all_new_messages_after_cursor(monkeypatch) -> None:
+    db = FakeDB(cursor=100)
+    client, processed = install_fakes(
+        monkeypatch, db, [message(n) for n in range(101, 116)]
+    )
+
+    await main._process_one_source(client, SOURCE, {}, None, None)
+
+    assert processed == list(range(101, 116))
+    assert client.calls == [{"min_id": 100, "reverse": True}]
+    assert db.cursor() == 115
+
+
+@pytest.mark.asyncio
+async def test_first_scan_keeps_latest_ten_message_baseline(monkeypatch) -> None:
+    db = FakeDB()
+    client, processed = install_fakes(
+        monkeypatch, db, [message(n) for n in range(1, 16)]
+    )
+
+    await main._process_one_source(client, SOURCE, {}, None, None)
+
+    assert processed == list(range(6, 16))
+    assert client.calls == [{"limit": 10}]
+    assert db.cursor() == 15
+
+
+@pytest.mark.asyncio
+async def test_cursor_stops_before_message_that_needs_retry(monkeypatch) -> None:
+    db = FakeDB(cursor=100)
+    client = FakeClient([message(n) for n in range(101, 106)])
+    processed: list[int] = []
+    fail_id = 103
+
+    async def fake_process(_client, source, group, _cfg, _bot, _session):
+        for item in sorted(group, key=lambda m: m.id):
+            processed.append(item.id)
+            if item.id != fail_id:
+                db.save_post(source, item.id)
+
+    monkeypatch.setattr(main, "db", db)
+    monkeypatch.setattr(main, "bot_running", RunningBot())
+    monkeypatch.setattr(main, "_process_message_group", fake_process)
+
+    await main._process_one_source(client, SOURCE, {}, None, None)
+
+    assert processed == [101, 102, 103]
+    assert db.cursor() == 102
+
+    fail_id = -1
+    processed.clear()
+    await main._process_one_source(client, SOURCE, {}, None, None)
+
+    assert processed == [103, 104, 105]
+    assert db.cursor() == 105
+
+
+@pytest.mark.asyncio
+async def test_cursor_does_not_jump_over_interleaved_album_message(monkeypatch) -> None:
+    db = FakeDB(cursor=100)
+    client, processed = install_fakes(
+        monkeypatch,
+        db,
+        [message(101, grouped_id="album"), message(102), message(103, grouped_id="album")],
+    )
+
+    await main._process_one_source(client, SOURCE, {}, None, None)
+
+    assert processed == [101, 103, 102]
+    assert db.cursor() == 103
