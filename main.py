@@ -116,11 +116,33 @@ class MediaDownloadError(RuntimeError):
 
 def _classify_extension(path: str):
     ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-    if ext in ("mp4", "mov", "gif", "mkv", "webm"):
+    # Telegram's sendVideo API expects MP4. Preserve MOV/GIF/MKV/WebM and
+    # unfamiliar formats as documents rather than risking a rejected publish.
+    if ext == "mp4":
         return InputMediaVideo
     if ext in ("jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"):
         return InputMediaPhoto
     return InputMediaDocument
+
+
+def _prepare_media_group(media_list: list) -> list:
+    """Ensure a Telegram media group uses an API-supported homogeneous family."""
+    if len(media_list) < 2:
+        return media_list
+
+    has_document = any(isinstance(item, InputMediaDocument) for item in media_list)
+    has_visual = any(
+        isinstance(item, (InputMediaPhoto, InputMediaVideo))
+        for item in media_list
+    )
+    if has_document and has_visual:
+        # Bot API does not allow document items mixed with photo/video items in
+        # one album. Sending them all as documents preserves every file safely.
+        return [
+            InputMediaDocument(media=item.media, caption=getattr(item, "caption", None))
+            for item in media_list
+        ]
+    return media_list
 
 
 def _media_caption_prefix(text: str, max_chars: int = 1020) -> str:
@@ -652,7 +674,8 @@ async def _process_message_group(
                         caption=single.caption or final_text or None,
                     )
             else:
-                await bot.send_media_group(chat_id=target_chat, media=media_list)
+                safe_media_group = _prepare_media_group(media_list)
+                await bot.send_media_group(chat_id=target_chat, media=safe_media_group)
 
             # The media call above is the primary publication. A separate text
             # suffix is not atomic with it: if the suffix fails, retrying the
