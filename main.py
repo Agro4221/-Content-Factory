@@ -569,9 +569,16 @@ async def _process_message_group(
             )
         failed_post_id = messages[0].id
         try:
-            for m in messages:
-                failed_post_id = m.id
-                db.save_post(source, m.id)
+            # The real DB commits album/message-group deduplication records
+            # atomically. Keep the fallback for lightweight integrations and
+            # older test doubles that only implement save_post().
+            save_group = getattr(db, "save_posts", None)
+            if callable(save_group):
+                save_group(source, [message.id for message in messages])
+            else:
+                for m in messages:
+                    failed_post_id = m.id
+                    db.save_post(source, m.id)
         except DatabaseWriteError as db_error:
             # Telegram has already accepted the send. Stop before more posts can
             # be emitted with missing deduplication records.
