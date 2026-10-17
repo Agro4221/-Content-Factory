@@ -118,6 +118,7 @@ def test_caption_tail_failure_does_not_retry_already_sent_media(monkeypatch) -> 
     """A failed second message must not cause the successfully sent media to be duplicated."""
     logs: list[tuple[str, str]] = []
     published: list[tuple[str, int]] = []
+    queued_followups: list[tuple[str, list[int], str, str]] = []
     skipped: list[tuple[str, int, str]] = []
     photos: list[dict] = []
     messages_sent: list[dict] = []
@@ -134,6 +135,12 @@ def test_caption_tail_failure_does_not_retry_already_sent_media(monkeypatch) -> 
 
         def save_post(self, source: str, post_id: int) -> None:
             published.append((source, post_id))
+
+        def save_posts_with_followup(
+            self, source: str, post_ids: list[int], target_chat: str, text: str
+        ) -> None:
+            published.extend((source, post_id) for post_id in post_ids)
+            queued_followups.append((source, post_ids, target_chat, text))
 
         def save_skipped_post(self, source: str, post_id: int, reason: str) -> None:
             skipped.append((source, post_id, reason))
@@ -181,5 +188,6 @@ def test_caption_tail_failure_does_not_retry_already_sent_media(monkeypatch) -> 
     assert len(messages_sent) == 1
     assert published == [("@source", 72)]
     assert skipped == []
-    assert any(entry[0] == "WARN-407" for entry in logs)
+    assert queued_followups == [("@source", [72], "@target", "x" * 80)]
+    assert any(entry[0] == "WARN-407" and "сохранён в SQLite" in entry[1] for entry in logs)
 
