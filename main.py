@@ -420,13 +420,26 @@ def _load_config() -> dict:
             raise ValueError(
                 "remote_url содержит некорректный адрес или порт."
             ) from exc
+        remote_scheme = parsed_remote_url.scheme.lower()
+        remote_host = parsed_remote_url.hostname
+        http_loopback = False
+        if remote_host:
+            if remote_host.lower() == "localhost":
+                http_loopback = True
+            else:
+                try:
+                    http_loopback = ipaddress.ip_address(remote_host).is_loopback
+                except ValueError:
+                    http_loopback = False
         if (
-            parsed_remote_url.scheme.lower() not in {"http", "https"}
-            or not parsed_remote_url.hostname
+            remote_scheme not in {"http", "https"}
+            or not remote_host
             or not valid_remote_port
+            or (remote_scheme == "http" and not http_loopback)
         ):
             raise ValueError(
-                "Для ai_mode=REMOTE укажите корректный HTTP- или HTTPS-адрес remote_url."
+                "Для ai_mode=REMOTE нужен HTTPS; HTTP разрешён только для localhost "
+                "или loopback-адреса."
             )
 
     sources_raw = get_setting("sources", "")
