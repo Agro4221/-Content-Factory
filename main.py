@@ -71,6 +71,7 @@ from config import (
     MODULE_POSTS,
     is_truthy,
     make_post_key,
+    normalize_target_chat,
     warn_if_defaults,
 )
 from database import DatabaseWriteError, get_db
@@ -255,7 +256,12 @@ def _load_config() -> dict:
             if key is None or value is None:
                 continue
             norm_key = str(key).strip().lower()
-            norm_val = str(value).strip()
+            try:
+                norm_val = normalize_target_chat(str(value).strip())
+            except ValueError as exc:
+                raise ValueError(
+                    f"Некорректный целевой канал для категории {norm_key!r}: {exc}"
+                ) from exc
             if norm_key and norm_val:
                 topic_channels[norm_key] = norm_val
 
