@@ -458,6 +458,40 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
                 content={"status": "error", "field": e.field, "msg": e.msg},
             )
 
+    if accepted.keys() & PROXY_SETTING_KEYS:
+        effective_settings = db.get_all_settings()
+        effective_settings.update(accepted)
+        proxy_enabled = str(effective_settings.get("use_proxy", "0") or "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if proxy_enabled:
+            if not (effective_settings.get("proxy_host") or "").strip():
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "status": "error",
+                        "field": "proxy_host",
+                        "msg": "Укажите хост прокси, прежде чем включать прокси.",
+                    },
+                )
+            proxy_port = (effective_settings.get("proxy_port") or "").strip()
+            try:
+                _normalize_int_range(
+                    "proxy_port",
+                    proxy_port,
+                    min_value=MIN_PROXY_PORT,
+                    max_value=MAX_PROXY_PORT,
+                )
+            except (SettingsValidationError, ValueError):
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "status": "error",
+                        "field": "proxy_port",
+                        "msg": "Укажите корректный порт прокси в диапазоне 1–65535.",
+                    },
+                )
+
     for key, normalized_value in accepted.items():
         db.set_setting(key, normalized_value)
 
