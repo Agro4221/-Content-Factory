@@ -223,3 +223,26 @@ def test_flood_wait_from_source_read_reaches_main_cooldown_handler(monkeypatch) 
     assert db.logs == []
     assert db.cursor() is None
 
+def test_legacy_link_cursor_matches_normalized_username_source(monkeypatch) -> None:
+    db = FakeDB()
+    db.settings[CURSOR_KEY] = json.dumps({"https://t.me/Sample/123": 100})
+    client, processed = install_fakes(
+        monkeypatch, db, [message(n) for n in range(101, 106)]
+    )
+
+    asyncio.run(main._process_one_source(client, SOURCE, {}, None, None))
+
+    assert client.calls == [{"min_id": 100, "reverse": True}]
+    assert processed == [101, 102, 103, 104, 105]
+    assert db.cursor() == 105
+
+
+def test_cursor_alias_collision_uses_earliest_value_to_avoid_losing_backlog(monkeypatch) -> None:
+    db = FakeDB()
+    db.settings[CURSOR_KEY] = json.dumps({
+        "@sample": 120,
+        "https://t.me/sample/123": 100,
+    })
+    monkeypatch.setattr(main, "db", db)
+
+    assert main._get_source_cursor(SOURCE) == 100
