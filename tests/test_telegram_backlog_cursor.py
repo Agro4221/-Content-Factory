@@ -23,6 +23,10 @@ class FakeDB:
         )
         self.published: set[tuple[str, int]] = set()
         self.skipped: set[tuple[str, int]] = set()
+        self.logs: list[tuple[str, str]] = []
+
+    def add_log(self, log_type: str, message: str) -> None:
+        self.logs.append((log_type, message))
 
     def get_setting(self, key: str, default=None):
         return self.settings.get(key, default)
@@ -165,3 +169,18 @@ def test_cursor_does_not_jump_over_interleaved_album_message(monkeypatch) -> Non
 
     assert processed == [101, 103, 102]
     assert db.cursor() == 103
+
+@pytest.mark.parametrize("raw", ["{broken", "[]", '{"@sample": -1}', '{"@sample": true}'])
+def test_corrupt_cursor_does_not_reset_to_latest_ten_messages(monkeypatch, raw: str) -> None:
+    db = FakeDB()
+    db.settings[CURSOR_KEY] = raw
+    client = FakeClient([message(n) for n in range(1, 16)])
+    monkeypatch.setattr(main, "db", db)
+    monkeypatch.setattr(main, "bot_running", RunningBot())
+
+    asyncio.run(main._process_one_source(client, SOURCE, {}, None, None))
+
+    assert client.calls == []
+    assert db.settings[CURSOR_KEY] == raw
+    assert db.logs and db.logs[-1][0] == "ERR-207"
+
