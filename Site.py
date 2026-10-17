@@ -108,7 +108,7 @@ def _normalize_int_range(
         if allow_empty:
             return ""
         raise SettingsValidationError(field=field, msg=f"{field} не может быть пустым")
-    if not raw.isdigit():
+    if not raw.isascii() or not raw.isdigit():
         raise SettingsValidationError(field=field, msg=f"{field} должен быть целым числом")
     value = int(raw)
     if min_value is not None and value < min_value:
