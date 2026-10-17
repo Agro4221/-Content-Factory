@@ -31,5 +31,7 @@ jobs:
         run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Check admin panel JavaScript syntax
         run: python tools/check_frontend.py
+      - name: Test proxy-check UI failures
+        run: node tests/test_proxy_connection_rejection.cjs
       - name: Run all regression tests
         run: python -m pytest -q tests
