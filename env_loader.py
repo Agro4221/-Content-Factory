@@ -3,6 +3,23 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
+
+
+def _configure_stdio_errors() -> None:
+    """Prevent non-ASCII log messages from crashing Windows builds on legacy code pages."""
+    for stream in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (OSError, ValueError):
+            # Some embedded terminals and test capture streams cannot be reconfigured.
+            pass
+
+
+_configure_stdio_errors()
 
 from paths import BASE_DIR, BUNDLE_DIR
 
