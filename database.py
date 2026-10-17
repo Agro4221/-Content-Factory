@@ -680,6 +680,28 @@ class DB:
             cur.execute("SELECT key, value FROM bot_settings")
             return {row[0]: row[1] for row in cur.fetchall()}
 
+    def set_settings(self, settings: dict[str, Any]) -> None:
+        """Persist a batch of settings atomically or roll the entire batch back."""
+        if not settings:
+            return
+        rows = [(str(key), str(value)) for key, value in settings.items()]
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.executemany(
+                    "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+                    rows,
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                _logger.error("set_settings batch failed (%d keys): %s", len(rows), exc)
+                raise RuntimeError("could not save settings batch; transaction rolled back") from exc
+
     # ---------- credentials (reviews accounts) ----------
     def _credentials_seed(self) -> bytes:
         """Per-install seed for reversible local obfuscation.
