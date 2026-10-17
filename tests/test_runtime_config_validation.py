@@ -47,3 +47,50 @@ def test_empty_local_ai_host_uses_safe_default(monkeypatch) -> None:
     cfg = main._load_config()
 
     assert cfg["local_url"] == "http://127.0.0.1:1234/v1/chat/completions"
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("", "127.0.0.1"),
+        ("localhost", "localhost"),
+        ("127.0.0.1", "127.0.0.1"),
+        ("::1", "::1"),
+        ("[::1]", "[::1]"),
+    ],
+)
+def test_local_host_accepts_hosts_and_ipv6(host: str, expected: str) -> None:
+    assert main.Site._normalize_validated_setting("local_host", host) == expected
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["http://localhost", "localhost/path", "bad host", "::not-ipv6", "[127.0.0.1]"],
+)
+def test_local_host_rejects_url_syntax_and_malformed_addresses(host: str) -> None:
+    import pytest
+    import Site
+
+    with pytest.raises(Site.SettingsValidationError) as exc:
+        Site._normalize_validated_setting("local_host", host)
+    assert exc.value.field == "local_host"
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["ftp://example.com/api", "http://", "https://example.com:99999/chat", "not-a-url"],
+)
+def test_remote_url_rejects_invalid_or_non_http_endpoints(url: str) -> None:
+    import Site
+
+    with pytest.raises(Site.SettingsValidationError) as exc:
+        Site._normalize_validated_setting("remote_url", url)
+    assert exc.value.field == "remote_url"
+
+
+def test_remote_url_accepts_http_and_https_endpoints() -> None:
+    import Site
+
+    assert Site._normalize_validated_setting(
+        "remote_url", "https://api.example.com/v1/chat/completions"
+    ) == "https://api.example.com/v1/chat/completions"
+
