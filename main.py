@@ -300,7 +300,15 @@ async def _process_message_group(
         return
 
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
-    topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    try:
+        topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+    except AIResponseFormatError as exc:
+        db.add_log(
+            "WARN-404",
+            f"Пост {source}/{messages[0].id} не опубликован: AI вернул неверный формат ({exc}). Оставлен для повтора.",
+        )
+        print(f"!!! AI вернул неверный формат для {source}/{messages[0].id}; пост оставлен для повтора.")
+        return
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
@@ -416,6 +424,10 @@ def _log_send_error(send_error: Exception, target_chat) -> None:
         print(f"!!! ОШИБКА ОТПРАВКИ: {send_error}")
 
 
+class AIResponseFormatError(ValueError):
+    """Successful AI response does not contain publishable structured content."""
+
+
 async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[str, str]:
     topics = ", ".join(cfg["topic_channels"].keys()) or "общее"
     db_prompt = db.get_setting("system_prompt", "")
@@ -465,6 +477,10 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
                     return "общее", raw_text[:AI_TRUNCATE_FALLBACK]
                 return _parse_ai_response(res, raw_text)
             _log_ai_http_error(r.status, cfg, await r.text())
+    except AIResponseFormatError as e:
+        db.add_log("ERR-400", f"Ответ AI не соответствует формату публикации: {e}")
+        print(f"!!! [AI ERROR] Некорректный формат ответа: {e}")
+        raise
     except aiohttp.ClientConnectorError as e:
         _log_ai_network_error(e, cfg)
     except Exception as e:
@@ -475,13 +491,19 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
 
 
 def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
+    if not isinstance(res, str) or not res.strip():
+        raise AIResponseFormatError("пустой ответ")
     t_m = re.search(r"ТЕМА:\s*(.*)", res, re.I)
     c_m = re.search(r"ТЕКСТ:\s*(.*)", res, re.S | re.I)
     h_m = re.search(r"ХЭШТЕГИ:\s*(.*)", res, re.I)
 
+    if not c_m:
+        raise AIResponseFormatError("отсутствует обязательный раздел ТЕКСТ:")
     topic = (t_m.group(1).strip().lower() if t_m else "общее").split("\n")[0].strip()
-    full = c_m.group(1).strip() if c_m else res
+    full = c_m.group(1).strip()
     clean = full.split("ХЭШТЕГИ:")[0].strip()
+    if not clean:
+        raise AIResponseFormatError("раздел ТЕКСТ: пуст")
     tags = h_m.group(1).strip() if h_m else ""
     return topic, f"{clean}\n\n{tags}"
 
