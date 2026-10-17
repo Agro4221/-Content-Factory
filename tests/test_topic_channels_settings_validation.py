@@ -62,3 +62,50 @@ def test_topic_channels_object_is_trimmed_and_saved_as_valid_json(monkeypatch) -
 
     assert result == {"status": "success", "saved": 1}
     assert json.loads(db.settings["topic_channels"]) == {"news": "@target"}
+
+@pytest.mark.parametrize(
+    ("raw_target", "normalized"),
+    [
+        ("https://t.me/news_channel", "@news_channel"),
+        ("t.me/news_channel/123", "@news_channel"),
+        ("https://t.me/s/news_channel/123", "@news_channel"),
+        ("https://t.me/c/123456789/12", "-100123456789"),
+        ("-100123456789", "-100123456789"),
+        ("@news_channel", "@news_channel"),
+    ],
+)
+def test_public_channel_links_are_normalized_for_bot_api(
+    monkeypatch,
+    raw_target: str,
+    normalized: str,
+) -> None:
+    db = FakeDB()
+    monkeypatch.setattr(Site, "db", db)
+
+    result = _save({
+        "topic_channels": json.dumps({"news": raw_target}, ensure_ascii=False)
+    })
+
+    assert result == {"status": "success", "saved": 1}
+    assert json.loads(db.settings["topic_channels"]) == {"news": normalized}
+
+
+@pytest.mark.parametrize(
+    "invite_link",
+    ["https://t.me/+invitehash", "t.me/joinchat/invitehash"],
+)
+def test_telegram_invite_link_is_rejected_as_publication_target(
+    monkeypatch,
+    invite_link: str,
+) -> None:
+    db = FakeDB()
+    monkeypatch.setattr(Site, "db", db)
+
+    result = _save({
+        "topic_channels": json.dumps({"news": invite_link}, ensure_ascii=False)
+    })
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 422
+    assert db.writes == []
+
