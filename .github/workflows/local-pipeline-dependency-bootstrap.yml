@@ -2,9 +2,9 @@ name: Local pipeline with dependency bootstrap check
 
 on:
   pull_request:
-    branches: [fix/topic-settings-shape-after-local-pipeline]
-  push:
     branches: [fix/ascii-integer-settings-after-local-pipeline]
+  push:
+    branches: [fix/http-proxy-credentials-after-local-pipeline]
 
 permissions:
   contents: read
@@ -37,6 +37,7 @@ jobs:
           tests/test_active_sources_stats.py
           tests/test_stats_topic_channels_shape.py
           tests/test_ascii_integer_settings.py
+          tests/test_http_proxy_url.py
           tests/test_bot_token_format.py
           tests/test_telegram_backlog_cursor.py
           tests/test_legacy_db_timestamp_migration.py

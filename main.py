@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import webbrowser
+from urllib.parse import quote
 from typing import Optional
 
 import aiohttp
@@ -161,8 +162,6 @@ def _make_socks_session(cfg: dict) -> Optional[AiohttpSession]:
         db.add_log("WARN-300", "SOCKS прокси не применён: host/port невалидны.")
         return None
 
-    from urllib.parse import quote
-
     user = cfg.get("proxy_user") or ""
     password = cfg.get("proxy_pass") or ""
     if user or password:
@@ -286,7 +285,9 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
     }
     if proxy_type == "http":
         if cfg["proxy_user"] and cfg["proxy_pass"]:
-            proxy_url = f"http://{cfg['proxy_user']}:{cfg['proxy_pass']}@{cfg['proxy_host']}:{port}"
+            proxy_user = quote(str(cfg["proxy_user"]), safe="")
+            proxy_password = quote(str(cfg["proxy_pass"]), safe="")
+            proxy_url = f"http://{proxy_user}:{proxy_password}@{cfg['proxy_host']}:{port}"
         else:
             proxy_url = f"http://{cfg['proxy_host']}:{port}"
         bot_session = AiohttpSession(proxy=proxy_url)
