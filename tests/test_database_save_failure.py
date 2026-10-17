@@ -96,3 +96,48 @@ def test_database_failure_after_send_is_not_mislabeled_as_send_failure(monkeypat
     assert len(logs) == 1
     assert logs[0][0] == "ERR-DB-501"
     assert "Перед перезапуском проверьте целевой канал" in logs[0][1]
+
+def test_save_posts_rolls_back_entire_group_when_one_insert_fails() -> None:
+    db = object.__new__(DB)
+    db._lock = threading.Lock()
+    db.conn = sqlite3.connect(":memory:")
+    try:
+        db.conn.execute(
+            "CREATE TABLE published_posts (post_key TEXT PRIMARY KEY, post_id TEXT, source_name TEXT, created_at DATETIME)"
+        )
+        db.conn.execute(
+            """
+            CREATE TRIGGER reject_second_group_item
+            BEFORE INSERT ON published_posts
+            WHEN NEW.post_id = '18'
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated disk full');
+            END;
+            """
+        )
+
+        with pytest.raises(DatabaseWriteError, match="could not record publication group"):
+            db.save_posts("@source", [17, 18, 19])
+
+        assert db.conn.execute("SELECT COUNT(*) FROM published_posts").fetchone()[0] == 0
+        assert not db.conn.in_transaction
+    finally:
+        db.conn.close()
+
+
+def test_save_posts_is_idempotent_for_already_recorded_group_items() -> None:
+    db = object.__new__(DB)
+    db._lock = threading.Lock()
+    db.conn = sqlite3.connect(":memory:")
+    try:
+        db.conn.execute(
+            "CREATE TABLE published_posts (post_key TEXT PRIMARY KEY, post_id TEXT, source_name TEXT, created_at DATETIME)"
+        )
+
+        db.save_posts("@source", [17, 18])
+        db.save_posts("@source", [17, 18])
+
+        assert db.conn.execute("SELECT COUNT(*) FROM published_posts").fetchone()[0] == 2
+    finally:
+        db.conn.close()
+
