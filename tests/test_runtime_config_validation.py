@@ -22,7 +22,7 @@ def test_invalid_persisted_ai_mode_fails_closed(monkeypatch) -> None:
         main._load_config()
 
 
-@pytest.mark.parametrize("port", ["", "abc", "0", "65536", "-1", "１２３４"])
+@pytest.mark.parametrize("port", ["abc", "0", "65536", "-1", "１２３４"])
 def test_invalid_local_ai_port_is_rejected(monkeypatch, port: str) -> None:
     monkeypatch.setattr(main, "db", FakeDB(local_port=port))
 
@@ -94,4 +94,12 @@ def test_remote_url_accepts_http_and_https_endpoints() -> None:
     assert Site._normalize_validated_setting(
         "remote_url", "https://api.example.com/v1/chat/completions"
     ) == "https://api.example.com/v1/chat/completions"
+
+
+def test_empty_local_ai_port_uses_safe_default(monkeypatch) -> None:
+    monkeypatch.setattr(main, "db", FakeDB(local_port="", ai_mode="LOCAL"))
+
+    cfg = main._load_config()
+
+    assert cfg["local_url"] == "http://127.0.0.1:1234/v1/chat/completions"
 
