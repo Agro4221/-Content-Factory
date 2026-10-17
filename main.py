@@ -578,11 +578,15 @@ async def _process_message_group(
     if target_chat:
         target_chat = _target_chat_id(target_chat)
     if not target_chat:
-        reason = f"no_target:{topic}"
-        for m in messages:
-            db.save_skipped_post(source, m.id, reason)
-        db.add_log("WARN-400", f"Нет целевого канала для темы [{topic}] — пост {source}/{messages[0].id} помечен как пропущенный.")
-        print(f"!!! Целевой канал для темы [{topic}] не настроен. Пост пропущен.")
+        # Missing routing is a configuration problem, not a permanent content
+        # skip. Keep the post pending so adding a topic route can recover it.
+        db.add_log(
+            "WARN-400",
+            f"Для темы [{topic}] не настроен целевой канал; пост "
+            f"{source}/{messages[0].id} оставлен для повтора. Настройте категорию "
+            "или добавьте маршрут 'общее'.",
+        )
+        print(f"!!! Целевой канал для темы [{topic}] не настроен; пост оставлен для повтора.")
         return
 
     if not bot_running.is_set():
