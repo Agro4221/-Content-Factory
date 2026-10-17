@@ -103,3 +103,10 @@ def test_empty_local_ai_port_uses_safe_default(monkeypatch) -> None:
 
     assert cfg["local_url"] == "http://127.0.0.1:1234/v1/chat/completions"
 
+@pytest.mark.parametrize("raw", ["not-json", "[]", "null", "42"])
+def test_corrupt_persisted_topic_routing_fails_closed(monkeypatch, raw: str) -> None:
+    monkeypatch.setattr(main, "db", FakeDB(topic_channels=raw, ai_mode="LOCAL"))
+
+    with pytest.raises(ValueError, match="topic_channels"):
+        main._load_config()
+
