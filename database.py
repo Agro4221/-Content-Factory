@@ -901,6 +901,50 @@ class DB:
                     f"could not record publication group for {source}"
                 ) from exc
 
+    def save_skipped_posts(
+        self,
+        source: str,
+        post_ids: list[int | str],
+        reason: str,
+    ) -> None:
+        """Record a whole skipped Telegram group atomically or roll it all back."""
+        if not post_ids:
+            return
+
+        now = _local_now_str()
+        rows = [
+            (make_post_key(source, post_id), str(post_id), source, reason, now)
+            for post_id in post_ids
+        ]
+        with self._lock:
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.executemany(
+                    """
+                    INSERT INTO skipped_posts
+                        (post_key, post_id, source_name, reason, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(post_key) DO NOTHING
+                    """,
+                    rows,
+                )
+                self.conn.commit()
+            except sqlite3.Error as exc:
+                try:
+                    if self.conn.in_transaction:
+                        self.conn.rollback()
+                except sqlite3.Error:
+                    pass
+                _logger.error(
+                    "save_skipped_posts failed for group %s (%s IDs): %s",
+                    source,
+                    len(post_ids),
+                    exc,
+                )
+                raise DatabaseWriteError(
+                    f"could not record skipped group for {source}"
+                ) from exc
+
     def save_skipped_post(self, source: str, post_id: int | str, reason: str) -> None:
         """Помечает пост как пропущенный (реклама/пустой)."""
         with self._lock:
