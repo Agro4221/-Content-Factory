@@ -56,3 +56,19 @@ def test_pyinstaller_datas_map_bundle_assets_to_bundle_root() -> None:
     assert isinstance(datas.elt, ast.Tuple) and len(datas.elt.elts) == 2
     destination = datas.elt.elts[1]
     assert isinstance(destination, ast.Constant) and destination.value == "."
+
+
+
+def test_pyinstaller_hidden_imports_use_real_installed_module_names() -> None:
+    tree = ast.parse(SPEC_PATH.read_text(encoding="utf-8"), filename=str(SPEC_PATH))
+    assignments = _assignments(tree)
+
+    hiddenimports_node = assignments.get("hiddenimports")
+    assert hiddenimports_node is not None
+    hiddenimports = set(ast.literal_eval(hiddenimports_node))
+
+    # python-dotenv is installed as the importable module "dotenv".
+    assert "dotenv" in hiddenimports
+    assert "python_dotenv" not in hiddenimports
+    # This project does not declare or import pydantic-settings.
+    assert "pydantic_settings" not in hiddenimports
