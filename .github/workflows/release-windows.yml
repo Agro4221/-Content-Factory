@@ -64,7 +64,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Content-Factory-Windows-${{ github.ref_name }}
+          name: Content-Factory-Windows-${{ github.run_number }}
           path: |
             dist/Parser.exe
             dist/Parser.exe.sha256
