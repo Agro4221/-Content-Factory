@@ -155,7 +155,8 @@ def _make_socks_session(cfg: dict) -> Optional[AiohttpSession]:
 
 
 def _validate_port(port_str: str) -> Optional[int]:
-    if not port_str or not port_str.isdigit():
+    raw = str(port_str or "")
+    if not raw.isascii() or not raw.isdigit():
         return None
     p = int(port_str)
     return p if MIN_PROXY_PORT <= p <= MAX_PROXY_PORT else None
