@@ -33,5 +33,7 @@ jobs:
         run: python tools/check_frontend.py
       - name: Test proxy-check UI failures
         run: node tests/test_proxy_connection_rejection.cjs
+      - name: Test malformed topic settings in admin UI
+        run: node tests/test_topic_channels_ui.cjs
       - name: Run all regression tests
         run: python -m pytest -q tests
