@@ -1238,12 +1238,20 @@ async def main() -> None:
     print("     БОТ ЗАПУЩЕН       ")
     print("=======================================")
 
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    if os.path.exists(TEMP_DIR):
-        shutil.rmtree(TEMP_DIR, ignore_errors=True)
-    os.makedirs(TEMP_DIR, exist_ok=True)
-
-    warn_if_defaults()
+    try:
+        os.makedirs(TEMP_DIR, exist_ok=True)
+        if os.path.exists(TEMP_DIR):
+            shutil.rmtree(TEMP_DIR, ignore_errors=True)
+        os.makedirs(TEMP_DIR, exist_ok=True)
+        warn_if_defaults()
+    except Exception as startup_error:
+        try:
+            db.add_log("ERR-100", f"Парсер не смог подготовить окружение: {startup_error}")
+        except Exception:
+            pass
+        print(f"!!! [ERR-100] Не удалось подготовить окружение парсера: {startup_error}")
+        bot_running.clear()
+        return
 
     while True:
         if not bot_running.is_set():
