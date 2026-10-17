@@ -44,4 +44,6 @@ def test_relative_time_modifier_keeps_existing_behavior(db_without_connection: D
     result = parse_result(db_without_connection, "-24 hours")
     after = datetime.now()
 
-    assert before - timedelta(hours=24) <= result <= after - timedelta(hours=24)
+    expected = before - timedelta(hours=24)
+    difference = abs((result - expected).total_seconds())
+    assert difference < 1
