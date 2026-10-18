@@ -27,6 +27,10 @@ def test_admin_page_references_external_assets(client: TestClient) -> None:
     assert 'src="/admin.js"' in response.text
     assert "<style" not in response.text.lower()
     assert "<script>" not in response.text.lower()
+    assert 'id="localModelOptions"' in response.text
+    assert 'class="local-ai-advanced"' in response.text
+    assert 'name="local_host" id="local_host"' in response.text
+    assert 'name="local_port" id="local_port"' in response.text
 
 
 @pytest.mark.parametrize(
