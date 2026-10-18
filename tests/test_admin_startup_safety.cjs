@@ -172,12 +172,25 @@ function inertDocument() {
 }
 
 async function testLocalAiModelUi() {
-    // A custom remote host must never trigger a hidden server-side URL fetch.
+    function makeSelect(value = "") {
+        return {
+            value,
+            options: [],
+            dataset: {},
+            disabled: false,
+            attributes: {},
+            appendChild(option) { this.options.push(option); },
+            setAttribute(key, val) { this.attributes[key] = val; },
+        };
+    }
+
+    // A remote host stays out of server-side model discovery and offers manual entry.
     {
         const elements = {
             local_ai_provider: { value: "ollama" },
-            local_model: { value: "qwen2.5:7b" },
-            localModelOptions: { textContent: "", options: [], appendChild(option) { this.options.push(option); } },
+            local_model: makeSelect("qwen2.5:7b"),
+            localModelManualWrap: { hidden: true },
+            local_model_manual: { value: "", required: false },
             local_host: { value: "192.168.1.20" },
             local_port: { value: "11434" },
             refreshLocalModelsBtn: { disabled: false },
@@ -191,19 +204,25 @@ async function testLocalAiModelUi() {
             },
             fetch: async () => { requests += 1; throw new Error("unexpected request"); },
             _localAiModelRequest: 0,
+            Set,
         };
-        evaluateFunctions(["localAiDefaultPort", "setLocalAiModelStatus", "refreshLocalAiModels"], sandbox);
+        evaluateFunctions([
+            "localAiDefaultPort", "setLocalAiModelStatus", "appendLocalModelOption",
+            "populateLocalAiModelSelect", "syncLocalAiManualField", "refreshLocalAiModels",
+        ], sandbox);
         await sandbox.refreshLocalAiModels();
-        assert.equal(requests, 0, "custom remote host must not be queried by the model-discovery API");
+        assert.equal(requests, 0, "remote host must not be queried by the model-discovery API");
         assert.match(elements.localModelStatus.textContent, /удалённого хоста/i);
+        assert.ok(elements.local_model.options.some(option => option.value === "__manual__"));
     }
 
-    // The standard local provider populates model suggestions and preserves the saved model.
+    // The native select receives model options and keeps the saved choice.
     {
         const elements = {
             local_ai_provider: { value: "ollama" },
-            local_model: { value: "qwen2.5:7b" },
-            localModelOptions: { textContent: "", options: [], appendChild(option) { this.options.push(option); } },
+            local_model: makeSelect("qwen2.5:7b"),
+            localModelManualWrap: { hidden: true },
+            local_model_manual: { value: "", required: false },
             local_host: { value: "127.0.0.1" },
             local_port: { value: "11434" },
             refreshLocalModelsBtn: { disabled: false },
@@ -223,17 +242,71 @@ async function testLocalAiModelUi() {
                 };
             },
             _localAiModelRequest: 0,
+            Set,
         };
-        evaluateFunctions(["localAiDefaultPort", "setLocalAiModelStatus", "refreshLocalAiModels"], sandbox);
+        evaluateFunctions([
+            "localAiDefaultPort", "setLocalAiModelStatus", "appendLocalModelOption",
+            "populateLocalAiModelSelect", "syncLocalAiManualField", "refreshLocalAiModels",
+        ], sandbox);
         await sandbox.refreshLocalAiModels();
-        assert.equal(requestUrl, "/api/ai/models?provider=ollama");
-        assert.deepEqual(elements.localModelOptions.options.map(option => option.value), ["qwen2.5:7b", "llama3.2:3b"]);
+        assert.equal(requestUrl, "/api/ai/models?provider=ollama&port=11434");
+        assert.deepEqual(
+            elements.local_model.options.map(option => option.value),
+            ["", "qwen2.5:7b", "llama3.2:3b", "__manual__"]
+        );
         assert.equal(elements.local_model.value, "qwen2.5:7b");
         assert.equal(elements.localModelStatus.dataset.state, "success");
         assert.equal(elements.refreshLocalModelsBtn.disabled, false);
     }
 
-    // Switching providers changes a standard default port but preserves a custom endpoint.
+    // Non-standard loopback ports are sent to the backend, instead of silently disabling discovery.
+    {
+        const elements = {
+            local_ai_provider: { value: "ollama" },
+            local_model: makeSelect("qwen2.5:7b"),
+            localModelManualWrap: { hidden: true },
+            local_model_manual: { value: "", required: false },
+            local_host: { value: "127.0.0.1" },
+            local_port: { value: "11435" },
+            refreshLocalModelsBtn: { disabled: false },
+            localModelStatus: { textContent: "", dataset: {} },
+        };
+        let requestUrl = "";
+        const sandbox = {
+            document: {
+                getElementById(id) { return elements[id] || null; },
+                createElement() { return { value: "", textContent: "" }; },
+            },
+            fetch: async url => {
+                requestUrl = url;
+                return { ok: true, json: async () => ({ models: ["qwen2.5:7b"] }) };
+            },
+            _localAiModelRequest: 0,
+            Set,
+        };
+        evaluateFunctions([
+            "localAiDefaultPort", "setLocalAiModelStatus", "appendLocalModelOption",
+            "populateLocalAiModelSelect", "syncLocalAiManualField", "refreshLocalAiModels",
+        ], sandbox);
+        await sandbox.refreshLocalAiModels();
+        assert.equal(requestUrl, "/api/ai/models?provider=ollama&port=11435");
+        assert.equal(elements.localModelStatus.dataset.state, "success");
+    }
+
+    // Selecting manual entry maps the typed name to the setting value.
+    {
+        const elements = {
+            local_model: makeSelect("__manual__"),
+            local_model_manual: { value: "my-custom-model", required: true },
+        };
+        const sandbox = { document: { getElementById(id) { return elements[id] || null; } } };
+        evaluateFunctions(["getLocalAiSelectedModelValue"], sandbox);
+        assert.equal(sandbox.getLocalAiSelectedModelValue(), "my-custom-model");
+        elements.local_model.value = "qwen2.5:7b";
+        assert.equal(sandbox.getLocalAiSelectedModelValue(), "qwen2.5:7b");
+    }
+
+    // Switching providers changes standard defaults but leaves a custom port untouched.
     {
         const host = { value: "127.0.0.1" };
         const port = { value: "1234" };
@@ -251,7 +324,6 @@ async function testLocalAiModelUi() {
         assert.equal(port.value, "5050");
     }
 }
-
 testLocalAiModelUi()
     .then(() => console.log("Admin startup/navigation and local AI UI regressions passed (8 groups)."))
     .catch(error => {
