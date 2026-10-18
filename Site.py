@@ -10,6 +10,7 @@ import hmac
 import re
 import time
 import asyncio
+import aiohttp
 import json
 import ipaddress
 from datetime import datetime
@@ -792,6 +793,74 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
     if rejected:
         return {"status": "partial", "saved": saved, "rejected_keys": rejected}
     return {"status": "success", "saved": saved}
+
+
+@app.get("/api/ai/models")
+async def api_ai_models(provider: str = Query(default="ollama")) -> dict:
+    """List models already installed in a local Ollama or LM Studio instance.
+
+    Provider URLs are fixed to loopback defaults; the client cannot turn this
+    endpoint into a generic server-side URL fetch.
+    """
+    provider_name = (provider or "").strip().lower()
+    endpoints = {
+        "ollama": ("http://127.0.0.1:11434/api/tags", "models", "name"),
+        "lmstudio": ("http://127.0.0.1:1234/v1/models", "data", "id"),
+    }
+    if provider_name not in endpoints:
+        raise HTTPException(status_code=400, detail="Выберите Ollama или LM Studio.")
+
+    url, collection_key, name_key = endpoints[provider_name]
+    timeout = aiohttp.ClientTimeout(total=4.0)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status < 200 or response.status >= 300:
+                    return JSONResponse(
+                        status_code=503,
+                        content={
+                            "provider": provider_name,
+                            "models": [],
+                            "detail": (
+                                "Локальный провайдер не ответил. Запустите "
+                                + ("Ollama." if provider_name == "ollama" else "LM Studio и включите Local Server.")
+                            ),
+                        },
+                    )
+                payload = await response.json(content_type=None)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=503,
+            content={"provider": provider_name, "models": [], "detail": "Истекло время ожидания локального AI."},
+        )
+    except (aiohttp.ClientError, ValueError, OSError) as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "provider": provider_name,
+                "models": [],
+                "detail": (
+                    "Не удалось подключиться к "
+                    + ("Ollama." if provider_name == "ollama" else "LM Studio.")
+                ),
+            },
+        )
+
+    raw_models = payload.get(collection_key, []) if isinstance(payload, dict) else []
+    if not isinstance(raw_models, list):
+        raw_models = []
+    models = []
+    seen = set()
+    for item in raw_models:
+        name = item.get(name_key) if isinstance(item, dict) else None
+        if not isinstance(name, str):
+            continue
+        normalized = name.strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            models.append(normalized)
+
+    return {"provider": provider_name, "connected": True, "models": models}
 
 
 @app.get("/api/proxy/status")
