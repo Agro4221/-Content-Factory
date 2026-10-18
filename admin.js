@@ -95,18 +95,73 @@ function setLocalAiModelStatus(message, stateName = '') {
     else delete status.dataset.state;
 }
 
+function appendLocalModelOption(select, value, label) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+    return option;
+}
+
+function populateLocalAiModelSelect(select, names, preferredModel = '') {
+    const selected = String(preferredModel || '').trim();
+    select.textContent = '';
+    if (select.options) select.options.length = 0;
+
+    appendLocalModelOption(select, '', names.length ? 'Выберите установленную модель…' : 'Модели не найдены');
+    const seen = new Set();
+    names.forEach(name => {
+        const normalized = String(name || '').trim();
+        if (!normalized || seen.has(normalized)) return;
+        seen.add(normalized);
+        appendLocalModelOption(select, normalized, normalized);
+    });
+
+    if (selected && selected !== '__manual__' && !seen.has(selected)) {
+        appendLocalModelOption(select, selected, selected + ' — сохранённое имя, не найдено в списке');
+    }
+    appendLocalModelOption(select, '__manual__', 'Ввести имя вручную…');
+
+    if (selected === '__manual__') {
+        select.value = '__manual__';
+    } else if (selected && (seen.has(selected) || !seen.has(selected))) {
+        select.value = selected;
+    } else {
+        select.value = '';
+    }
+}
+
+function syncLocalAiManualField() {
+    const modelSelect = document.getElementById('local_model');
+    const manualWrap = document.getElementById('localModelManualWrap');
+    const manualInput = document.getElementById('local_model_manual');
+    const manual = !!modelSelect && modelSelect.value === '__manual__';
+    if (manualWrap) manualWrap.hidden = !manual;
+    if (manualInput) manualInput.required = manual;
+    if (modelSelect) modelSelect.setAttribute('aria-expanded', String(manual));
+}
+
+function getLocalAiSelectedModelValue() {
+    const modelSelect = document.getElementById('local_model');
+    if (!modelSelect) return '';
+    if (modelSelect.value !== '__manual__') return String(modelSelect.value || '').trim();
+    const manualInput = document.getElementById('local_model_manual');
+    return String((manualInput && manualInput.value) || '').trim();
+}
+
 async function refreshLocalAiModels(preferredModel = null) {
     const providerSelect = document.getElementById('local_ai_provider');
-    const modelInput = document.getElementById('local_model');
-    const modelOptions = document.getElementById('localModelOptions');
+    const modelSelect = document.getElementById('local_model');
     const hostInput = document.getElementById('local_host');
     const portInput = document.getElementById('local_port');
     const refreshButton = document.getElementById('refreshLocalModelsBtn');
-    if (!providerSelect || !modelInput || !modelOptions) return;
+    if (!providerSelect || !modelSelect) return;
 
     const requestId = ++_localAiModelRequest;
     const provider = providerSelect.value === 'ollama' ? 'ollama' : 'lmstudio';
-    const currentModel = String(preferredModel === null ? (modelInput.value || '') : preferredModel).trim();
+    const initiallySelected = String(
+        preferredModel === null ? (modelSelect.value || '') : preferredModel
+    ).trim();
     const host = String(hostInput ? hostInput.value : '127.0.0.1').trim().toLowerCase();
     const port = String((portInput && portInput.value) || localAiDefaultPort(provider)).trim();
     const isLoopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host);
@@ -114,7 +169,8 @@ async function refreshLocalAiModels(preferredModel = null) {
     if (refreshButton) refreshButton.disabled = true;
 
     if (!isLoopback) {
-        modelOptions.textContent = '';
+        populateLocalAiModelSelect(modelSelect, [], initiallySelected);
+        syncLocalAiManualField();
         setLocalAiModelStatus(
             'Для удалённого хоста укажите имя модели вручную. Автосписок доступен только для локального сервера.',
             'warn'
@@ -124,19 +180,9 @@ async function refreshLocalAiModels(preferredModel = null) {
     }
 
     if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
-        modelOptions.textContent = '';
+        populateLocalAiModelSelect(modelSelect, [], initiallySelected);
+        syncLocalAiManualField();
         setLocalAiModelStatus('Укажите корректный порт от 1 до 65535. Имя модели можно ввести вручную.', 'error');
-        if (refreshButton) refreshButton.disabled = false;
-        return;
-    }
-
-    const expectedPort = localAiDefaultPort(provider);
-    if (port !== expectedPort) {
-        modelOptions.textContent = '';
-        setLocalAiModelStatus(
-            'Автосписок работает на стандартном порту ' + expectedPort + '. Для собственного порта укажите имя модели вручную.',
-            'warn'
-        );
         if (refreshButton) refreshButton.disabled = false;
         return;
     }
@@ -144,7 +190,8 @@ async function refreshLocalAiModels(preferredModel = null) {
     setLocalAiModelStatus(provider === 'ollama' ? 'Ищем модели в Ollama…' : 'Ищем модели в LM Studio…');
 
     try {
-        const response = await fetch('/api/ai/models?provider=' + encodeURIComponent(provider), {
+        const url = '/api/ai/models?provider=' + encodeURIComponent(provider) + '&port=' + encodeURIComponent(port);
+        const response = await fetch(url, {
             headers: { 'Accept': 'application/json' },
         });
         const payload = await response.json().catch(() => ({}));
@@ -156,32 +203,37 @@ async function refreshLocalAiModels(preferredModel = null) {
         const names = Array.from(new Set((Array.isArray(payload.models) ? payload.models : [])
             .map(item => String(item || '').trim())
             .filter(Boolean)));
-        modelOptions.textContent = '';
-        names.forEach(name => {
-            const option = document.createElement('option');
-            option.value = name;
-            modelOptions.appendChild(option);
-        });
+        const currentSelection = String(modelSelect.value || initiallySelected).trim();
+        const selectedForRender = currentSelection || initiallySelected;
+        populateLocalAiModelSelect(modelSelect, names, selectedForRender);
+        syncLocalAiManualField();
 
-        if (names.length && currentModel && !names.includes(currentModel)) {
+        if (selectedForRender === '__manual__') {
             setLocalAiModelStatus(
-                'Сохранённая модель отсутствует в списке. Проверьте имя или выберите установленную модель.',
+                names.length ? 'Найдено моделей: ' + names.length + '. Или укажите имя вручную.' :
+                    'Список пуст. Можно указать имя модели вручную.',
+                names.length ? 'success' : 'warn'
+            );
+        } else if (names.length && selectedForRender && !names.includes(selectedForRender)) {
+            setLocalAiModelStatus(
+                'Сохранённая модель отсутствует в списке. Выберите установленную модель или проверьте имя.',
                 'warn'
             );
         } else if (names.length) {
             setLocalAiModelStatus('Найдено моделей: ' + names.length, 'success');
         } else {
             setLocalAiModelStatus(
-                'Список пуст. Загрузите модель в приложении или введите её имя вручную.',
+                'Список пуст. Загрузите модель в приложении или выберите ручной ввод.',
                 'warn'
             );
         }
     } catch (error) {
         if (requestId !== _localAiModelRequest) return;
-        modelOptions.textContent = '';
+        populateLocalAiModelSelect(modelSelect, [], String(modelSelect.value || initiallySelected).trim());
+        syncLocalAiManualField();
         setLocalAiModelStatus(
             'Не удалось получить список. Запустите ' + (provider === 'ollama' ? 'Ollama' : 'LM Studio') +
-            ' или укажите имя модели вручную.',
+            ' или выберите ручной ввод.',
             'error'
         );
         console.warn('Local AI model discovery failed:', error);
@@ -195,11 +247,15 @@ async function setupLocalAiModels(settings = {}) {
     const modeSelect = document.getElementById('ai_mode');
     const host = document.getElementById('local_host');
     const port = document.getElementById('local_port');
+    const modelSelect = document.getElementById('local_model');
     const refreshButton = document.getElementById('refreshLocalModelsBtn');
     if (!providerSelect) return;
 
     const savedPort = String(settings.local_port || (port && port.value) || '1234');
-    providerSelect.value = savedPort === '11434' ? 'ollama' : 'lmstudio';
+    const savedProvider = String(settings.local_ai_provider || '').trim().toLowerCase();
+    providerSelect.value = ['ollama', 'lmstudio'].includes(savedProvider)
+        ? savedProvider
+        : (savedPort === '11434' ? 'ollama' : 'lmstudio');
     providerSelect.dataset.previousValue = providerSelect.value;
     if (host && !String(host.value || '').trim()) host.value = '127.0.0.1';
     if (port && !String(port.value || '').trim()) port.value = localAiDefaultPort(providerSelect.value);
@@ -213,6 +269,10 @@ async function setupLocalAiModels(settings = {}) {
             void refreshLocalAiModels();
         });
     }
+    if (modelSelect && modelSelect.dataset.bound !== 'true') {
+        modelSelect.dataset.bound = 'true';
+        modelSelect.addEventListener('change', syncLocalAiManualField);
+    }
     if (refreshButton && refreshButton.dataset.bound !== 'true') {
         refreshButton.dataset.bound = 'true';
         refreshButton.addEventListener('click', () => void refreshLocalAiModels());
@@ -223,6 +283,7 @@ async function setupLocalAiModels(settings = {}) {
             if (aiModeIsLocal(modeSelect.value)) void refreshLocalAiModels();
         });
     }
+    syncLocalAiManualField();
 
     if (aiModeIsLocal((settings.ai_mode || (modeSelect && modeSelect.value) || 'LOCAL'))) {
         void refreshLocalAiModels(String(settings.local_model || ''));
@@ -1421,7 +1482,21 @@ async function loadSettings() {
         for (const key in data) {
             const el = document.querySelector(`[name="${key}"]`);
             if (el) {
-                el.value = data[key];
+                if (key === 'local_model' && el.tagName === 'SELECT' && String(data[key] || '').trim()) {
+                    const savedModel = String(data[key]).trim();
+                    let option = Array.from(el.options || []).find(item => item.value === savedModel);
+                    if (!option) {
+                        option = document.createElement('option');
+                        option.value = savedModel;
+                        option.textContent = savedModel;
+                        const manualOption = Array.from(el.options || []).find(item => item.value === '__manual__');
+                        if (manualOption) el.insertBefore(option, manualOption);
+                        else el.appendChild(option);
+                    }
+                    el.value = savedModel;
+                } else {
+                    el.value = data[key];
+                }
                 if (key === 'poll_delay') {
                     const dv = document.getElementById('delayValue');
                     if (dv) dv.textContent = data[key];
@@ -1484,6 +1559,16 @@ async function saveSettings(formId, sourceBtn) {
     setSaveState(btn, 'loading');
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
+
+    if (formId === 'form-ai') {
+        const selectedLocalModel = getLocalAiSelectedModelValue();
+        if (normalizeAiMode(data.ai_mode) === 'LOCAL' || selectedLocalModel) {
+            data.local_model = selectedLocalModel;
+        } else {
+            // Saving remote AI settings must not erase the separate local model choice.
+            delete data.local_model;
+        }
+    }
 
     if (formId === 'form-ai' && normalizeAiMode(data.ai_mode) === 'LOCAL'
         && !String(data.local_model || '').trim()) {
@@ -1560,6 +1645,19 @@ async function saveSettings(formId, sourceBtn) {
             toast({ type: 'success', title: 'Сохранено', text: 'Настройки применены.' });
             setSaveState(btn, 'success', 'Готово');
             markSaved(formId);
+            if (formId === 'form-ai' && data.local_model) {
+                const modelSelect = document.getElementById('local_model');
+                const manualInput = document.getElementById('local_model_manual');
+                if (modelSelect) {
+                    let modelOption = Array.from(modelSelect.options || []).find(option => option.value === data.local_model);
+                    if (!modelOption) {
+                        modelOption = appendLocalModelOption(modelSelect, data.local_model, data.local_model + ' — введено вручную');
+                    }
+                    modelSelect.value = data.local_model;
+                }
+                if (manualInput) manualInput.value = '';
+                syncLocalAiManualField();
+            }
             _dashCache.settings = { ...(_dashCache.settings || {}), ...data };
             renderDashboardFromCache();
             if (formId === 'form-proxy') {
