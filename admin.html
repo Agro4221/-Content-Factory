@@ -1868,6 +1868,188 @@ function parseTopicChannels(raw) {
     }
 }
 
+function applyTheme(theme, persist = false) {
+    const selected = theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = selected;
+    const button = document.getElementById('themeToggleBtn');
+    const icon = document.getElementById('themeIcon');
+    if (button) {
+        const dark = selected === 'dark';
+        button.setAttribute('aria-pressed', dark ? 'true' : 'false');
+        button.setAttribute('aria-label', dark ? 'Включить светлую тему' : 'Включить тёмную тему');
+        button.title = dark ? 'Светлая тема' : 'Тёмная тема';
+    }
+    if (icon) {
+        icon.innerHTML = selected === 'dark'
+            ? '<circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"></path>'
+            : '<path d="M20.9 13A8.2 8.2 0 0 1 11 3.1 8.8 8.8 0 1 0 20.9 13z"></path>';
+    }
+    if (persist) {
+        try { localStorage.setItem('content-factory-theme', selected); } catch (e) { /* storage may be disabled */ }
+    }
+}
+
+function setupTheme() {
+    let saved = null;
+    try { saved = localStorage.getItem('content-factory-theme'); } catch (e) { /* ignore */ }
+    const prefersDark = typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    applyTheme(saved || (prefersDark ? 'dark' : 'light'));
+    const button = document.getElementById('themeToggleBtn');
+    if (button && button.dataset.bound !== 'true') {
+        button.dataset.bound = 'true';
+        button.addEventListener('click', () => {
+            const current = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+            applyTheme(current === 'dark' ? 'light' : 'dark', true);
+        });
+    }
+}
+
+let _localAiModelRequest = 0;
+
+function setLocalAiProviderFields(provider) {
+    const host = document.getElementById('local_host');
+    const port = document.getElementById('local_port');
+    if (host) host.value = '127.0.0.1';
+    if (port) port.value = provider === 'ollama' ? '11434' : '1234';
+}
+
+function setLocalAiModelStatus(message, stateName = '') {
+    const status = document.getElementById('localModelStatus');
+    if (!status) return;
+    status.textContent = message;
+    if (stateName) status.dataset.state = stateName;
+    else delete status.dataset.state;
+}
+
+async function refreshLocalAiModels(preferredModel = '') {
+    const providerSelect = document.getElementById('local_ai_provider');
+    const modelSelect = document.getElementById('local_model');
+    const refreshButton = document.getElementById('refreshLocalModelsBtn');
+    if (!providerSelect || !modelSelect) return;
+
+    const requestId = ++_localAiModelRequest;
+    const provider = providerSelect.value === 'ollama' ? 'ollama' : 'lmstudio';
+    const currentModel = String(preferredModel || modelSelect.value || '').trim();
+    modelSelect.disabled = true;
+    if (refreshButton) refreshButton.disabled = true;
+    setLocalAiModelStatus(provider === 'ollama' ? 'Ищем модели в Ollama…' : 'Ищем модели в LM Studio…');
+
+    try {
+        const response = await fetch('/api/ai/models?provider=' + encodeURIComponent(provider), {
+            headers: { 'Accept': 'application/json' },
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(payload.detail || 'Локальный провайдер не отвечает.');
+        }
+        if (requestId !== _localAiModelRequest) return;
+
+        const names = Array.from(new Set((Array.isArray(payload.models) ? payload.models : [])
+            .map(item => String(item || '').trim())
+            .filter(Boolean)));
+        modelSelect.textContent = '';
+        if (names.length) {
+            names.forEach(name => {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = name;
+                modelSelect.appendChild(option);
+            });
+            if (currentModel && names.includes(currentModel)) {
+                modelSelect.value = currentModel;
+                setLocalAiModelStatus('Найдено моделей: ' + names.length, 'success');
+            } else if (currentModel) {
+                const missing = document.createElement('option');
+                missing.value = currentModel;
+                missing.textContent = currentModel + ' — не найдена в списке';
+                modelSelect.insertBefore(missing, modelSelect.firstChild);
+                modelSelect.value = currentModel;
+                setLocalAiModelStatus('Текущая модель не обнаружена. Выберите установленную модель.', 'warn');
+            } else {
+                modelSelect.selectedIndex = 0;
+                setLocalAiModelStatus('Найдено моделей: ' + names.length, 'success');
+            }
+        } else {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Нет установленных моделей';
+            modelSelect.appendChild(option);
+            if (currentModel) {
+                const saved = document.createElement('option');
+                saved.value = currentModel;
+                saved.textContent = currentModel + ' — сохранённая настройка';
+                modelSelect.appendChild(saved);
+                modelSelect.value = currentModel;
+            }
+            setLocalAiModelStatus('Провайдер ответил, но список моделей пуст. Сначала загрузите модель в приложении.', 'warn');
+        }
+    } catch (error) {
+        if (requestId !== _localAiModelRequest) return;
+        modelSelect.textContent = '';
+        if (currentModel) {
+            const saved = document.createElement('option');
+            saved.value = currentModel;
+            saved.textContent = currentModel + ' — сохранённая настройка';
+            modelSelect.appendChild(saved);
+            modelSelect.value = currentModel;
+        } else {
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Список моделей недоступен';
+            modelSelect.appendChild(placeholder);
+        }
+        setLocalAiModelStatus(
+            'Не удалось получить модели. Запустите ' + (provider === 'ollama' ? 'Ollama' : 'LM Studio') + ' и нажмите обновить.',
+            'error'
+        );
+        console.warn('Local AI model discovery failed:', error);
+    } finally {
+        if (requestId === _localAiModelRequest) {
+            modelSelect.disabled = false;
+            if (refreshButton) refreshButton.disabled = false;
+        }
+    }
+}
+
+async function setupLocalAiModels(settings = {}) {
+    const providerSelect = document.getElementById('local_ai_provider');
+    const modeSelect = document.getElementById('ai_mode');
+    const host = document.getElementById('local_host');
+    const port = document.getElementById('local_port');
+    const refreshButton = document.getElementById('refreshLocalModelsBtn');
+    if (!providerSelect) return;
+
+    const savedPort = String(settings.local_port || (port && port.value) || '11434');
+    providerSelect.value = savedPort === '11434' ? 'ollama' : 'lmstudio';
+    if (host && !host.value) host.value = '127.0.0.1';
+    if (port && !port.value) port.value = providerSelect.value === 'ollama' ? '11434' : '1234';
+
+    if (providerSelect.dataset.bound !== 'true') {
+        providerSelect.dataset.bound = 'true';
+        providerSelect.addEventListener('change', () => {
+            setLocalAiProviderFields(providerSelect.value);
+            refreshLocalAiModels('');
+        });
+    }
+    if (refreshButton && refreshButton.dataset.bound !== 'true') {
+        refreshButton.dataset.bound = 'true';
+        refreshButton.addEventListener('click', () => refreshLocalAiModels());
+    }
+    if (modeSelect && modeSelect.dataset.localModelsBound !== 'true') {
+        modeSelect.dataset.localModelsBound = 'true';
+        modeSelect.addEventListener('change', () => {
+            if (aiModeIsLocal(modeSelect.value)) refreshLocalAiModels();
+        });
+    }
+
+    if (aiModeIsLocal((settings.ai_mode || (modeSelect && modeSelect.value) || 'LOCAL'))) {
+        await refreshLocalAiModels(String(settings.local_model || ''));
+    } else {
+        setLocalAiModelStatus('Модель будет загружена из выбранного приложения, когда включите локальный режим.');
+    }
+}
+
 /* ============================================================
    КОНФИГУРАЦИЯ МОДУЛЕЙ И РОУТОВ
    ============================================================ */
