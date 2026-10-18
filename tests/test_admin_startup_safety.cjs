@@ -6,9 +6,8 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const html = fs.readFileSync(path.join(__dirname, "..", "admin.html"), "utf8");
-const scriptMatch = html.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/i);
-assert.ok(scriptMatch, "admin panel should have its controller script");
-const script = scriptMatch[1];
+const script = fs.readFileSync(path.join(__dirname, "..", "admin.js"), "utf8");
+const css = fs.readFileSync(path.join(__dirname, "..", "admin.css"), "utf8");
 
 function extractFunction(name) {
     const escaped = name.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
@@ -99,8 +98,8 @@ function inertDocument() {
     const toggleButton = html.match(/<button\b[^>]*id="botToggleBtn"[^>]*>/);
     assert.ok(toggleButton, "top-bar start/stop button should exist");
     assert.ok(!/\bonclick\s*=/.test(toggleButton[0]), "start/stop action must have only one event handler");
-    assert.ok(html.includes(".route:not(.active) { display: none !important; }"), "inactive pages must be hidden");
-    assert.ok(html.includes(".route.active { display: block; }"), "active page must be visible");
+    assert.ok(css.includes(".route:not(.active) { display: none !important; }"), "inactive pages must be hidden");
+    assert.ok(css.includes(".route.active { display: block; }"), "active page must be visible");
 }
 
 // Exercise the real route function with lightweight DOM elements. This catches
