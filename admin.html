@@ -17,84 +17,99 @@
     <meta name="theme-color" content="#0a0b10">
     <title>Marej — Панель управления</title>
     <link rel="icon" type="image/png" href="/favicon.png">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         /* ============================================================
            ДИЗАЙН-СИСТЕМА
            ============================================================ */
         :root {
-            /* Surfaces — obsidian, not black */
-            --bg-app:        #0a0b10;
-            --bg-sidebar:    #0c0e15;
-            --bg-elev-1:     #11141c;
-            --bg-elev-2:     #161a25;
-            --bg-elev-3:     #1d2331;
-            --bg-input:      #0e111a;
-            --bg-hover:      #161a25;
-            --bg-active:     #1d2331;
-
-            /* Borders — separation by spacing first, then by hairline */
-            --border-subtle: #181d28;
-            --border-soft:   #202638;
-            --border:        #232a3a;
-            --border-strong: #36405a;
-
-            /* Text — 4 levels is enough */
-            --text-1:        #e8ecf4;   /* primary */
-            --text-2:        #a4adc1;   /* secondary */
-            --text-3:        #6c768c;   /* tertiary / meta */
-            --text-mute:     #4a5266;   /* disabled / placeholder */
-
-            /* Single accent — disciplined */
-            --accent:        #6b8aff;
-            --accent-hover:  #5879ee;
-            --accent-soft:   rgba(107, 138, 255, 0.10);
-            --accent-ring:   rgba(107, 138, 255, 0.22);
-            --accent-tint:   rgba(107, 138, 255, 0.04);
-
-            /* Status — restrained, never neon */
-            --success:       #2dc88a;
-            --success-soft:  rgba(45, 200, 138, 0.10);
-            --warn:          #d99c3a;
-            --warn-soft:     rgba(217, 156, 58, 0.10);
-            --danger:        #e26b7d;
-            --danger-soft:   rgba(226, 107, 125, 0.10);
-            --info:          #6b8aff;
-            --info-soft:     rgba(107, 138, 255, 0.10);
-
-            /* Module identity — restrained tint, not neon */
-            --m-posts:       #6b8aff;
-
-            /* Geometry */
-            --r-xs: 4px;
-            --r-sm: 6px;
-            --r-md: 8px;
-            --r-lg: 12px;
-            --r-xl: 16px;
-
-            /* Layout */
-            --sidebar-w:           264px;
-            --sidebar-w-collapsed: 60px;
+            color-scheme: light;
+            --bg-app:        #f5f5f7;
+            --bg-sidebar:    rgba(255, 255, 255, 0.86);
+            --bg-elev-1:     #ffffff;
+            --bg-elev-2:     #f5f5f7;
+            --bg-elev-3:     #e8e8ed;
+            --bg-input:      #ffffff;
+            --bg-hover:      #f0f0f3;
+            --bg-active:     #e7f0fb;
+            --border-subtle: #ebebef;
+            --border-soft:   #e1e1e6;
+            --border:        #d2d2d7;
+            --border-strong: #b9bac0;
+            --text-1:        #1d1d1f;
+            --text-2:        #424245;
+            --text-3:        #6e6e73;
+            --text-mute:     #86868b;
+            --accent:        #0071e3;
+            --accent-hover:  #0077ed;
+            --accent-soft:   rgba(0, 113, 227, 0.09);
+            --accent-ring:   rgba(0, 113, 227, 0.18);
+            --accent-tint:   rgba(0, 113, 227, 0.035);
+            --success:       #248a3d;
+            --success-soft:  rgba(36, 138, 61, 0.10);
+            --warn:          #9a6700;
+            --warn-soft:     rgba(217, 156, 58, 0.13);
+            --danger:        #d70015;
+            --danger-soft:   rgba(215, 0, 21, 0.08);
+            --info:          #0071e3;
+            --info-soft:     rgba(0, 113, 227, 0.09);
+            --m-posts:       #0071e3;
+            --r-xs: 5px;
+            --r-sm: 8px;
+            --r-md: 10px;
+            --r-lg: 14px;
+            --r-xl: 18px;
+            --sidebar-w:           248px;
+            --sidebar-w-collapsed: 64px;
             --topbar-h:            64px;
-
-            /* Motion — gentle, expensive, never bouncy */
-            --t-fast: 140ms;
-            --t-base: 220ms;
-            --t-slow: 360ms;
-            --ease:    cubic-bezier(0.16, 1, 0.3, 1);
-
-            /* Shadows — felt, not seen */
-            --shadow-sm:   0 1px 2px rgba(0,0,0,0.30);
-            --shadow-md:   0 4px 16px rgba(0,0,0,0.35);
-            --shadow-lg:   0 16px 48px rgba(0,0,0,0.45);
+            --t-fast: 130ms;
+            --t-base: 200ms;
+            --t-slow: 320ms;
+            --ease: cubic-bezier(0.2, 0.75, 0.25, 1);
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.035);
+            --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.06);
+            --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.12);
+        }
+        :root[data-theme="dark"] {
+            color-scheme: dark;
+            --bg-app:        #111113;
+            --bg-sidebar:    rgba(25, 25, 28, 0.94);
+            --bg-elev-1:     #1c1c1e;
+            --bg-elev-2:     #252527;
+            --bg-elev-3:     #303033;
+            --bg-input:      #232326;
+            --bg-hover:      #29292c;
+            --bg-active:     #222f42;
+            --border-subtle: #2b2b2e;
+            --border-soft:   #38383c;
+            --border:        #48484d;
+            --border-strong: #5c5c63;
+            --text-1:        #f5f5f7;
+            --text-2:        #d1d1d6;
+            --text-3:        #a1a1a6;
+            --text-mute:     #86868b;
+            --accent:        #2997ff;
+            --accent-hover:  #48a5ff;
+            --accent-soft:   rgba(41, 151, 255, 0.15);
+            --accent-ring:   rgba(41, 151, 255, 0.24);
+            --accent-tint:   rgba(41, 151, 255, 0.06);
+            --success:       #30d158;
+            --success-soft:  rgba(48, 209, 88, 0.14);
+            --warn:          #ffd60a;
+            --warn-soft:     rgba(255, 214, 10, 0.12);
+            --danger:        #ff453a;
+            --danger-soft:   rgba(255, 69, 58, 0.12);
+            --info:          #2997ff;
+            --info-soft:     rgba(41, 151, 255, 0.14);
+            --m-posts:       #2997ff;
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+            --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.22);
+            --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.35);
         }
         *, *::before, *::after { box-sizing: border-box; }
         html, body { height: 100%; }
         body {
             margin: 0;
-            font-family: 'Inter', -apple-system, system-ui, 'Segoe UI', Tahoma, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
             font-size: 14px;
             line-height: 1.5;
             color: var(--text-1);
@@ -102,7 +117,7 @@
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
             text-rendering: optimizeLegibility;
-            font-feature-settings: 'cv11', 'ss01', 'ss03';
+            font-feature-settings: normal;
             overflow: hidden;
         }
         button, input, select, textarea { font: inherit; color: inherit; }
@@ -151,7 +166,7 @@
         .sidebar-brand:hover { background: var(--bg-hover); }
         .sidebar-brand:active { background: var(--bg-elev-2); }
         .sidebar-brand::after {
-            content: 'Обзор системы';
+            content: 'Обзор';
             position: absolute;
             left: 50%;
             top: 50%;
@@ -1007,7 +1022,70 @@
         /* Route visibility is a functional requirement, not decoration. */
         .route:not(.active) { display: none !important; }
         .route.active { display: block; }
-    </style>
+    
+        .theme-toggle-btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 36px; height: 36px; flex: 0 0 auto;
+            border: 1px solid var(--border-soft); border-radius: 50%;
+            color: var(--text-2); background: var(--bg-elev-1);
+            transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+        }
+        .theme-toggle-btn:hover { background: var(--bg-hover); border-color: var(--border); color: var(--text-1); }
+        .theme-toggle-btn:focus-visible, .btn:focus-visible, .nav-item:focus-visible, .nav-group-toggle:focus-visible {
+            outline: 3px solid var(--accent-ring); outline-offset: 2px;
+        }
+        .quick-start-list { list-style: none; display: grid; gap: 16px; margin: 0; padding: 0; }
+        .quick-start-list li { display: grid; grid-template-columns: 36px minmax(0,1fr); gap: 12px; align-items: start; }
+        .quick-start-list li > span { color: var(--text-mute); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; padding-top: 2px; }
+        .quick-start-list strong { color: var(--text-1); font-size: 13.5px; font-weight: 600; }
+        .quick-start-list p { color: var(--text-3); font-size: 12.5px; line-height: 1.5; margin: 3px 0 0; }
+        .card, .dash-stat, .mod-health-item, .faq-item { box-shadow: var(--shadow-sm); }
+        .card { border-color: var(--border-soft); }
+        .card-header { padding: 18px 22px 10px; }
+        .card-body { padding: 18px 22px; }
+        .card-footer { background: var(--bg-elev-2); }
+        .page-header { margin-bottom: 28px; }
+        .page-title { font-size: clamp(25px, 2.4vw, 32px); letter-spacing: -0.03em; font-weight: 650; }
+        .page-desc { color: var(--text-3); max-width: 62ch; }
+        .nav-item { border-radius: 8px; padding-left: 16px; }
+        .nav-item.active::before { left: 6px; height: 18px; }
+        .sidebar { backdrop-filter: saturate(150%) blur(18px); background: var(--bg-sidebar); }
+        .topbar { background: color-mix(in srgb, var(--bg-app) 88%, transparent); backdrop-filter: saturate(150%) blur(16px); }
+        .content { background: var(--bg-app); }
+        .content-inner { max-width: 1000px; }
+        .form-label { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--text-2); }
+        input[type="text"], input[type="number"], input[type="password"], textarea, select, .form-control {
+            border-radius: 9px; min-height: 40px;
+        }
+        textarea { min-height: 96px; }
+        .btn { border-radius: 9px; min-height: 38px; }
+        .btn-primary { background: var(--accent); box-shadow: none; }
+        .btn-success { background: var(--success); color: #fff; box-shadow: none; }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .pill { background: var(--bg-elev-1); }
+        .dash-stat { border-radius: var(--r-lg); background: var(--bg-elev-1); }
+        .dash-stat-value { font-size: 23px; letter-spacing: -0.035em; }
+        .dash-stat-hint { color: var(--text-3); }
+        .console-wrap { border-radius: var(--r-lg); box-shadow: var(--shadow-sm); }
+        .route { animation-duration: 180ms; }
+        .faq-item { border-radius: var(--r-md); }
+        @media (max-width: 860px) {
+            .topbar-actions { gap: 6px; }
+            .content { padding: 22px 18px 64px; }
+            .form-grid, .form-grid.cols-3 { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 540px) {
+            .content { padding: 16px 12px 48px; }
+            .topbar { gap: 6px; }
+            .pill.proxy-btn .label { display: none; }
+            .page-title { font-size: 25px; }
+            .card-header, .card-body { padding-left: 16px; padding-right: 16px; }
+            .card-footer { padding-left: 16px; padding-right: 16px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+        }
+</style>
 </head>
 <body>
 
@@ -1022,7 +1100,7 @@
                  onerror="this.onerror=null;this.src='brand-logo.png';this.srcset='brand-logo.png 1x, brand-logo@2x.png 2x';">
             <div class="brand-text">
                 <div class="brand-name">Marej</div>
-                <div class="brand-sub" id="sidebarClock" aria-live="polite">—</div>
+                <div class="brand-sub">CONTENT FACTORY</div>
             </div>
         </div>
 
@@ -1030,28 +1108,25 @@
             <div class="nav-group" data-module="posts">
                 <button class="nav-group-toggle" type="button" aria-expanded="true">
                     <span class="nav-group-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></span>
-                    <span class="nav-group-label">Публикация постов</span>
+                    <span class="nav-group-label">Публикация</span>
                     <span class="module-status-dot" data-module-dot="posts" data-state="stopped" aria-hidden="true"></span>
                     <svg class="nav-group-arrow" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 1L7 5L3 9" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 <div class="nav-group-items"><div>
-                    <a class="nav-item" href="#" data-route="posts/overview"><span class="nav-item-index">1.0</span><span class="nav-item-label">Обзор системы</span></a>
-                    <a class="nav-item" href="#" data-route="posts/dashboard"><span class="nav-item-index">1.1</span><span class="nav-item-label">Пульт модуля</span></a>
-                    <a class="nav-item" href="#" data-route="posts/ai"><span class="nav-item-index">1.2</span><span class="nav-item-label">Настройка AI</span></a>
-                    <a class="nav-item" href="#" data-route="posts/parsing"><span class="nav-item-index">1.3</span><span class="nav-item-label">Настройка парсинга</span></a>
-                    <a class="nav-item" href="#" data-route="posts/proxy"><span class="nav-item-index">1.4</span><span class="nav-item-label">Сеть и прокси</span></a>
-                    <a class="nav-item" href="#" data-route="posts/logs"><span class="nav-item-index">1.4</span><span class="nav-item-label">Консоль (логи)</span></a>
-                    <a class="nav-item" href="#" data-route="posts/faq"><span class="nav-item-index">1.5</span><span class="nav-item-label">Инструкция и FAQ</span></a>
+                    <a class="nav-item" href="#" data-route="posts/overview"><span class="nav-item-label">Обзор</span></a>
+                    <a class="nav-item" href="#" data-route="posts/dashboard"><span class="nav-item-label">Публикации</span></a>
+                    <a class="nav-item" href="#" data-route="posts/ai"><span class="nav-item-label">AI</span></a>
+                    <a class="nav-item" href="#" data-route="posts/parsing"><span class="nav-item-label">Источники и правила</span></a>
+                    <a class="nav-item" href="#" data-route="posts/proxy"><span class="nav-item-label">Сеть</span></a>
+                    <a class="nav-item" href="#" data-route="posts/logs"><span class="nav-item-label">Журнал</span></a>
+                    <a class="nav-item" href="#" data-route="posts/faq"><span class="nav-item-label">Помощь</span></a>
                 </div></div>
             </div>
 
         </nav>
 
         <div class="sidebar-footer">
-            <div class="sidebar-footer-meta">
-                <div style="font-size: 11px; color: var(--text-mute);">Сессия активна</div>
-                <div id="sidebarHwid" style="font-size: 11px; color: var(--text-3); font-family: monospace;">HWID: ...</div>
-            </div>
+            <div class="sidebar-footer-meta"><div style="font-size:12px;color:var(--text-3);">Локальная панель</div></div>
             <button class="sidebar-collapse-btn" id="collapseBtn" title="Свернуть меню" aria-label="Свернуть меню">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
             </button>
@@ -1065,8 +1140,8 @@
             </button>
             <nav class="breadcrumbs" id="breadcrumbs" aria-label="Хлебные крошки"></nav>
             <div class="topbar-actions">
-<span class="label">Лицензия</span><span id="licenseText">проверка</span>
-                <button type="button" class="pill proxy proxy-btn" id="proxyPill" data-state="check" title="Настройки VPN / Proxy">
+                <button type="button" class="theme-toggle-btn" id="themeToggleBtn" aria-label="Переключить тему" title="Переключить тему" aria-pressed="false"><svg id="themeIcon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.9 13A8.2 8.2 0 0 1 11 3.1 8.8 8.8 0 1 0 20.9 13z"/></svg></button>
+                <button type="button" class="pill proxy proxy-btn" id="proxyPill" data-state="check" title="Настройки Сеть">
                     <span class="dot"></span><span class="label">Прокси</span><span id="proxyText">—</span>
                 </button>
                 <div class="topbar-runner" id="topbarRunner">
@@ -1081,7 +1156,7 @@
         <div class="content">
              <div class="content-inner">
 
-                <!-- ONBOARDING — shows when license not active -->
+                <!-- Overview focuses on the real state of the local pipeline. -->
 
                 <!-- ============================================================
                      DASHBOARD — точка входа по умолчанию
@@ -1089,41 +1164,41 @@
 
                 <section class="route" data-route="posts/overview">
                     <div class="page-header">
-                        <div class="page-eyebrow"><span class="dot"></span> Панель управления</div>
-                        <h1 class="page-title">Обзор системы</h1>
-                        <p class="page-desc">Текущее состояние парсера, настроек и публикаций. Управление и настройка доступны в разделах слева.</p>
+                        <div class="page-eyebrow"><span class="dot"></span> CONTENT FACTORY</div>
+                        <h1 class="page-title">Обзор</h1>
+                        <p class="page-desc">Главное о состоянии и готовности к публикации.</p>
                         <div class="page-meta">
                             <span class="badge" id="dashUpdatedAt">Загрузка состояния…</span>
                         </div>
                     </div>
 
                     <div class="dash-stats" id="dashStats">
-                        <div class="dash-stat" data-state="check" data-stat="license">
-                            <div class="dash-stat-head"><span class="dash-stat-icon">✓</span><span>Лицензия</span></div>
-                            <div class="dash-stat-value" id="dashLicenseValue">—</div>
-                            <div class="dash-stat-hint" id="dashLicenseHint">Проверка статуса…</div>
-                        </div>
                         <div class="dash-stat" data-state="check" data-stat="bot">
                             <div class="dash-stat-head"><span class="dash-stat-icon">▶</span><span>Парсер</span></div>
                             <div class="dash-stat-value" id="dashBotValue">—</div>
                             <div class="dash-stat-hint" id="dashBotHint">Получаем состояние…</div>
                         </div>
-                        <div class="dash-stat" data-state="check" data-stat="proxy">
-                            <div class="dash-stat-head"><span class="dash-stat-icon">↔</span><span>Сеть</span></div>
-                            <div class="dash-stat-value" id="dashProxyValue">—</div>
-                            <div class="dash-stat-hint" id="dashProxyHint">Проверка соединения…</div>
+                        <div class="dash-stat" data-state="check" data-stat="ai">
+                            <div class="dash-stat-head"><span class="dash-stat-icon">✳</span><span>AI</span></div>
+                            <div class="dash-stat-value" id="dashAiValue">—</div>
+                            <div class="dash-stat-hint" id="dashAiHint">Проверяем настройки…</div>
                         </div>
-                        <div class="dash-stat" data-state="check" data-stat="modules">
-                            <div class="dash-stat-head"><span class="dash-stat-icon">▦</span><span>Настройки</span></div>
-                            <div class="dash-stat-value" id="dashModulesValue">—</div>
-                            <div class="dash-stat-hint" id="dashModulesHint">Проверка готовности…</div>
+                        <div class="dash-stat" data-state="check" data-stat="sources">
+                            <div class="dash-stat-head"><span class="dash-stat-icon">↗</span><span>Источники</span></div>
+                            <div class="dash-stat-value" id="dashSourcesValue">—</div>
+                            <div class="dash-stat-hint" id="dashSourcesHint">Проверяем настройки…</div>
+                        </div>
+                        <div class="dash-stat" data-state="check" data-stat="proxy">
+                            <div class="dash-stat-head"><span class="dash-stat-icon">⇄</span><span>Сеть</span></div>
+                            <div class="dash-stat-value" id="dashProxyValue">—</div>
+                            <div class="dash-stat-hint" id="dashProxyHint">Проверяем соединение…</div>
                         </div>
                     </div>
 
                     <div class="card">
                         <div class="card-header">
                             <h2 class="card-title">Публикация постов</h2>
-                            <p class="card-desc">Основной рабочий модуль: сбор постов из Telegram, фильтрация, AI-рерайт и публикация в целевые каналы.</p>
+                            <p class="card-desc">Сбор, обработка и публикация контента из Telegram.</p>
                         </div>
                         <div class="card-body">
                             <div class="dash-modules" id="dashModules">
@@ -1135,7 +1210,7 @@
                                     </div>
                                     <p class="dash-module-desc">Сбор, обработка и публикация постов в ваши Telegram-каналы.</p>
                                     <ul class="dash-module-checks" id="dashModPostsChecks">
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Лицензия</span><span class="dash-check-meta">Проверка…</span></li>
+                                        <li><span class="dash-check">·</span><span class="dash-check-text">Telegram API</span><span class="dash-check-meta">Проверка…</span></li>
                                         <li><span class="dash-check">·</span><span class="dash-check-text">Telegram API</span><span class="dash-check-meta">Проверка…</span></li>
                                         <li><span class="dash-check">·</span><span class="dash-check-text">AI</span><span class="dash-check-meta">Проверка…</span></li>
                                         <li><span class="dash-check">·</span><span class="dash-check-text">Источники</span><span class="dash-check-meta">Проверка…</span></li>
@@ -1152,13 +1227,13 @@
                     <div class="card">
                         <div class="card-header">
                             <h2 class="card-title">Быстрые действия</h2>
-                            <p class="card-desc">Переход напрямую к настройке нужной части приложения.</p>
+                            <p class="card-desc">Часто используемые действия.</p>
                         </div>
                         <div class="card-body">
                             <div class="module-launch-actions">
                                 <button class="btn btn-ghost" type="button" data-go-route="posts/ai">Настроить AI</button>
                                 <button class="btn btn-ghost" type="button" data-go-route="posts/parsing">Источники и фильтры</button>
-                                <button class="btn btn-ghost" type="button" data-go-route="posts/proxy">Сеть и прокси</button>
+                                <button class="btn btn-ghost" type="button" data-go-route="posts/proxy">Сеть</button>
                                 <button class="btn btn-ghost" type="button" data-go-route="posts/logs">Открыть журнал</button>
                             </div>
                         </div>
@@ -1195,16 +1270,16 @@
 
                 <section class="route" data-route="posts/dashboard">
                     <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация постов</div>
-                        <h1 class="page-title">Пульт модуля</h1>
-                        <p class="page-desc">Что происходит прямо сейчас: опубликованные посты, пропуски, состояние AI и прокси. Здесь видно, что требует внимания и что работает.</p>
-                        <div class="page-meta"><span class="badge badge-info" id="postsDashModuleState">—</span><span class="badge">Модуль 1.1</span></div>
+                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
+                        <h1 class="page-title">Публикации</h1>
+                        <p class="page-desc">Статистика, ошибки и следующий шаг.</p>
+                        <div class="page-meta"><span class="badge badge-info" id="postsDashModuleState">—</span></div>
                     </div>
 
                     <div class="card module-launch-card" id="postsOverviewLaunchCard">
                         <div class="card-header">
                             <h2 class="card-title">Быстрый запуск модуля</h2>
-                            <p class="card-desc">Локальное управление модулем «Публикация постов» прямо на обзорной странице.</p>
+                            <p class="card-desc">Управление обработкой постов.</p>
                         </div>
                         <div class="card-body">
                             <div class="module-launch-actions">
@@ -1336,12 +1411,12 @@
 
                 <section class="route" data-route="posts/ai">
                     <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация постов</div>
-                        <h1 class="page-title">Настройка AI</h1>
-                        <p class="page-desc">Конфигурация нейросети для рерайта постов: локальный сервер (LM Studio, Ollama) или облачный провайдер (OpenRouter, DeepSeek).</p>
+                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
+                        <h1 class="page-title">AI</h1>
+                        <p class="page-desc">Выберите установленную локальную модель или подключите облачный API.</p>
                         <div class="page-meta">
-                            <span class="badge badge-info">Активный модуль</span>
-                            <span class="badge">Модуль 1.2</span>
+                            
+                            
                         </div>
                     </div>
                     <div class="mod-health" data-module="posts">
@@ -1352,7 +1427,7 @@
                     </div>
                     <form id="form-ai" autocomplete="off">
                         <div class="card">
-                            <div class="card-header"><h2 class="card-title">Режим работы</h2><p class="card-desc">Выберите, как бот будет обращаться к нейросети. От этого зависит набор полей ниже.</p></div>
+                            <div class="card-header"><h2 class="card-title">Режим работы</h2><p class="card-desc">Локальная модель или облачный API.</p></div>
                             <div class="card-body">
                                 <div class="form-group full">
                                     <label class="form-label" for="ai_mode">Источник модели</label>
@@ -1360,7 +1435,7 @@
                                         <option value="LOCAL">Локально (Ollama / LM Studio)</option>
                                         <option value="REMOTE">Облако (OpenRouter / DeepSeek / API)</option>
                                     </select>
-                                    <div class="form-hint">Локальный режим работает без интернета к API, но требует запущенного сервера. Облако — нужен валидный API-ключ.</div>
+                                    <div class="form-hint">Локальная модель работает на вашем компьютере. Для облака понадобится API-ключ.</div>
                                 </div>
                             </div>
                         </div>
@@ -1389,11 +1464,11 @@
                                 <div class="form-group full">
                                     <label class="form-label" for="system_prompt">Системный промпт для ИИ</label>
                                     <textarea name="system_prompt" id="system_prompt" rows="4" placeholder="Например: Ты — редактор канала про технологии. Перепиши текст кратко, в стиле casual, без эмодзи."></textarea>
-                                    <div class="form-hint">Это поле влияет на AI и хранится в общем блоке настроек. Если оставить пустым — используется встроенный шаблон SMM-редактора.</div>
+                                    <div class="form-hint">Необязательно. Используется для настройки стиля переписывания текста.</div>
                                 </div>
                             </div>
                             <div class="card-footer">
-                                <div class="meta">Изменения вступают в силу после сохранения и применяются к следующему циклу парсинга.</div>
+                                <div class="meta">Изменения применятся к следующему циклу.</div>
                                 <button type="button" class="btn btn-primary" data-save="form-ai">Сохранить настройки AI</button>
                             </div>
                         </div>
@@ -1402,10 +1477,10 @@
 
                 <section class="route" data-route="posts/parsing">
                     <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация постов</div>
-                        <h1 class="page-title">Настройка парсинга</h1>
+                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
+                        <h1 class="page-title">Источники и правила</h1>
                         <p class="page-desc">Источники, темы, задержки и фильтры. Эти параметры определяют, что бот забирает, как обрабатывает и куда публикует.</p>
-                        <div class="page-meta"><span class="badge badge-info">Активный модуль</span><span class="badge">Модуль 1.3</span></div>
+                        <div class="page-meta"></div>
                     </div>
                     <div class="mod-health" data-module="posts">
                         <div class="mod-health-item" data-h="bot"><span class="mod-health-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></span><div class="mod-health-body"><div class="mod-health-label">Парсер</div><div class="mod-health-value" data-hv="bot">—</div><div class="mod-health-hint" data-hh="bot">—</div></div></div>
@@ -1509,10 +1584,10 @@
 
                 <section class="route" data-route="posts/proxy">
                     <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация постов</div>
-                        <h1 class="page-title">VPN / Proxy</h1>
+                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
+                        <h1 class="page-title">Сеть</h1>
                         <p class="page-desc">Настройте сетевое подключение модуля за четыре шага. Все поля сохранятся после финального шага.</p>
-                        <div class="page-meta"><span class="badge">Модуль 1.3</span></div>
+                        <div class="page-meta"></div>
                     </div>
 
                     <div class="wizard-steps" id="wizardSteps">
@@ -1641,7 +1716,7 @@
                                     <div class="callout-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
                                     <div class="callout-body">
                                         <p class="callout-title">Применение</p>
-                                        <p class="callout-text">Прокси тестируется на следующем цикле. Ошибки попадают в «Консоль (логи)».</p>
+                                        <p class="callout-text">Прокси тестируется на следующем цикле. Ошибки попадают в «Журнал».</p>
                                     </div>
                                 </div>
                             </div>
@@ -1658,15 +1733,15 @@
 
                 <section class="route" data-route="posts/logs">
                     <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация постов</div>
-                        <h1 class="page-title">Консоль (логи)</h1>
-                        <p class="page-desc">Журнал событий модуля публикации: парсинг, AI-ответы, отправка, ошибки Telegram API и сети. Обновляется автоматически каждые 2 секунды.</p>
-                        <div class="page-meta"><span class="badge badge-info">Активный модуль</span><span class="badge">Модуль 1.4</span></div>
+                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
+                        <h1 class="page-title">Журнал</h1>
+                        <p class="page-desc">События, предупреждения и ошибки обновляются автоматически.</p>
+                        <div class="page-meta"></div>
                     </div>
                     <div class="callout info">
                         <div class="callout-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></div>
                         <div class="callout-body">
-                            <p class="callout-title">Системный журнал</p>
+                            <p class="callout-title">Журнал</p>
                             <p class="callout-text">Журнал показывает события всех модулей системы. Фильтры позволяют сосредоточиться на нужном уровне.</p>
                         </div>
                     </div>
@@ -1688,46 +1763,41 @@
 
                 <section class="route" data-route="posts/faq">
                     <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация постов</div>
-                        <h1 class="page-title">Инструкция и FAQ</h1>
-                        <p class="page-desc">Быстрый старт, частые ошибки и решения для модуля «Публикация постов».</p>
-                        <div class="page-meta"><span class="badge badge-info">Активный модуль</span><span class="badge">Модуль 1.5</span></div>
+                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Справка</div>
+                        <h1 class="page-title">Помощь</h1>
+                        <p class="page-desc">Короткие ответы по настройке, запуску и ошибкам.</p>
                     </div>
                     <div class="faq-toolbar">
                         <div class="faq-search">
-                            <input type="text" placeholder="Поиск по FAQ… (например, ERR-201)" data-faq-search>
+                            <input type="text" placeholder="Найти ответ или код ошибки…" data-faq-search aria-label="Поиск по справке">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                         </div>
                     </div>
                     <div class="card">
-                        <div class="card-header"><h2 class="card-title">Быстрый старт</h2><p class="card-desc">Пять шагов от установки до первого опубликованного поста.</p></div>
+                        <div class="card-header"><h2 class="card-title">Первый запуск</h2></div>
                         <div class="card-body">
-                            <ol style="margin: 0; padding-left: 20px; color: var(--text-2); line-height: 1.8; font-size: 13.5px;">
-                                <li>Укажите ключи API Telegram (<code>tg_api_id</code>, <code>tg_api_hash</code>, <code>bot_token</code>).</li>
-                                <li>Настройте нейросеть (Локально или Облако) в модуле <strong>1.1 Настройка AI</strong>.</li>
-                                <li>Добавьте ссылки на доноров и категории для публикации в модуле <strong>1.2 Настройка парсинга</strong>.</li>
-                                <li>При необходимости настройте прокси — кнопка <strong>Прокси</strong> в верхней панели.</li>
-                                <li>Нажмите кнопку запуска в правом верхнем углу. Ошибки и статусы — в <strong>1.4 Консоль (логи)</strong>.</li>
+                            <ol class="quick-start-list">
+                                <li><span>01</span><div><strong>Подключите Telegram</strong><p>Заполните API ID, API Hash и токен бота в разделе «Источники и правила».</p></div></li>
+                                <li><span>02</span><div><strong>Выберите AI</strong><p>Укажите установленную локальную модель или облачный API.</p></div></li>
+                                <li><span>03</span><div><strong>Добавьте источники и маршруты</strong><p>Укажите каналы-доноры и пары «тема → целевой канал».</p></div></li>
+                                <li><span>04</span><div><strong>Запустите публикацию</strong><p>Используйте кнопку запуска вверху. Результаты и ошибки видны в журнале.</p></div></li>
                             </ol>
                         </div>
                     </div>
-                    <div class="faq-category">ERR-10X · Лицензия и запуск</div>
-                    <details class="faq-item" data-faq><summary>ERR-101 — Ключ не найден</summary><div class="body"><p>Программа ещё ни разу не активировалась. Перейдите на экран активации и введите ключ, который выдаст разработчик на основе вашего HWID.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-102 — Чужое железо</summary><div class="body"><p>Ключ не совпадает с текущим компьютером (HWID изменился — например, после замены материнской платы). Обратитесь к разработчику за новым ключом, передав ему текущий HWID.</p></div></details>
-                    <div class="faq-category">ERR-20X · Telegram API и сессия</div>
-                    <details class="faq-item" data-faq><summary>ERR-201 — Ошибка API</summary><div class="body"><p>Неверные данные приложения Telegram (<code>tg_api_id</code> / <code>tg_api_hash</code>). Проверьте правильность ввода на <code>my.telegram.org</code>.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-202 — Неверный токен</summary><div class="body"><p>Ошибка в токене от <code>@BotFather</code>. Запросите новый токен и обновите поле <code>bot_token</code>.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-203 — Сессия аннулирована</summary><div class="body"><p>Сессия Telegram закрыта с удалённой стороны. Перезапустите парсер — он создаст новую сессию.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-204 — Спам-блок / FloodWait</summary><div class="body"><p>Telegram временно заморозил запросы. Ничего делать не нужно — бот сам подождёт нужное время и продолжит работу.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-205 — Бот не админ</summary><div class="body"><p>Бот-отправщик не добавлен в целевой канал или не имеет прав публикации. Добавьте бота как администратора с правом «Публикация сообщений».</p></div></details>
-                    <div class="faq-category">ERR-30X · Сеть и прокси</div>
-                    <details class="faq-item" data-faq><summary>ERR-301 — Прокси не отвечает</summary><div class="body"><p>Программа не может связаться с сервером. Проверьте интернет-соединение или замените прокси. Текущий статус — в верхней панели.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-302 — Неверный логин/пароль</summary><div class="body"><p>Опечатка в авторизации прокси-сервера. Перепроверьте <code>proxy_user</code> и <code>proxy_pass</code>.</p></div></details>
-                    <div class="faq-category">ERR-40X · Нейросеть (AI)</div>
-                    <details class="faq-item" data-faq><summary>ERR-401 — LM Studio выключен</summary><div class="body"><p>Бот не может достучаться до нейросети на ПК. Проверьте, запущен ли локальный сервер (LM Studio, Ollama) и совпадают ли хост/порт в настройках.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-402 — Модель не загружена</summary><div class="body"><p>Сервер работает, но в нём не выбрана модель. Загрузите нужную модель в LM Studio / Ollama и убедитесь, что имя в настройках совпадает.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-403 — Облако недоступно</summary><div class="body"><p>Не удалось связаться с облачным провайдером. Проверьте <code>remote_url</code>, <code>remote_api_key</code> и баланс на аккаунте провайдера.</p></div></details>
-                    <div class="faq-empty" data-faq-empty style="display:none;">Ничего не найдено по запросу «<span data-faq-empty-q></span>».</div>
+                    <div class="faq-category">Telegram</div>
+                    <details class="faq-item" data-faq><summary>ERR-201 — Telegram API не принимает данные</summary><div class="body"><p>Проверьте API ID и API Hash на <code>my.telegram.org</code>. Введите их без пробелов.</p></div></details>
+                    <details class="faq-item" data-faq><summary>ERR-202 — Неверный токен бота</summary><div class="body"><p>Создайте или обновите токен через <code>@BotFather</code>. Бот должен быть администратором целевого канала с правом публикации.</p></div></details>
+                    <details class="faq-item" data-faq><summary>ERR-203 — Telegram-сессия не работает</summary><div class="body"><p>Остановите приложение, проверьте файл сессии и авторизацию Telegram, затем запустите снова. Не удаляйте файл сессии, если не уверены, что он не нужен.</p></div></details>
+                    <details class="faq-item" data-faq><summary>ERR-204 — FloodWait</summary><div class="body"><p>Telegram временно ограничил запросы. Обычно ничего делать не нужно: парсер ждёт и повторяет попытку позже.</p></div></details>
+                    <details class="faq-item" data-faq><summary>ERR-205 — Бот не может публиковать</summary><div class="body"><p>Добавьте бота в целевой канал и выдайте право публикации сообщений.</p></div></details>
+                    <div class="faq-category">Сеть</div>
+                    <details class="faq-item" data-faq><summary>ERR-301 — Прокси недоступен</summary><div class="body"><p>Проверьте хост, порт и доступность сервера. На странице «Сеть» используйте проверку соединения перед сохранением.</p></div></details>
+                    <details class="faq-item" data-faq><summary>ERR-302 — Неверные учётные данные прокси</summary><div class="body"><p>Проверьте имя пользователя и пароль. Для прокси без авторизации оставьте поля пустыми.</p></div></details>
+                    <div class="faq-category">AI</div>
+                    <details class="faq-item" data-faq><summary>ERR-401 — Локальный AI недоступен</summary><div class="body"><p>Запустите Ollama или LM Studio и убедитесь, что нужная модель установлена и доступна.</p></div></details>
+                    <details class="faq-item" data-faq><summary>ERR-402 — Модель не найдена</summary><div class="body"><p>Обновите список моделей в настройках AI. Если модель не отображается, загрузите её в выбранном локальном провайдере.</p></div></details>
+                    <details class="faq-item" data-faq><summary>ERR-403 — Облачный AI недоступен</summary><div class="body"><p>Проверьте адрес API, ключ, выбранную модель и баланс у провайдера.</p></div></details>
+                    <div class="faq-empty" data-faq-empty hidden>Ничего не найдено по запросу «<span data-faq-empty-q></span>».</div>
                 </section>
 
                 
@@ -1795,13 +1865,13 @@ const NAV_CONFIG = {
         label: 'Публикация постов',
         moduleColor: 'posts',
         routes: {
-            'posts/overview': { title: 'Обзор системы',              crumb: 'Обзор системы' },
-            'posts/dashboard':{ title: 'Пульт модуля',               crumb: 'Пульт модуля' },
-            'posts/ai':       { title: 'Настройка AI',               crumb: 'Настройка AI' },
-            'posts/parsing':  { title: 'Настройка парсинга',         crumb: 'Настройка парсинга' },
-            'posts/proxy':    { title: 'VPN / Proxy',                crumb: 'VPN / Proxy' },
-            'posts/logs':     { title: 'Консоль (логи)',             crumb: 'Консоль (логи)' },
-            'posts/faq':      { title: 'Инструкция и FAQ',           crumb: 'Инструкция и FAQ' },
+            'posts/overview': { title: 'Обзор',              crumb: 'Обзор' },
+            'posts/dashboard':{ title: 'Публикации',               crumb: 'Публикации' },
+            'posts/ai':       { title: 'AI',               crumb: 'AI' },
+            'posts/parsing':  { title: 'Источники и правила',         crumb: 'Источники и правила' },
+            'posts/proxy':    { title: 'Сеть',                crumb: 'Сеть' },
+            'posts/logs':     { title: 'Журнал',             crumb: 'Журнал' },
+            'posts/faq':      { title: 'Помощь',           crumb: 'Помощь' },
         }
     }
 };
