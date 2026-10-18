@@ -171,4 +171,90 @@ function inertDocument() {
     assert.equal(contentEl.scrollTop, 0, "navigation should reset scroll position");
 }
 
-console.log("Admin startup/navigation regression tests passed (5 groups).");
+async function testLocalAiModelUi() {
+    // A custom remote host must never trigger a hidden server-side URL fetch.
+    {
+        const elements = {
+            local_ai_provider: { value: "ollama" },
+            local_model: { value: "qwen2.5:7b" },
+            localModelOptions: { textContent: "", options: [], appendChild(option) { this.options.push(option); } },
+            local_host: { value: "192.168.1.20" },
+            local_port: { value: "11434" },
+            refreshLocalModelsBtn: { disabled: false },
+            localModelStatus: { textContent: "", dataset: {} },
+        };
+        let requests = 0;
+        const sandbox = {
+            document: {
+                getElementById(id) { return elements[id] || null; },
+                createElement() { return { value: "", textContent: "" }; },
+            },
+            fetch: async () => { requests += 1; throw new Error("unexpected request"); },
+            _localAiModelRequest: 0,
+        };
+        evaluateFunctions(["localAiDefaultPort", "setLocalAiModelStatus", "refreshLocalAiModels"], sandbox);
+        await sandbox.refreshLocalAiModels();
+        assert.equal(requests, 0, "custom remote host must not be queried by the model-discovery API");
+        assert.match(elements.localModelStatus.textContent, /удалённого хоста/i);
+    }
+
+    // The standard local provider populates model suggestions and preserves the saved model.
+    {
+        const elements = {
+            local_ai_provider: { value: "ollama" },
+            local_model: { value: "qwen2.5:7b" },
+            localModelOptions: { textContent: "", options: [], appendChild(option) { this.options.push(option); } },
+            local_host: { value: "127.0.0.1" },
+            local_port: { value: "11434" },
+            refreshLocalModelsBtn: { disabled: false },
+            localModelStatus: { textContent: "", dataset: {} },
+        };
+        let requestUrl = "";
+        const sandbox = {
+            document: {
+                getElementById(id) { return elements[id] || null; },
+                createElement() { return { value: "", textContent: "" }; },
+            },
+            fetch: async url => {
+                requestUrl = url;
+                return {
+                    ok: true,
+                    json: async () => ({ models: ["qwen2.5:7b", "llama3.2:3b"] }),
+                };
+            },
+            _localAiModelRequest: 0,
+        };
+        evaluateFunctions(["localAiDefaultPort", "setLocalAiModelStatus", "refreshLocalAiModels"], sandbox);
+        await sandbox.refreshLocalAiModels();
+        assert.equal(requestUrl, "/api/ai/models?provider=ollama");
+        assert.deepEqual(elements.localModelOptions.options.map(option => option.value), ["qwen2.5:7b", "llama3.2:3b"]);
+        assert.equal(elements.local_model.value, "qwen2.5:7b");
+        assert.equal(elements.localModelStatus.dataset.state, "success");
+        assert.equal(elements.refreshLocalModelsBtn.disabled, false);
+    }
+
+    // Switching providers changes a standard default port but preserves a custom endpoint.
+    {
+        const host = { value: "127.0.0.1" };
+        const port = { value: "1234" };
+        const sandbox = {
+            document: { getElementById(id) { return id === "local_host" ? host : (id === "local_port" ? port : null); } },
+        };
+        evaluateFunctions(["localAiDefaultPort", "setLocalAiProviderFields"], sandbox);
+        sandbox.setLocalAiProviderFields("ollama", "lmstudio");
+        assert.equal(port.value, "11434");
+
+        host.value = "192.168.1.20";
+        port.value = "5050";
+        sandbox.setLocalAiProviderFields("lmstudio", "ollama");
+        assert.equal(host.value, "192.168.1.20");
+        assert.equal(port.value, "5050");
+    }
+}
+
+testLocalAiModelUi()
+    .then(() => console.log("Admin startup/navigation and local AI UI regressions passed (8 groups)."))
+    .catch(error => {
+        console.error(error);
+        process.exitCode = 1;
+    });
