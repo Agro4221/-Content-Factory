@@ -2830,7 +2830,7 @@ async function callLegacyPostsAction(action) {
                 toggleData = {};
             }
             if (toggleRes.status === 403) {
-                toast({ type: 'warn', title: 'Лицензия', text: 'Сначала активируйте лицензию!' });
+                toast({ type: 'warn', title: 'Доступ запрещён', text: 'Приложение отклонило запуск. Проверьте настройки доступа.' });
                 return { ok: false, data: toggleData };
             }
             if (!toggleRes.ok) {
@@ -2862,7 +2862,7 @@ async function callModuleAction(moduleId, action) {
         const data = await res.json();
 
         if (res.status === 403) {
-            toast({ type: 'warn', title: 'Лицензия', text: 'Сначала активируйте лицензию!' });
+            toast({ type: 'warn', title: 'Доступ запрещён', text: 'Приложение отклонило запрос. Проверьте настройки доступа.' });
             return { ok: false, data };
         }
 
@@ -3302,6 +3302,13 @@ async function saveSettings(formId, sourceBtn) {
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
 
+    if (formId === 'form-ai' && normalizeAiMode(data.ai_mode) === 'LOCAL'
+        && !String(data.local_model || '').trim()) {
+        toast({ type: 'warn', title: 'Выберите модель', text: 'Запустите Ollama или LM Studio и выберите установленную модель.' });
+        setSaveState(btn, 'error', 'Выберите модель');
+        return;
+    }
+
     if (formId === 'form-parsing') {
         const topics = Object.create(null);
         document.querySelectorAll('.dynamic-row').forEach(row => {
@@ -3342,8 +3349,8 @@ async function saveSettings(formId, sourceBtn) {
             body: JSON.stringify(data),
         });
         if (res.status === 403) {
-            toast({ type: 'warn', title: 'Лицензия', text: 'Сначала активируйте лицензию.' });
-            setSaveState(btn, 'error', 'Нет лицензии');
+            toast({ type: 'warn', title: 'Доступ запрещён', text: 'Приложение отклонило сохранение настроек.' });
+            setSaveState(btn, 'error', 'Нет доступа');
             return;
         }
         const result = await res.json().catch(() => ({}));
@@ -3370,6 +3377,8 @@ async function saveSettings(formId, sourceBtn) {
             toast({ type: 'success', title: 'Сохранено', text: 'Настройки применены.' });
             setSaveState(btn, 'success', 'Готово');
             markSaved(formId);
+            _dashCache.settings = { ...(_dashCache.settings || {}), ...data };
+            renderDashboardFromCache();
             if (formId === 'form-proxy') {
                 fetchProxyStatus();
             } else {
@@ -4249,8 +4258,6 @@ function renderProxyReadonly(settings) {
    HUMAN TRANSLATIONS — для известных кодов ошибок
    ============================================================ */
 const LOG_TRANSLATIONS = {
-    'ERR-101': 'Не активировано. Введите лицензионный ключ.',
-    'ERR-102': 'Лицензия не подходит для этого HWID.',
     'ERR-201': 'Telegram API: проверьте tg_api_id / tg_api_hash.',
     'ERR-202': 'Невалидный токен бота. Запросите новый у @BotFather.',
     'ERR-203': 'Сессия Telegram аннулирована. Перезапустите парсер.',
@@ -4319,45 +4326,11 @@ function syncWorkflowStep() {
 /* ============================================================
    СЕРВЕРНЫЕ ЧАСЫ (сайдбар) И ФОРМАТ ВРЕМЕНИ ЛОГОВ
    ============================================================ */
-let _sidebarClockTimer = null;
-let _serverTimeSyncTimer = null;
-let _serverTimeOffsetMs = 0;
-
 function formatDisplayDateTime(d) {
     const p = n => String(n).padStart(2, '0');
     return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
 }
 
-function getServerNow() {
-    return new Date(Date.now() + _serverTimeOffsetMs);
-}
-
-async function syncServerTime() {
-    try {
-        const t0 = Date.now();
-        const res = await fetch('/api/time');
-        if (!res.ok) return;
-        const data = await res.json();
-        const t1 = Date.now();
-        const serverNow = Number(data.epoch_ms) + (t1 - t0) / 2;
-        _serverTimeOffsetMs = serverNow - Date.now();
-    } catch (e) { /* silent */ }
-}
-
-function updateSidebarClock() {
-    const el = document.getElementById('sidebarClock');
-    if (!el) return;
-    el.textContent = formatDisplayDateTime(getServerNow());
-}
-
-async function startSidebarClock() {
-    await syncServerTime();
-    updateSidebarClock();
-    if (_sidebarClockTimer) clearInterval(_sidebarClockTimer);
-    _sidebarClockTimer = setInterval(updateSidebarClock, 1000);
-    if (_serverTimeSyncTimer) clearInterval(_serverTimeSyncTimer);
-    _serverTimeSyncTimer = setInterval(syncServerTime, 60000);
-}
 
 function formatLogTime(tsOrLog) {
     if (tsOrLog && typeof tsOrLog === 'object') {
@@ -4628,7 +4601,6 @@ function setupModuleButtons() {
 const _pollTimers = {
     logs: null,
     bot: null,
-    license: null,
     posts: null,
     proxy: null,
 };
@@ -4646,14 +4618,14 @@ function startPollingTimers() {
     stopPollingTimers();
     _pollTimers.logs = setInterval(fetchLogs, 2000);
     _pollTimers.bot = setInterval(refreshBotStatus, 5000);
-    _pollTimers.license =    _pollTimers.posts = setInterval(refreshPostsStats, 15000);
+    _pollTimers.posts = setInterval(refreshPostsStats, 15000);
     _pollTimers.proxy = setInterval(fetchProxyStatus, 10000);
 }
 
 window.addEventListener('DOMContentLoaded', () => {
     loadState();
     applyShellState();
-    startSidebarClock();
+    setupTheme();
     setupSidebar();
     setupSidebarCollapse();
     setupSaveButtons();
@@ -4683,14 +4655,6 @@ window.addEventListener('DOMContentLoaded', () => {
 
 window.addEventListener('beforeunload', () => {
     stopPollingTimers();
-    if (_sidebarClockTimer) {
-        clearInterval(_sidebarClockTimer);
-        _sidebarClockTimer = null;
-    }
-    if (_serverTimeSyncTimer) {
-        clearInterval(_serverTimeSyncTimer);
-        _serverTimeSyncTimer = null;
-    }
     if (_saveMeta.timer) {
         clearInterval(_saveMeta.timer);
         _saveMeta.timer = null;
