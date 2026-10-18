@@ -58,6 +58,9 @@ jobs:
       - name: Test topic settings UI
         run: node tests/test_topic_channels_ui.cjs
 
+      - name: Test admin startup and navigation
+        run: node tests/test_admin_startup_safety.cjs
+
       - name: Run complete regression suite
         run: python -m pytest -q tests
 

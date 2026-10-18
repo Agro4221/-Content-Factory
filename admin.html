@@ -37,6 +37,7 @@
 
             /* Borders — separation by spacing first, then by hairline */
             --border-subtle: #181d28;
+            --border-soft:   #202638;
             --border:        #232a3a;
             --border-strong: #36405a;
 
@@ -227,7 +228,7 @@
         .module-status-dot[data-state="stopped"] { background: var(--text-mute); }
         .module-status-dot[data-state="starting"],
         .module-status-dot[data-state="stopping"] {
-            background: var(--warning);
+            background: var(--warn);
             box-shadow: 0 0 8px rgba(252, 176, 69, 0.45);
         }
         .module-status-dot[data-state="development"] {
@@ -352,10 +353,10 @@
 
         .topbar-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
         .topbar-runner { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-        .split-menu-status {
+        .split-menu-status { display: inline-flex; align-items: center; font-size: 11px; }
         .split-menu-status.ready { color: var(--success); }
         .split-menu-status.dev { color: var(--text-mute); }
-        .split-menu-status.warn { color: var(--warning); }
+        .split-menu-status.warn { color: var(--warn); }
         .split-menu-status.danger { color: var(--danger); }
 
         /* Status pill — restrained, never loud */
@@ -965,6 +966,7 @@
         /* ============================================================
            ONBOARDING CHECKLIST
            ============================================================ */
+        @media (max-width: 1100px) {
             .type-grid { grid-template-columns: 1fr; }
             .content-inner { padding: 32px 24px 80px; }
         }
@@ -1002,6 +1004,9 @@
             .btn-run { padding: 6px 12px; font-size: 12px; }
             .split-main { padding-left: 12px; padding-right: 12px; }
         }
+        /* Route visibility is a functional requirement, not decoration. */
+        .route:not(.active) { display: none !important; }
+        .route.active { display: block; }
     </style>
 </head>
 <body>
@@ -1030,9 +1035,11 @@
                     <svg class="nav-group-arrow" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 1L7 5L3 9" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
                 <div class="nav-group-items"><div>
+                    <a class="nav-item" href="#" data-route="posts/overview"><span class="nav-item-index">1.0</span><span class="nav-item-label">Обзор системы</span></a>
                     <a class="nav-item" href="#" data-route="posts/dashboard"><span class="nav-item-index">1.1</span><span class="nav-item-label">Пульт модуля</span></a>
                     <a class="nav-item" href="#" data-route="posts/ai"><span class="nav-item-index">1.2</span><span class="nav-item-label">Настройка AI</span></a>
                     <a class="nav-item" href="#" data-route="posts/parsing"><span class="nav-item-index">1.3</span><span class="nav-item-label">Настройка парсинга</span></a>
+                    <a class="nav-item" href="#" data-route="posts/proxy"><span class="nav-item-index">1.4</span><span class="nav-item-label">Сеть и прокси</span></a>
                     <a class="nav-item" href="#" data-route="posts/logs"><span class="nav-item-index">1.4</span><span class="nav-item-label">Консоль (логи)</span></a>
                     <a class="nav-item" href="#" data-route="posts/faq"><span class="nav-item-index">1.5</span><span class="nav-item-label">Инструкция и FAQ</span></a>
                 </div></div>
@@ -1059,12 +1066,11 @@
             <nav class="breadcrumbs" id="breadcrumbs" aria-label="Хлебные крошки"></nav>
             <div class="topbar-actions">
 <span class="label">Лицензия</span><span id="licenseText">проверка</span>
-                </span>
                 <button type="button" class="pill proxy proxy-btn" id="proxyPill" data-state="check" title="Настройки VPN / Proxy">
                     <span class="dot"></span><span class="label">Прокси</span><span id="proxyText">—</span>
                 </button>
                 <div class="topbar-runner" id="topbarRunner">
-                    <button class="btn btn-success btn-run" id="botToggleBtn" data-state="stopped" type="button" onclick="handleModuleAction('posts')">
+                    <button class="btn btn-success btn-run" id="botToggleBtn" data-state="stopped" type="button">
                         <svg id="botIcon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                         <span id="botLabel">Запустить</span>
                     </button>
@@ -1083,111 +1089,81 @@
 
                 <section class="route" data-route="posts/overview">
                     <div class="page-header">
-                        <div class="page-eyebrow"><span class="dot"></span> Система</div>
+                        <div class="page-eyebrow"><span class="dot"></span> Панель управления</div>
                         <h1 class="page-title">Обзор системы</h1>
-                        <p class="page-desc">Сводка по лицензии, боту и модулям. Здесь видно, что настроено и какой шаг нужно сделать следующим.</p>
+                        <p class="page-desc">Текущее состояние парсера, настроек и публикаций. Управление и настройка доступны в разделах слева.</p>
                         <div class="page-meta">
-                            <span class="badge" id="dashUpdatedAt">обновлено только что</span>
+                            <span class="badge" id="dashUpdatedAt">Загрузка состояния…</span>
                         </div>
                     </div>
 
-                    <!-- Top stats: License / Bot / Proxy / Modules -->
                     <div class="dash-stats" id="dashStats">
+                        <div class="dash-stat" data-state="check" data-stat="license">
+                            <div class="dash-stat-head"><span class="dash-stat-icon">✓</span><span>Лицензия</span></div>
                             <div class="dash-stat-value" id="dashLicenseValue">—</div>
-                            <div class="dash-stat-hint" id="dashLicenseHint">проверка</div>
+                            <div class="dash-stat-hint" id="dashLicenseHint">Проверка статуса…</div>
                         </div>
                         <div class="dash-stat" data-state="check" data-stat="bot">
-                            <div class="dash-stat-head">
-                                <span class="dash-stat-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>
-                                <span>Парсер</span>
-                            </div>
+                            <div class="dash-stat-head"><span class="dash-stat-icon">▶</span><span>Парсер</span></div>
                             <div class="dash-stat-value" id="dashBotValue">—</div>
-                            <div class="dash-stat-hint" id="dashBotHint">—</div>
+                            <div class="dash-stat-hint" id="dashBotHint">Получаем состояние…</div>
                         </div>
                         <div class="dash-stat" data-state="check" data-stat="proxy">
-                            <div class="dash-stat-head">
-                                <span class="dash-stat-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
-                                <span>Прокси</span>
-                            </div>
+                            <div class="dash-stat-head"><span class="dash-stat-icon">↔</span><span>Сеть</span></div>
                             <div class="dash-stat-value" id="dashProxyValue">—</div>
-                            <div class="dash-stat-hint" id="dashProxyHint">—</div>
+                            <div class="dash-stat-hint" id="dashProxyHint">Проверка соединения…</div>
                         </div>
                         <div class="dash-stat" data-state="check" data-stat="modules">
-                            <div class="dash-stat-head">
-                                <span class="dash-stat-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></span>
-                                <span>Модули</span>
-                            </div>
+                            <div class="dash-stat-head"><span class="dash-stat-icon">▦</span><span>Настройки</span></div>
                             <div class="dash-stat-value" id="dashModulesValue">—</div>
-                            <div class="dash-stat-hint" id="dashModulesHint">—</div>
+                            <div class="dash-stat-hint" id="dashModulesHint">Проверка готовности…</div>
                         </div>
                     </div>
 
-                    <!-- Module health -->
                     <div class="card">
                         <div class="card-header">
-                            <h2 class="card-title">Готовность модулей</h2>
-                            <p class="card-desc">Кликните на модуль, чтобы открыть его. Зелёный — работает, серый — остановлен, красный — требуется проверка.</p>
+                            <h2 class="card-title">Публикация постов</h2>
+                            <p class="card-desc">Основной рабочий модуль: сбор постов из Telegram, фильтрация, AI-рерайт и публикация в целевые каналы.</p>
                         </div>
                         <div class="card-body">
                             <div class="dash-modules" id="dashModules">
-                                <div class="dash-module" data-mod="posts" data-state="check" data-target="posts/dashboard">
+                                <div class="dash-module" data-mod="posts" data-state="check" data-target="posts/dashboard" role="button" tabindex="0" aria-label="Открыть пульт публикации постов">
                                     <div class="dash-module-head">
                                         <span class="dash-module-dot"></span>
                                         <span class="dash-module-name">Публикация постов</span>
-                                        <span class="badge badge-success" id="dashModPostsBadge">—</span>
+                                        <span class="badge badge-info" id="dashModPostsBadge">Проверка…</span>
                                     </div>
-                                    <p class="dash-module-desc">Парсинг каналов-доноров, рерайт через ИИ, публикация в целевые каналы.</p>
+                                    <p class="dash-module-desc">Сбор, обработка и публикация постов в ваши Telegram-каналы.</p>
                                     <ul class="dash-module-checks" id="dashModPostsChecks">
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Лицензия</span><span class="dash-check-meta">—</span></li>
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Telegram API</span><span class="dash-check-meta">—</span></li>
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">AI</span><span class="dash-check-meta">—</span></li>
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Источники</span><span class="dash-check-meta">—</span></li>
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Категории</span><span class="dash-check-meta">—</span></li>
-                                        <li style="border-top: 1px solid var(--border-subtle); margin-top: 4px; padding-top: 8px;">
-                                            <span class="dash-check ok" id="dashModPostsPubIcon">✓</span>
-                                            <span class="dash-check-text">Опубликовано постов</span>
-                                            <span class="dash-check-meta" id="dashModPostsPublished">—</span>
-                                        </li>
-                                        <li>
-                                            <span class="dash-check" id="dashModPostsSkipIcon">·</span>
-                                            <span class="dash-check-text">Пропущено</span>
-                                            <span class="dash-check-meta" id="dashModPostsSkipped">—</span>
-                                        </li>
-                                        <li>
-                                            <span class="dash-check" id="dashModPostsLastIcon">·</span>
-                                            <span class="dash-check-text">Последний пост</span>
-                                            <span class="dash-check-meta" id="dashModPostsLast">—</span>
-                                        </li>
+                                        <li><span class="dash-check">·</span><span class="dash-check-text">Лицензия</span><span class="dash-check-meta">Проверка…</span></li>
+                                        <li><span class="dash-check">·</span><span class="dash-check-text">Telegram API</span><span class="dash-check-meta">Проверка…</span></li>
+                                        <li><span class="dash-check">·</span><span class="dash-check-text">AI</span><span class="dash-check-meta">Проверка…</span></li>
+                                        <li><span class="dash-check">·</span><span class="dash-check-text">Источники</span><span class="dash-check-meta">Проверка…</span></li>
+                                        <li><span class="dash-check">·</span><span class="dash-check-text">Категории и получатели</span><span class="dash-check-meta">Проверка…</span></li>
                                     </ul>
                                     <div class="dash-module-foot">
-                                        <span class="dash-module-link">Открыть модуль <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
-                                    </div>
-                                </div>
-                                    <p class="dash-module-desc">Имитация поведения пользователей на внешних сайтах: переходы, клики, время на странице.</p>
-                                    <ul class="dash-module-checks" id="dashModBhChecks">
-                                        <li><span class="dash-check dev">W</span><span class="dash-check-text">Сценарии</span><span class="dash-check-meta">в плане</span></li>
-                                        <li><span class="dash-check dev">W</span><span class="dash-check-text">Гео-таргетинг</span><span class="dash-check-meta">в плане</span></li>
-                                        <li><span class="dash-check dev">W</span><span class="dash-check-text">Лимиты</span><span class="dash-check-meta">в плане</span></li>
-                                    </ul>
-                                    <div class="dash-module-foot">
-                                        <span class="dash-module-link">Открыть модуль <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
-                                    </div>
-                                </div>
-                                    <p class="dash-module-desc">Публикация отзывов на Google Maps через пул аккаунтов с прогревом и ротацией.</p>
-                                    <ul class="dash-module-checks" id="dashModRvChecks">
-                                        <li><span class="dash-check dev">W</span><span class="dash-check-text">Аккаунты</span><span class="dash-check-meta">в плане</span></li>
-                                        <li><span class="dash-check dev">W</span><span class="dash-check-text">Прогрев</span><span class="dash-check-meta">в плане</span></li>
-                                        <li><span class="dash-check dev">W</span><span class="dash-check-text">Публикация</span><span class="dash-check-meta">в плане</span></li>
-                                    </ul>
-                                    <div class="dash-module-foot">
-                                        <span class="dash-module-link">Открыть модуль <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+                                        <span class="dash-module-link">Открыть пульт <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Next action -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title">Быстрые действия</h2>
+                            <p class="card-desc">Переход напрямую к настройке нужной части приложения.</p>
+                        </div>
+                        <div class="card-body">
+                            <div class="module-launch-actions">
+                                <button class="btn btn-ghost" type="button" data-go-route="posts/ai">Настроить AI</button>
+                                <button class="btn btn-ghost" type="button" data-go-route="posts/parsing">Источники и фильтры</button>
+                                <button class="btn btn-ghost" type="button" data-go-route="posts/proxy">Сеть и прокси</button>
+                                <button class="btn btn-ghost" type="button" data-go-route="posts/logs">Открыть журнал</button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="card dash-next" id="dashNext">
                         <div class="card-body">
                             <div class="dash-next-body">
@@ -1196,29 +1172,26 @@
                                 </div>
                                 <div class="dash-next-text">
                                     <p class="dash-next-title" id="dashNextTitle">Следующее действие</p>
-                                    <p class="dash-next-desc"  id="dashNextDesc">—</p>
+                                    <p class="dash-next-desc" id="dashNextDesc">Загружаем настройки и состояние приложения…</p>
                                 </div>
-                                <button class="btn btn-primary" id="dashNextBtn" type="button">Перейти →</button>
+                                <button class="btn btn-primary" id="dashNextBtn" type="button">Проверить настройки →</button>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Recent activity -->
-                    <div class="card" style="margin-bottom: 0;">
-                        <div class="card-header" style="display: flex; align-items: center; justify-content: space-between;">
+                    <div class="card">
+                        <div class="card-header">
                             <div>
                                 <h2 class="card-title">Последние события</h2>
-                                <p class="card-desc">Самые свежие записи системного журнала. Полный журнал — в модуле 1.4.</p>
+                                <p class="card-desc">Свежие события работы парсера. Нажмите на журнал для подробностей.</p>
                             </div>
-                            <button class="btn btn-ghost" type="button" onclick="navigate('posts/logs')">Открыть журнал →</button>
+                            <button class="btn btn-ghost" type="button" data-go-route="posts/logs">Все события →</button>
                         </div>
-                        <div class="card-body" id="dashRecent"></div>
+                        <div class="card-body" id="dashRecent">
+                            <div class="dash-empty-recent">Загружаем журнал…</div>
+                        </div>
                     </div>
                 </section>
-
-                <!-- ============================================================
-                     МОДУЛЬ 1: ПУБЛИКАЦИЯ ПОСТОВ — ПУЛЬТ МОДУЛЯ
-                     ============================================================ -->
 
                 <section class="route" data-route="posts/dashboard">
                     <div class="page-header">
@@ -2314,6 +2287,7 @@ function setSplitTone(tone) {
 }
 
 function closeSplitMenu() {
+    const menu = document.getElementById('botSplitMenu');
     const arrow = document.getElementById('botSplitArrow');
     if (menu) menu.classList.remove('open');
     if (arrow) arrow.setAttribute('aria-expanded', 'false');
@@ -2321,6 +2295,7 @@ function closeSplitMenu() {
 }
 
 function toggleSplitMenu() {
+    const menu = document.getElementById('botSplitMenu');
     const arrow = document.getElementById('botSplitArrow');
     if (!menu || !arrow) return;
     state.splitMenuOpen = !state.splitMenuOpen;
@@ -3406,10 +3381,20 @@ const ONBOARDING_STEPS = [
    ============================================================ */
 function setupDashboard() {
     document.querySelectorAll('.dash-module').forEach(card => {
-        card.addEventListener('click', () => {
+        const open = () => {
             const target = card.dataset.target;
             if (target) navigate(target);
+        };
+        card.addEventListener('click', open);
+        card.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                open();
+            }
         });
+    });
+    document.querySelectorAll('[data-go-route]').forEach(button => {
+        button.addEventListener('click', () => navigate(button.dataset.goRoute));
     });
 }
 
@@ -4097,22 +4082,24 @@ function translateLog(type) {
    WORKFLOW STEPPER
    ============================================================ */
 function setupWorkflow() {
-    document.querySelectorAll('.workflow-step').forEach(step => {
+    const steps = Array.from(document.querySelectorAll('.workflow-step'));
+    if (!steps.length) return;
+    steps.forEach(step => {
         step.addEventListener('click', () => {
-            const target = step.dataset.stepTarget;
-            if (target && typeof navigate === 'function') navigate(target);
+            const target = step.dataset.stepTarget || step.dataset.route;
+            if (target) navigate(target);
         });
     });
     syncWorkflowStep();
 }
 
 function syncWorkflowStep() {
-    // Подсвечиваем шаг, который соответствует активному маршруту.
-    // Маппинг: шаги 1-2 ведут в reviews/accounts, 3-6 в reviews/settings, 7 в reviews/logs.
+    const steps = Array.from(document.querySelectorAll('.workflow-step'));
+    if (!steps.length) return;
     const route = state.currentRoute;
-    let activeIdx = order.indexOf(route);
-    document.querySelectorAll('.workflow-step').forEach((step, i) => {
-        step.classList.toggle('current', i === activeIdx);
+    steps.forEach(step => {
+        const target = step.dataset.stepTarget || step.dataset.route;
+        step.classList.toggle('current', target === route);
     });
 }
 
@@ -4336,6 +4323,7 @@ function setupBotButton() {
     const mainBtn = document.getElementById('botToggleBtn');
     const arrowBtn = document.getElementById('botSplitArrow');
     const splitWrap = document.getElementById('botSplitBtn');
+    const splitMenu = document.getElementById('botSplitMenu');
     const startAll = document.getElementById('menuStartAll');
     const stopAll = document.getElementById('menuStopAll');
 
