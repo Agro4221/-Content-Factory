@@ -2287,6 +2287,7 @@ function setSplitTone(tone) {
 }
 
 function closeSplitMenu() {
+    const menu = document.getElementById('botSplitMenu');
     const arrow = document.getElementById('botSplitArrow');
     if (menu) menu.classList.remove('open');
     if (arrow) arrow.setAttribute('aria-expanded', 'false');
@@ -2294,6 +2295,7 @@ function closeSplitMenu() {
 }
 
 function toggleSplitMenu() {
+    const menu = document.getElementById('botSplitMenu');
     const arrow = document.getElementById('botSplitArrow');
     if (!menu || !arrow) return;
     state.splitMenuOpen = !state.splitMenuOpen;
