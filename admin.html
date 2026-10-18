@@ -1868,21 +1868,6 @@ function parseTopicChannels(raw) {
     }
 }
 
-function buildOnboardState(settings, licenseActive) {
-    const topics = parseTopicChannels(settings && settings.topic_channels);
-    const aiMode = normalizeAiMode(settings && settings.ai_mode);
-    return {
-        license: !!licenseActive,
-        tg:      !!(settings && settings.tg_api_id && String(settings.tg_api_id).trim() &&
-                    settings.tg_api_hash && String(settings.tg_api_hash).trim() &&
-                    settings.bot_token && String(settings.bot_token).trim()),
-        ai:      !!(aiMode && ((aiMode === 'LOCAL' && settings.local_model) ||
-                    (aiMode === 'REMOTE' && settings.remote_model))),
-        sources: !!(settings && settings.sources && settings.sources.trim().length > 0),
-        targets: Object.keys(topics).length > 0,
-    };
-}
-
 /* ============================================================
    КОНФИГУРАЦИЯ МОДУЛЕЙ И РОУТОВ
    ============================================================ */
@@ -1915,9 +1900,9 @@ const state = {
     logFilters: new Map(),                 // scope -> level
     lastLogs: new Map(),                   // scope -> logs[]
     modules: {},                           // module_id -> runtime payload
-    modulesSummary: {                      // summary from /api/modules/status
-        total_modules: 3,
-        active_modules: 3,
+    modulesSummary: {
+        total_modules: 1,
+        active_modules: 1,
         running_modules: 0,
         running_active_modules: 0,
         all_active_running: false,
@@ -2266,44 +2251,27 @@ function setModuleSelected(moduleId, selected) {
 function buildLegacyPayload(postsStatus = 'stopped') {
     const running = postsStatus === 'running';
     return {
-        modules: [
-            {
-                id: 'posts',
-                name: MODULE_NAMES.posts,
-                status: running ? 'running' : 'stopped',
-                state: running ? 'running' : 'stopped',
-                running,
-                available: true,
-                in_development: false,
-            },
-            {
-                status: 'stopped',
-                state: 'development',
-                running: false,
-                available: false,
-                in_development: true,
-            },
-            {
-                status: 'stopped',
-                state: 'development',
-                running: false,
-                available: false,
-                in_development: true,
-            },
-        ],
+        modules: [{
+            id: 'posts',
+            name: MODULE_NAMES.posts,
+            status: running ? 'running' : 'stopped',
+            state: running ? 'running' : 'stopped',
+            running,
+            available: true,
+            in_development: false,
+        }],
         summary: {
-            total_modules: 3,
-            active_modules: 3,
+            total_modules: 1,
+            active_modules: 1,
             running_modules: running ? 1 : 0,
             running_active_modules: running ? 1 : 0,
-            all_active_running: false,
+            all_active_running: running,
             any_running: running,
-            mixed: running,
+            mixed: false,
             no_active_modules: false,
         },
     };
 }
-
 async function refreshLegacyPostsStatus() {
     try {
         const res = await fetch('/api/bot/status');
@@ -3073,15 +3041,10 @@ function setupProxyPillNavigation() {
    дашборд по мере их обновления. Это избавляет от необходимости
    прокидывать состояние через 4 разные функции.
    ============================================================ */
-const _dashCache = { license: null, bot: null, settings: null };
+const _dashCache = { bot: 'stopped', settings: null };
 function renderDashboardFromCache() {
-    // Рисуем только когда есть хотя бы settings (минимально нужны для модуля).
     if (!_dashCache.settings) return;
-    renderDashboard(
-        _dashCache.license === true,
-        _dashCache.bot || 'stopped',
-        _dashCache.settings || {}
-    );
+    renderDashboard(_dashCache.bot || 'stopped', _dashCache.settings);
     renderDashRecent((state.lastLogs.get('posts') || []).slice(0, 6));
 }
 
@@ -3121,11 +3084,9 @@ async function loadSettings() {
             }
         }
 
-        // Onboarding: derive completion state from loaded settings + license API
-        const onboardState = buildOnboardState(data, _dashCache.license === true);
-        renderOnboarding(onboardState);
-
-        // Дашборд: кешируем настройки и рисуем
+        // Dashboard uses settings returned by the real settings API.
+        // The old onboarding renderer was removed with the licensing UI; do not
+        // call a missing function here, or hydration will abort before this cache updates.
         _dashCache.settings = data;
         renderDashboardFromCache();
 
@@ -3609,130 +3570,103 @@ function startSaveMetaTicker() {
      3. Прокси настроен?
      4. Что нужно сделать прямо сейчас?
    ============================================================ */
-function renderDashboard(licenseActive, botStatus, settings) {
-    // -- 1. License stat --
-    const licCard = document.querySelector('.dash-stat[data-stat="license"]');
-    const licVal  = document.getElementById('dashLicenseValue');
-    const licHint = document.getElementById('dashLicenseHint');
-    if (licCard && licVal && licHint) {
-        if (licenseActive) {
-            licCard.dataset.state = 'ok';
-            licVal.textContent = 'Активна';
-            licHint.textContent = 'доступ ко всем функциям';
-        } else {
-            licCard.dataset.state = 'err';
-            licVal.textContent = 'Не активирована';
-            licHint.textContent = 'откройте экран активации';
+function renderDashboard(botStatus, settings) {
+    if (!settings) return;
+
+    const sources = String(settings.sources || '').split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    const topics = parseTopicChannels(settings.topic_channels);
+    const topicCount = Object.keys(topics).length;
+    const telegramReady = !!(
+        String(settings.tg_api_id || '').trim()
+        && String(settings.tg_api_hash || '').trim()
+        && String(settings.bot_token || '').trim()
+    );
+    const localMode = aiModeIsLocal(settings.ai_mode);
+    const model = localMode
+        ? String(settings.local_model || '').trim()
+        : String(settings.remote_model || '').trim();
+    const aiReady = !!model && (localMode || (
+        String(settings.remote_api_key || '').trim()
+        && String(settings.remote_url || '').trim()
+    ));
+
+    const setStat = (name, value, hint, status) => {
+        const card = document.querySelector(`.dash-stat[data-stat="${name}"]`);
+        const valueEl = document.getElementById(`dash${name.charAt(0).toUpperCase() + name.slice(1)}Value`);
+        const hintEl = document.getElementById(`dash${name.charAt(0).toUpperCase() + name.slice(1)}Hint`);
+        if (card) card.dataset.state = status || 'check';
+        if (valueEl) valueEl.textContent = value;
+        if (hintEl) hintEl.textContent = hint;
+    };
+
+    setStat(
+        'bot',
+        botStatus === 'running' ? 'Работает' : 'Остановлен',
+        botStatus === 'running' ? 'обработка активна' : 'готов к запуску',
+        botStatus === 'running' ? 'ok' : 'warn'
+    );
+    setStat(
+        'ai',
+        aiReady ? 'Настроен' : 'Не настроен',
+        aiReady ? (localMode ? 'локальная модель выбрана' : 'облачный провайдер задан') : 'выберите модель и сохраните',
+        aiReady ? 'ok' : 'warn'
+    );
+    const sourceCountLabel = sources.length === 1 ? 'канал' : (sources.length > 1 && sources.length < 5 ? 'канала' : 'каналов');
+    setStat(
+        'sources',
+        sources.length ? String(sources.length) : 'Нет',
+        sources.length ? sourceCountLabel + ' добавлено' : 'добавьте каналы-доноры',
+        sources.length ? 'ok' : 'warn'
+    );
+    const proxyDisplay = getProxyDisplayStatus(settings);
+    setStat('proxy', proxyDisplay.value, proxyDisplay.hint, proxyDisplay.state);
+
+    const checks = [
+        { ok: telegramReady, label: 'Telegram', meta: telegramReady ? 'ключи указаны' : 'нужны API ID, Hash и токен' },
+        { ok: aiReady, label: 'AI', meta: model || 'модель не выбрана' },
+        { ok: sources.length > 0, label: 'Источники', meta: sources.length ? `${sources.length} канал(а/ов)` : 'добавьте источник' },
+        { ok: topicCount > 0, label: 'Маршруты', meta: topicCount ? `${topicCount} тем настроено` : 'сопоставьте тему и канал' },
+    ];
+    renderDashChecks('dashModPostsChecks', checks);
+
+    const postsCard = document.querySelector('.dash-module[data-mod="posts"]');
+    const badge = document.getElementById('dashModPostsBadge');
+    if (postsCard) {
+        const allOk = checks.every(check => check.ok);
+        const noneOk = checks.every(check => !check.ok);
+        postsCard.dataset.state = allOk ? 'ok' : (noneOk ? 'err' : 'warn');
+        if (badge) {
+            badge.textContent = allOk ? 'Готов к запуску' : (noneOk ? 'Требует настройки' : 'Нужно завершить настройку');
+            badge.className = allOk ? 'badge badge-success' : (noneOk ? 'badge badge-danger' : 'badge badge-warn');
         }
     }
 
-    // -- 2. Bot stat --
-    const botCard = document.querySelector('.dash-stat[data-stat="bot"]');
-    const botVal  = document.getElementById('dashBotValue');
-    const botHint = document.getElementById('dashBotHint');
-    if (botCard && botVal && botHint) {
-        if (botStatus === 'running') {
-            botCard.dataset.state = 'ok';
-            botVal.textContent = 'Работает';
-            botHint.textContent = 'парсинг идёт по кругам';
-        } else {
-            botCard.dataset.state = 'warn';
-            botVal.textContent = 'Остановлен';
-            botHint.textContent = 'нажмите кнопку запуска в шапке';
-        }
-    }
-
-    // -- 3. Proxy stat --
-    const proxyCard = document.querySelector('.dash-stat[data-stat="proxy"]');
-    const proxyVal  = document.getElementById('dashProxyValue');
-    const proxyHint = document.getElementById('dashProxyHint');
-    if (proxyCard && proxyVal && proxyHint) {
-        const proxyDisplay = getProxyDisplayStatus(settings);
-        proxyCard.dataset.state = proxyDisplay.state;
-        proxyVal.textContent = proxyDisplay.value;
-        proxyHint.textContent = proxyDisplay.hint;
-    }
-
-    // -- 4. Modules stat --
-    const modCard = document.querySelector('.dash-stat[data-stat="modules"]');
-    const modVal  = document.getElementById('dashModulesValue');
-    const modHint = document.getElementById('dashModulesHint');
-    if (modCard && modVal && modHint) {
-        const postsOk = licenseActive
-            && settings
-            && (settings.tg_api_id || '').toString().trim()
-            && (settings.tg_api_hash || '').trim()
-            && (settings.bot_token || '').trim()
-            && (settings.sources || '').trim()
-            && Object.keys(parseTopicChannels(settings.topic_channels)).length > 0;
-        modCard.dataset.state = postsOk ? 'ok' : 'warn';
-        modVal.textContent = postsOk ? 'Готов' : '1 / 3';
-        modHint.textContent = postsOk ? 'парсер готов к работе' : 'основной модуль требует настройки';
-    }
-
-    // -- Module cards: Posts --
-    if (settings) {
-        const tgOk  = (settings.tg_api_id || '').toString().trim() && (settings.tg_api_hash || '').trim() && (settings.bot_token || '').trim();
-        const aiOk  = aiModeIsLocal(settings.ai_mode)
-            ? !!(settings.local_model || '').trim()
-            : !!(settings.remote_model || '').trim() && !!(settings.remote_api_key || '').trim();
-        const srcOk = !!(settings.sources || '').trim();
-        const topics = parseTopicChannels(settings.topic_channels);
-        const tgtOk = Object.keys(topics).length > 0;
-        const checks = [
-            { ok: licenseActive, label: 'Лицензия' },
-            { ok: tgOk,          label: 'Telegram API' },
-            { ok: aiOk,          label: 'AI', meta: aiModeIsLocal(settings.ai_mode) ? settings.local_model : settings.remote_model },
-            { ok: srcOk,         label: 'Источники', meta: srcOk ? settings.sources.split('\n').filter(Boolean).length + ' каналов' : '' },
-            { ok: tgtOk,         label: 'Категории', meta: tgtOk ? Object.keys(topics).length + ' пар' : '' },
-        ];
-        renderDashChecks('dashModPostsChecks', checks);
-        const postsCard = document.querySelector('.dash-module[data-mod="posts"]');
-        if (postsCard) {
-            const allOk = checks.every(c => c.ok);
-            const noneOk = !licenseActive && !tgOk && !aiOk && !srcOk && !tgtOk;
-            if (allOk)      { postsCard.dataset.state = 'ok';    document.getElementById('dashModPostsBadge').textContent = 'Готов';       document.getElementById('dashModPostsBadge').className = 'badge badge-success'; }
-            else if (noneOk){ postsCard.dataset.state = 'err';   document.getElementById('dashModPostsBadge').textContent = 'Не настроен'; document.getElementById('dashModPostsBadge').className = 'badge badge-danger'; }
-            else            { postsCard.dataset.state = 'warn';  document.getElementById('dashModPostsBadge').textContent = 'Частично';   document.getElementById('dashModPostsBadge').className = 'badge badge-warn'; }
-        }
-    }
-
-    // -- Next action: derive from state --
     const nextTitle = document.getElementById('dashNextTitle');
-    const nextDesc  = document.getElementById('dashNextDesc');
-    const nextBtn   = document.getElementById('dashNextBtn');
+    const nextDesc = document.getElementById('dashNextDesc');
+    const nextBtn = document.getElementById('dashNextBtn');
     if (nextTitle && nextDesc && nextBtn) {
-        let action = null;
-        if (!licenseActive) {
-            action = { title: 'Активировать лицензию', desc: 'Без лицензии остальные модули заблокированы. Введите ключ разработчика.', route: null, label: 'Открыть экран активации' };
-        } else if (settings && !(settings.tg_api_id || '').toString().trim()) {
-            action = { title: 'Указать Telegram API', desc: 'tg_api_id, tg_api_hash и bot_token нужны для подключения к Telegram.', route: 'posts/parsing', label: 'Перейти к настройке' };
-        } else if (settings && !(aiModeIsLocal(settings.ai_mode) ? (settings.local_model || '').trim() : (settings.remote_model || '').trim())) {
-            action = { title: 'Настроить AI', desc: 'Выберите локальный или облачный провайдер и укажите модель.', route: 'posts/ai', label: 'Открыть настройки AI' };
-        } else if (settings && !(settings.sources || '').trim()) {
-            action = { title: 'Добавить источники', desc: 'Укажите каналы-доноры, откуда бот будет брать посты.', route: 'posts/parsing', label: 'Добавить источники' };
+        let action;
+        if (!telegramReady) {
+            action = { title: 'Подключите Telegram', desc: 'Добавьте API ID, API Hash и токен бота.', route: 'posts/parsing', label: 'Настроить Telegram' };
+        } else if (!aiReady) {
+            action = { title: 'Выберите модель AI', desc: 'Укажите установленную локальную модель или облачный API.', route: 'posts/ai', label: 'Настроить AI' };
+        } else if (!sources.length) {
+            action = { title: 'Добавьте источники', desc: 'Укажите Telegram-каналы, из которых брать публикации.', route: 'posts/parsing', label: 'Добавить источники' };
+        } else if (!topicCount) {
+            action = { title: 'Настройте маршруты публикации', desc: 'Свяжите темы с целевыми Telegram-каналами.', route: 'posts/parsing', label: 'Настроить маршруты' };
         } else if (botStatus !== 'running') {
-            action = { title: 'Запустить модули', desc: 'Всё настроено. Можно начинать работу активных модулей.', route: null, label: 'Запустить модули' };
+            action = { title: 'Всё готово к запуску', desc: 'Проверьте настройки и запустите обработку постов.', run: true, label: 'Запустить парсер' };
         } else {
-            action = { title: 'Система работает', desc: 'Все модули в норме. Следите за консолью и публикациями.', route: 'posts/logs', label: 'Открыть консоль' };
+            action = { title: 'Публикация запущена', desc: 'Новые события, предупреждения и ошибки появятся в журнале.', route: 'posts/logs', label: 'Открыть журнал' };
         }
         nextTitle.textContent = action.title;
-        nextDesc.textContent  = action.desc;
-        nextBtn.textContent   = action.label + ' →';
-        nextBtn.onclick = () => {
-            if (!action.route) {
-                // Special: license activation opens /activate in same window
-                if (!licenseActive) window.location.href = '/activate';
-                else if (botStatus !== 'running') toggleBot();
-            } else {
-                navigate(action.route);
-            }
-        };
+        nextDesc.textContent = action.desc;
+        nextBtn.textContent = action.label + ' →';
+        nextBtn.onclick = () => action.run ? toggleBot() : navigate(action.route);
     }
 
-    // -- Updated at --
-    const upd = document.getElementById('dashUpdatedAt');
-    if (upd) upd.textContent = 'обновлено только что';
+    const updated = document.getElementById('dashUpdatedAt');
+    if (updated) updated.textContent = 'Состояние обновляется автоматически';
 }
 
 function renderDashChecks(containerId, checks) {
