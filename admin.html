@@ -1,20 +1,10 @@
 <!DOCTYPE html>
-<!-- REFACTORED: world-class premium redesign per expert spec v2.0
-     Архитектура:
-       - 3 root-секции: Публикация постов, Поведенческий фактор, Отзывы
-       - Obsidian design system: restrained color, typed hierarchy, no decoration
-       - Onboarding checklist for first-time / unlicensed users
-       - Proxy setup as guided wizard (4 steps, type-selection cards)
-       - Save button states: idle / loading / success / error
-       - License pill: active / checking / inactive (dignified)
-       - Console with human translations for known error codes
-       - All 14 routes, state isolation per scope, all working JS preserved
--->
+<!-- Content Factory admin: minimal controls for the local publishing pipeline. -->
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#0a0b10">
+    <meta name="theme-color" content="#f5f5f7">
     <title>Marej — Панель управления</title>
     <link rel="icon" type="image/png" href="/favicon.png">
     <link rel="stylesheet" href="/admin.css">
@@ -142,11 +132,10 @@
                                     </div>
                                     <p class="dash-module-desc">Сбор, обработка и публикация постов в ваши Telegram-каналы.</p>
                                     <ul class="dash-module-checks" id="dashModPostsChecks">
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Telegram API</span><span class="dash-check-meta">Проверка…</span></li>
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Telegram API</span><span class="dash-check-meta">Проверка…</span></li>
+                                        <li><span class="dash-check">·</span><span class="dash-check-text">Telegram</span><span class="dash-check-meta">Проверка…</span></li>
                                         <li><span class="dash-check">·</span><span class="dash-check-text">AI</span><span class="dash-check-meta">Проверка…</span></li>
                                         <li><span class="dash-check">·</span><span class="dash-check-text">Источники</span><span class="dash-check-meta">Проверка…</span></li>
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Категории и получатели</span><span class="dash-check-meta">Проверка…</span></li>
+                                        <li><span class="dash-check">·</span><span class="dash-check-text">Маршруты</span><span class="dash-check-meta">Проверка…</span></li>
                                     </ul>
                                     <div class="dash-module-foot">
                                         <span class="dash-module-link">Открыть пульт <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
