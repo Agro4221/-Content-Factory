@@ -107,7 +107,7 @@ async function refreshLocalAiModels(preferredModel = null) {
     const requestId = ++_localAiModelRequest;
     const provider = providerSelect.value === 'ollama' ? 'ollama' : 'lmstudio';
     const currentModel = String(preferredModel === null ? (modelInput.value || '') : preferredModel).trim();
-    const host = String((hostInput && hostInput.value) || '127.0.0.1').trim().toLowerCase();
+    const host = String(hostInput ? hostInput.value : '127.0.0.1').trim().toLowerCase();
     const port = String((portInput && portInput.value) || localAiDefaultPort(provider)).trim();
     const isLoopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host);
 
