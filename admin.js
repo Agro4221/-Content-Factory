@@ -69,11 +69,22 @@ function setupTheme() {
 
 let _localAiModelRequest = 0;
 
-function setLocalAiProviderFields(provider) {
+function localAiDefaultPort(provider) {
+    return provider === 'ollama' ? '11434' : '1234';
+}
+
+function setLocalAiProviderFields(provider, previousProvider = '') {
     const host = document.getElementById('local_host');
     const port = document.getElementById('local_port');
-    if (host) host.value = '127.0.0.1';
-    if (port) port.value = provider === 'ollama' ? '11434' : '1234';
+    if (host && !String(host.value || '').trim()) host.value = '127.0.0.1';
+
+    if (port) {
+        const currentPort = String(port.value || '').trim();
+        const previousDefault = previousProvider ? localAiDefaultPort(previousProvider) : '';
+        if (!currentPort || (previousDefault && currentPort === previousDefault)) {
+            port.value = localAiDefaultPort(provider);
+        }
+    }
 }
 
 function setLocalAiModelStatus(message, stateName = '') {
@@ -86,15 +97,50 @@ function setLocalAiModelStatus(message, stateName = '') {
 
 async function refreshLocalAiModels(preferredModel = null) {
     const providerSelect = document.getElementById('local_ai_provider');
-    const modelSelect = document.getElementById('local_model');
+    const modelInput = document.getElementById('local_model');
+    const modelOptions = document.getElementById('localModelOptions');
+    const hostInput = document.getElementById('local_host');
+    const portInput = document.getElementById('local_port');
     const refreshButton = document.getElementById('refreshLocalModelsBtn');
-    if (!providerSelect || !modelSelect) return;
+    if (!providerSelect || !modelInput || !modelOptions) return;
 
     const requestId = ++_localAiModelRequest;
     const provider = providerSelect.value === 'ollama' ? 'ollama' : 'lmstudio';
-    const currentModel = String(preferredModel === null ? (modelSelect.value || '') : preferredModel).trim();
-    modelSelect.disabled = true;
+    const currentModel = String(preferredModel === null ? (modelInput.value || '') : preferredModel).trim();
+    const host = String((hostInput && hostInput.value) || '127.0.0.1').trim().toLowerCase();
+    const port = String((portInput && portInput.value) || localAiDefaultPort(provider)).trim();
+    const isLoopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host);
+
     if (refreshButton) refreshButton.disabled = true;
+
+    if (!isLoopback) {
+        modelOptions.textContent = '';
+        setLocalAiModelStatus(
+            'Для удалённого хоста укажите имя модели вручную. Автосписок доступен только для локального сервера.',
+            'warn'
+        );
+        if (refreshButton) refreshButton.disabled = false;
+        return;
+    }
+
+    if (!/^\\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+        modelOptions.textContent = '';
+        setLocalAiModelStatus('Укажите корректный порт от 1 до 65535. Имя модели можно ввести вручную.', 'error');
+        if (refreshButton) refreshButton.disabled = false;
+        return;
+    }
+
+    const expectedPort = localAiDefaultPort(provider);
+    if (port !== expectedPort) {
+        modelOptions.textContent = '';
+        setLocalAiModelStatus(
+            'Автосписок работает на стандартном порту ' + expectedPort + '. Для собственного порта укажите имя модели вручную.',
+            'warn'
+        );
+        if (refreshButton) refreshButton.disabled = false;
+        return;
+    }
+
     setLocalAiModelStatus(provider === 'ollama' ? 'Ищем модели в Ollama…' : 'Ищем модели в LM Studio…');
 
     try {
@@ -110,67 +156,37 @@ async function refreshLocalAiModels(preferredModel = null) {
         const names = Array.from(new Set((Array.isArray(payload.models) ? payload.models : [])
             .map(item => String(item || '').trim())
             .filter(Boolean)));
-        modelSelect.textContent = '';
-        if (names.length) {
-            names.forEach(name => {
-                const option = document.createElement('option');
-                option.value = name;
-                option.textContent = name;
-                modelSelect.appendChild(option);
-            });
-            if (currentModel && names.includes(currentModel)) {
-                modelSelect.value = currentModel;
-                setLocalAiModelStatus('Найдено моделей: ' + names.length, 'success');
-            } else if (currentModel) {
-                const missing = document.createElement('option');
-                missing.value = currentModel;
-                missing.textContent = currentModel + ' — не найдена в списке';
-                modelSelect.insertBefore(missing, modelSelect.firstChild);
-                modelSelect.value = currentModel;
-                setLocalAiModelStatus('Текущая модель не обнаружена. Выберите установленную модель.', 'warn');
-            } else {
-                modelSelect.selectedIndex = 0;
-                setLocalAiModelStatus('Найдено моделей: ' + names.length, 'success');
-            }
-        } else {
+        modelOptions.textContent = '';
+        names.forEach(name => {
             const option = document.createElement('option');
-            option.value = '';
-            option.textContent = 'Нет установленных моделей';
-            modelSelect.appendChild(option);
-            if (currentModel) {
-                const saved = document.createElement('option');
-                saved.value = currentModel;
-                saved.textContent = currentModel + ' — сохранённая настройка';
-                modelSelect.appendChild(saved);
-                modelSelect.value = currentModel;
-            }
-            setLocalAiModelStatus('Провайдер ответил, но список моделей пуст. Сначала загрузите модель в приложении.', 'warn');
+            option.value = name;
+            modelOptions.appendChild(option);
+        });
+
+        if (names.length && currentModel && !names.includes(currentModel)) {
+            setLocalAiModelStatus(
+                'Сохранённая модель отсутствует в списке. Проверьте имя или выберите установленную модель.',
+                'warn'
+            );
+        } else if (names.length) {
+            setLocalAiModelStatus('Найдено моделей: ' + names.length, 'success');
+        } else {
+            setLocalAiModelStatus(
+                'Список пуст. Загрузите модель в приложении или введите её имя вручную.',
+                'warn'
+            );
         }
     } catch (error) {
         if (requestId !== _localAiModelRequest) return;
-        modelSelect.textContent = '';
-        if (currentModel) {
-            const saved = document.createElement('option');
-            saved.value = currentModel;
-            saved.textContent = currentModel + ' — сохранённая настройка';
-            modelSelect.appendChild(saved);
-            modelSelect.value = currentModel;
-        } else {
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = 'Список моделей недоступен';
-            modelSelect.appendChild(placeholder);
-        }
+        modelOptions.textContent = '';
         setLocalAiModelStatus(
-            'Не удалось получить модели. Запустите ' + (provider === 'ollama' ? 'Ollama' : 'LM Studio') + ' и нажмите обновить.',
+            'Не удалось получить список. Запустите ' + (provider === 'ollama' ? 'Ollama' : 'LM Studio') +
+            ' или укажите имя модели вручную.',
             'error'
         );
         console.warn('Local AI model discovery failed:', error);
     } finally {
-        if (requestId === _localAiModelRequest) {
-            modelSelect.disabled = false;
-            if (refreshButton) refreshButton.disabled = false;
-        }
+        if (requestId === _localAiModelRequest && refreshButton) refreshButton.disabled = false;
     }
 }
 
@@ -182,33 +198,36 @@ async function setupLocalAiModels(settings = {}) {
     const refreshButton = document.getElementById('refreshLocalModelsBtn');
     if (!providerSelect) return;
 
-    const savedPort = String(settings.local_port || (port && port.value) || '11434');
+    const savedPort = String(settings.local_port || (port && port.value) || '1234');
     providerSelect.value = savedPort === '11434' ? 'ollama' : 'lmstudio';
-    if (host && !host.value) host.value = '127.0.0.1';
-    if (port && !port.value) port.value = providerSelect.value === 'ollama' ? '11434' : '1234';
+    providerSelect.dataset.previousValue = providerSelect.value;
+    if (host && !String(host.value || '').trim()) host.value = '127.0.0.1';
+    if (port && !String(port.value || '').trim()) port.value = localAiDefaultPort(providerSelect.value);
 
     if (providerSelect.dataset.bound !== 'true') {
         providerSelect.dataset.bound = 'true';
         providerSelect.addEventListener('change', () => {
-            setLocalAiProviderFields(providerSelect.value);
-            refreshLocalAiModels('');
+            const previousProvider = providerSelect.dataset.previousValue || '';
+            setLocalAiProviderFields(providerSelect.value, previousProvider);
+            providerSelect.dataset.previousValue = providerSelect.value;
+            void refreshLocalAiModels();
         });
     }
     if (refreshButton && refreshButton.dataset.bound !== 'true') {
         refreshButton.dataset.bound = 'true';
-        refreshButton.addEventListener('click', () => refreshLocalAiModels());
+        refreshButton.addEventListener('click', () => void refreshLocalAiModels());
     }
     if (modeSelect && modeSelect.dataset.localModelsBound !== 'true') {
         modeSelect.dataset.localModelsBound = 'true';
         modeSelect.addEventListener('change', () => {
-            if (aiModeIsLocal(modeSelect.value)) refreshLocalAiModels();
+            if (aiModeIsLocal(modeSelect.value)) void refreshLocalAiModels();
         });
     }
 
     if (aiModeIsLocal((settings.ai_mode || (modeSelect && modeSelect.value) || 'LOCAL'))) {
-        await refreshLocalAiModels(String(settings.local_model || ''));
+        void refreshLocalAiModels(String(settings.local_model || ''));
     } else {
-        setLocalAiModelStatus('Модель будет загружена из выбранного приложения, когда включите локальный режим.');
+        setLocalAiModelStatus('Включите локальный режим, чтобы получить список моделей.');
     }
 }
 
