@@ -1409,7 +1409,9 @@ async function loadSettings() {
                 }
             }
         }
-        if (typeof setupLocalAiModels === 'function') await setupLocalAiModels(data);
+        // Fetch model names in the background; settings and dashboard must not
+        // wait for a local Ollama/LM Studio server that may be turned off.
+        if (typeof setupLocalAiModels === 'function') void setupLocalAiModels(data);
         if (typeof toggleAIFields === 'function') toggleAIFields();
         if (typeof updateProxyFields === 'function') updateProxyFields();
         refreshProxyStatus();
