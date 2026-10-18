@@ -394,6 +394,7 @@ _DEFAULT_SETTINGS: dict[str, str] = {
 
     # --- AI ---
     "ai_mode": "LOCAL",
+    "local_ai_provider": "",
     "local_host": "127.0.0.1",
     "local_port": "1234",
     "local_model": "google/gemma-3-4b",

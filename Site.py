@@ -339,6 +339,17 @@ def _normalize_validated_setting(key: str, value) -> str:
             max_value=POLL_DELAY_MAX,
         )
 
+    if key == "local_ai_provider":
+        normalized = raw.strip().lower()
+        if not normalized:
+            return ""
+        if normalized in {"ollama", "lmstudio"}:
+            return normalized
+        raise SettingsValidationError(
+            field=key,
+            msg="local_ai_provider должен быть ollama или lmstudio.",
+        )
+
     if key == "local_port":
         return _normalize_int_range(
             "local_port",
@@ -798,21 +809,26 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
 
 
 @app.get("/api/ai/models")
-async def api_ai_models(provider: str = Query(default="ollama")) -> dict:
-    """List models already installed in a local Ollama or LM Studio instance.
+async def api_ai_models(
+    provider: str = Query(default="ollama"),
+    port: int | None = Query(default=None, ge=1, le=65535),
+) -> dict:
+    """List models from a provider on loopback, using a validated port.
 
-    Provider URLs are fixed to loopback defaults; the client cannot turn this
-    endpoint into a generic server-side URL fetch.
+    The host is deliberately fixed to loopback so this endpoint cannot become
+    a generic server-side URL fetch. Remote model servers require manual names.
     """
     provider_name = (provider or "").strip().lower()
     endpoints = {
-        "ollama": ("http://127.0.0.1:11434/api/tags", "models", "name"),
-        "lmstudio": ("http://127.0.0.1:1234/v1/models", "data", "id"),
+        "ollama": ("/api/tags", "models", "name", 11434),
+        "lmstudio": ("/v1/models", "data", "id", 1234),
     }
     if provider_name not in endpoints:
         raise HTTPException(status_code=400, detail="Выберите Ollama или LM Studio.")
 
-    url, collection_key, name_key = endpoints[provider_name]
+    api_path, collection_key, name_key, default_port = endpoints[provider_name]
+    target_port = port if port is not None else default_port
+    url = "http://127.0.0.1:" + str(target_port) + api_path
     timeout = aiohttp.ClientTimeout(total=4.0)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:

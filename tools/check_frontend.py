@@ -73,10 +73,13 @@ def check_admin_css(css: str) -> list[str]:
         if nesting != 0:
             errors.append(f"CSS-блок {label} неожиданно вложен на уровне {nesting}.")
 
+    # At tablet widths the source/type grid collapses, while horizontal page
+    # padding belongs on the scroll container (.content), not its nested
+    # .content-inner. Padding the inner wrapper here caused double gutters.
     responsive_block = re.search(
         r"@media\s*\(max-width:\s*1100px\)\s*\{\s*"
         r"\.type-grid\s*\{[^{}]*\}\s*"
-        r"\.content-inner\s*\{[^{}]*\}\s*\}",
+        r"\.content\s*\{[^{}]*\}\s*\}",
         css,
         re.DOTALL,
     )

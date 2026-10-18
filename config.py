@@ -108,7 +108,7 @@ ENV_DEFAULT_SETTINGS: dict[str, str] = {
 
 SETTING_KEYS = frozenset({
     "tg_api_id", "tg_api_hash", "bot_token", "target_channel",
-    "ai_mode", "local_host", "local_port", "local_model",
+    "ai_mode", "local_ai_provider", "local_host", "local_port", "local_model",
     "remote_url", "remote_api_key", "remote_model", "system_prompt",
     "sources", "topic_channels", "ads_words", "watermark_text",
     "poll_delay", "use_proxy", "proxy_type", "proxy_host", "proxy_port",

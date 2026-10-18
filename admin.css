@@ -963,7 +963,7 @@
            ============================================================ */
         @media (max-width: 1100px) {
             .type-grid { grid-template-columns: 1fr; }
-            .content-inner { padding: 32px 24px 80px; }
+            .content { padding: 32px 24px 80px; }
         }
         @media (max-width: 860px) {
             .app { grid-template-columns: 1fr; }
@@ -1099,3 +1099,48 @@
         @media (prefers-reduced-motion: reduce) {
             *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
         }
+
+
+/* Final layout guards: keep grid children from forcing horizontal overflow. */
+.app {
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+}
+.app.sidebar-collapsed {
+    grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr);
+}
+.main, .content, .content-inner, .card, .card-header, .card-body, .card-footer,
+.form-grid > *, .form-group {
+    min-width: 0;
+}
+.form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.form-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.form-hint, .card-desc, .page-desc { overflow-wrap: anywhere; }
+.model-select-row select { min-width: 0; flex: 1 1 auto; }
+.local-model-manual {
+    display: grid;
+    gap: 6px;
+    margin-top: 12px;
+}
+.local-model-manual[hidden] { display: none !important; }
+@media (max-width: 1100px) {
+    .content-inner { padding: 0; }
+    .dash-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+    .app { grid-template-columns: minmax(0, 1fr); }
+    .form-grid, .form-grid.cols-3 { grid-template-columns: minmax(0, 1fr); }
+    .content { padding: 22px 18px 64px; }
+    .breadcrumbs { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .topbar-actions { min-width: 0; }
+}
+@media (max-width: 540px) {
+    .content { padding: 16px 12px 48px; }
+    .dash-stats { grid-template-columns: minmax(0, 1fr); }
+    .model-select-row { align-items: stretch; }
+    .model-refresh-btn { flex-basis: 38px; width: 38px; min-width: 38px; }
+}

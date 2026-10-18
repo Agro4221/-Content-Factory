@@ -89,6 +89,28 @@ def test_lm_studio_returns_model_ids_and_uses_fixed_loopback_url(client, monkeyp
     assert calls == ["http://127.0.0.1:1234/v1/models"]
 
 
+def test_ollama_supports_a_custom_validated_loopback_port(client, monkeypatch):
+    calls = []
+    install_fake_session(monkeypatch, {"models": [{"name": "custom-port-model"}]}, calls)
+
+    response = client.get("/api/ai/models?provider=ollama&port=11435")
+
+    assert response.status_code == 200
+    assert response.json()["models"] == ["custom-port-model"]
+    assert calls == ["http://127.0.0.1:11435/api/tags"]
+
+
+@pytest.mark.parametrize("port", ["0", "65536", "not-a-port"])
+def test_invalid_model_discovery_port_is_rejected_before_network_request(client, monkeypatch, port):
+    calls = []
+    install_fake_session(monkeypatch, {"models": []}, calls)
+
+    response = client.get("/api/ai/models?provider=ollama&port=" + port)
+
+    assert response.status_code == 422
+    assert calls == []
+
+
 def test_unknown_provider_is_rejected_without_network_request(client, monkeypatch):
     calls = []
     install_fake_session(monkeypatch, {"models": []}, calls)
@@ -97,6 +119,15 @@ def test_unknown_provider_is_rejected_without_network_request(client, monkeypatc
 
     assert response.status_code == 400
     assert calls == []
+
+
+def test_local_ai_provider_setting_is_validated():
+    from Site import SettingsValidationError, _normalize_validated_setting
+
+    assert _normalize_validated_setting("local_ai_provider", "ollama") == "ollama"
+    assert _normalize_validated_setting("local_ai_provider", "LMStudio") == "lmstudio"
+    with pytest.raises(SettingsValidationError):
+        _normalize_validated_setting("local_ai_provider", "https://example.com")
 
 
 def test_unavailable_local_provider_returns_clear_error(client, monkeypatch):
