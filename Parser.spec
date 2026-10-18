@@ -33,6 +33,8 @@ PROJECT_MODULES = [
 # Keep resources at the bundle root to match config.py and Site.py paths.
 BUNDLE_ASSETS = (
     "admin.html",
+    "admin.css",
+    "admin.js",
     "activate.html",
     ".env.example",
     "favicon.png",
