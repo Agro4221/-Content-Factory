@@ -103,4 +103,73 @@ function inertDocument() {
     assert.ok(html.includes(".route.active { display: block; }"), "active page must be visible");
 }
 
-console.log("Admin startup/navigation regression tests passed (4 groups).");
+// Exercise the real route function with lightweight DOM elements. This catches
+// runtime errors after the active page has been switched, not just click wiring.
+{
+    function makeElement(dataset) {
+        const classes = new Set();
+        return {
+            dataset,
+            classList: {
+                toggle(name, enabled) {
+                    if (enabled) classes.add(name);
+                    else classes.delete(name);
+                },
+                contains(name) { return classes.has(name); },
+            },
+        };
+    }
+
+    const routeNames = [
+        "posts/overview", "posts/dashboard", "posts/ai",
+        "posts/parsing", "posts/proxy", "posts/logs", "posts/faq",
+    ];
+    const navItems = routeNames.map(route => makeElement({ route }));
+    const sections = routeNames.map(route => makeElement({ route }));
+    const groups = [makeElement({ module: "posts" })];
+    const contentEl = { scrollTop: 123 };
+    const sandbox = {
+        state: {
+            currentRoute: "posts/overview",
+            expandedGroups: new Set(["posts"]),
+            mobileDrawerOpen: false,
+            splitMenuOpen: false,
+        },
+        DEFAULT_ROUTE: "posts/overview",
+        NAV_CONFIG: {
+            posts: {
+                label: "Публикация постов",
+                moduleColor: "posts",
+                routes: Object.fromEntries(routeNames.map(route => [route, { title: route, crumb: route }])),
+            },
+        },
+        document: {
+            querySelectorAll(selector) {
+                if (selector === ".nav-item") return navItems;
+                if (selector === ".nav-group") return groups;
+                if (selector === ".route") return sections;
+                return [];
+            },
+            querySelector(selector) { return selector === ".content" ? contentEl : null; },
+            getElementById() { return null; },
+        },
+        applyExpandedGroups() {},
+        renderBreadcrumbs() {},
+        syncWorkflowStep() {},
+        renderModuleDashboard() {},
+        renderModuleHealthForRoute() {},
+        updateBotButton() {},
+        saveState() { sandbox.saved = true; },
+    };
+
+    evaluateFunctions(["getRouteMeta", "closeSplitMenu", "navigate"], sandbox);
+    assert.doesNotThrow(() => sandbox.navigate("posts/ai"));
+    assert.equal(sandbox.state.currentRoute, "posts/ai");
+    assert.equal(sections.filter(section => section.classList.contains("active")).length, 1);
+    assert.equal(sections[2].classList.contains("active"), true);
+    assert.equal(navItems[2].classList.contains("active"), true);
+    assert.equal(sandbox.saved, true, "route should finish and persist state");
+    assert.equal(contentEl.scrollTop, 0, "navigation should reset scroll position");
+}
+
+console.log("Admin startup/navigation regression tests passed (5 groups).");
