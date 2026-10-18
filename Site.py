@@ -145,6 +145,8 @@ async def protect_admin_panel(request: Request, call_next):
 
 _STATIC_ASSETS: dict[str, str] = {
     "favicon.png": "image/png",
+    "admin.css": "text/css; charset=utf-8",
+    "admin.js": "application/javascript; charset=utf-8",
     "brand-logo.webp": "image/webp",
     "brand-logo.png": "image/png",
     "brand-logo@2x.webp": "image/webp",
