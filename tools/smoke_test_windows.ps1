@@ -52,12 +52,22 @@ try {
         throw "Admin panel page did not return the expected HTML"
     }
 
+    $css = Invoke-WebRequest -Uri "http://127.0.0.1:18765/admin.css" -TimeoutSec 5 -UseBasicParsing
+    if ($css.StatusCode -ne 200 -or $css.Content -notmatch ":root") {
+        throw "Admin stylesheet is not served"
+    }
+
+    $js = Invoke-WebRequest -Uri "http://127.0.0.1:18765/admin.js" -TimeoutSec 5 -UseBasicParsing
+    if ($js.StatusCode -ne 200 -or $js.Content -notmatch "setupTheme") {
+        throw "Admin JavaScript is not served"
+    }
+
     $favicon = Invoke-WebRequest -Uri "http://127.0.0.1:18765/favicon.png" -TimeoutSec 5 -UseBasicParsing
     if ($favicon.StatusCode -ne 200) {
         throw "Bundled favicon is not served"
     }
 
-    Write-Host "Parser.exe smoke test passed: API, admin HTML, and favicon are reachable."
+    Write-Host "Parser.exe smoke test passed: API, admin HTML/CSS/JS, and favicon are reachable."
 }
 catch {
     if (Test-Path $stdout) { Get-Content $stdout }

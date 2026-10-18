@@ -5,18 +5,18 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const html = fs.readFileSync(path.join(__dirname, "..", "admin.html"), "utf8");
+const script = fs.readFileSync(path.join(__dirname, "..", "admin.js"), "utf8");
 const startMarker = "function parseTopicChannels(raw) {";
-const endMarker = "\nfunction buildOnboardState(settings, licenseActive) {";
-const start = html.indexOf(startMarker);
-const end = html.indexOf(endMarker, start);
+const endMarker = "\nfunction applyTheme(theme, persist = false) {";
+const start = script.indexOf(startMarker);
+const end = script.indexOf(endMarker, start);
 
 assert.notEqual(start, -1, "topic settings parser should exist");
-assert.notEqual(end, -1, "topic settings parser should end before onboarding state");
+assert.notEqual(end, -1, "topic settings parser should end before theme setup");
 
 const sandbox = {};
 vm.runInNewContext(
-    html.slice(start, end) + "\nthis.parseTopicChannels = parseTopicChannels;",
+    script.slice(start, end) + "\nthis.parseTopicChannels = parseTopicChannels;",
     sandbox,
     { timeout: 1000 }
 );

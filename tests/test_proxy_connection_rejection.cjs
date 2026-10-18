@@ -5,17 +5,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const adminPath = path.join(__dirname, "..", "admin.html");
-const html = fs.readFileSync(adminPath, "utf8");
+const scriptPath = path.join(__dirname, "..", "admin.js");
+const script = fs.readFileSync(scriptPath, "utf8");
 const startMarker = "async function testProxyConnection(data) {";
 const endMarker = "\nfunction setupProxyPillNavigation()";
-const start = html.indexOf(startMarker);
-const end = html.indexOf(endMarker, start);
+const start = script.indexOf(startMarker);
+const end = script.indexOf(endMarker, start);
 
 assert.notEqual(start, -1, "proxy connection helper should exist");
 assert.notEqual(end, -1, "proxy connection helper should end before navigation setup");
 
-const helperSource = html.slice(start, end).trim();
+const helperSource = script.slice(start, end).trim();
 
 function callProxyCheck(fetchImpl) {
     const sandbox = { fetch: fetchImpl, JSON };

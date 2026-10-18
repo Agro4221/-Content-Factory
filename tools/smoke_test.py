@@ -62,6 +62,8 @@ def main() -> int:
         for path, label in (
             (ADMIN_HTML_PATH, "admin.html"),
             (ACTIVATE_HTML_PATH, "activate.html"),
+            (os.path.join(BUNDLE_DIR, "admin.css"), "admin.css"),
+            (os.path.join(BUNDLE_DIR, "admin.js"), "admin.js"),
         ):
             if not os.path.isfile(path):
                 fail(label, FileNotFoundError(path))
