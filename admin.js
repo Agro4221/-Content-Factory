@@ -124,7 +124,7 @@ function populateLocalAiModelSelect(select, names, preferredModel = '') {
 
     if (selected === '__manual__') {
         select.value = '__manual__';
-    } else if (selected && (seen.has(selected) || !seen.has(selected))) {
+    } else if (selected) {
         select.value = selected;
     } else {
         select.value = '';
