@@ -11,7 +11,7 @@ const css = fs.readFileSync(path.join(__dirname, "..", "admin.css"), "utf8");
 
 function extractFunction(name) {
     const escaped = name.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp("function " + escaped + "\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}", "m");
+    const pattern = new RegExp("(?:async\\s+)?function " + escaped + "\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}", "m");
     const match = script.match(pattern);
     assert.ok(match, "function " + name + " should exist");
     return match[0];
