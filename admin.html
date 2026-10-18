@@ -1034,6 +1034,13 @@
         .theme-toggle-btn:focus-visible, .btn:focus-visible, .nav-item:focus-visible, .nav-group-toggle:focus-visible {
             outline: 3px solid var(--accent-ring); outline-offset: 2px;
         }
+        .model-select-row { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
+        .model-select-row select { min-width: 0; flex: 1; }
+        .model-refresh-btn { flex: 0 0 40px; width: 40px; min-width: 40px; padding: 0; justify-content: center; font-size: 19px; }
+        .model-refresh-btn[disabled] { opacity: 0.5; cursor: wait; }
+        #localModelStatus[data-state="error"] { color: var(--danger); }
+        #localModelStatus[data-state="success"] { color: var(--success); }
+        #localModelStatus[data-state="warn"] { color: var(--warn); }
         .quick-start-list { list-style: none; display: grid; gap: 16px; margin: 0; padding: 0; }
         .quick-start-list li { display: grid; grid-template-columns: 36px minmax(0,1fr); gap: 12px; align-items: start; }
         .quick-start-list li > span { color: var(--text-mute); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; padding-top: 2px; }
@@ -1440,12 +1447,31 @@
                             </div>
                         </div>
                         <div class="card" id="local-ai-fields">
-                            <div class="card-header"><h2 class="card-title">Локальный сервер</h2><p class="card-desc">Параметры подключения к LM Studio, Ollama или совместимому OpenAI-API серверу.</p></div>
+                            <div class="card-header">
+                                <h2 class="card-title">Локальная модель</h2>
+                                <p class="card-desc">Выберите приложение. Список загрузится из уже установленных моделей.</p>
+                            </div>
                             <div class="card-body">
                                 <div class="form-grid">
-                                    <div class="form-group"><label class="form-label" for="local_host">Хост (IP)</label><input type="text" name="local_host" id="local_host" placeholder="127.0.0.1"></div>
-                                    <div class="form-group"><label class="form-label" for="local_port">Порт</label><input type="text" name="local_port" id="local_port" placeholder="1234"><div class="form-hint">LM Studio: 1234, Ollama: 11434</div></div>
-                                    <div class="form-group full"><label class="form-label" for="local_model">Модель</label><input type="text" name="local_model" id="local_model" placeholder="google/gemma-3-4b"><div class="form-hint">Имя должно совпадать с загруженной моделью в LM Studio / Ollama.</div></div>
+                                    <div class="form-group">
+                                        <label class="form-label" for="local_ai_provider">Приложение</label>
+                                        <select id="local_ai_provider">
+                                            <option value="ollama">Ollama</option>
+                                            <option value="lmstudio">LM Studio</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" for="local_model">Установленная модель</label>
+                                        <div class="model-select-row">
+                                            <select name="local_model" id="local_model" required aria-describedby="localModelStatus">
+                                                <option value="">Загрузка списка моделей…</option>
+                                            </select>
+                                            <button type="button" class="btn btn-ghost model-refresh-btn" id="refreshLocalModelsBtn" aria-label="Обновить список моделей" title="Обновить список моделей">↻</button>
+                                        </div>
+                                        <div class="form-hint" id="localModelStatus" aria-live="polite">Подключение к локальному AI…</div>
+                                    </div>
+                                    <input type="hidden" name="local_host" id="local_host" value="127.0.0.1">
+                                    <input type="hidden" name="local_port" id="local_port" value="11434">
                                 </div>
                             </div>
                         </div>
@@ -3068,7 +3094,7 @@ async function loadSettings() {
         const data = await res.json();
         for (const key in data) {
             const el = document.querySelector(`[name="${key}"]`);
-            if (el) {
+            if (el && key !== 'local_model') {
                 el.value = data[key];
                 if (key === 'poll_delay') {
                     const dv = document.getElementById('delayValue');
@@ -3076,6 +3102,7 @@ async function loadSettings() {
                 }
             }
         }
+        if (typeof setupLocalAiModels === 'function') await setupLocalAiModels(data);
         if (typeof toggleAIFields === 'function') toggleAIFields();
         if (typeof updateProxyFields === 'function') updateProxyFields();
         refreshProxyStatus();
