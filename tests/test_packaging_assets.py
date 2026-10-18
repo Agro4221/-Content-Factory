@@ -9,6 +9,8 @@ SPEC_PATH = ROOT / "Parser.spec"
 
 REQUIRED_ASSETS = {
     "admin.html",
+    "admin.css",
+    "admin.js",
     "activate.html",
     ".env.example",
     "favicon.png",
