@@ -369,7 +369,7 @@
                                 <div class="form-grid">
                                     <div class="form-group">
                                         <label class="form-label" for="local_ai_provider">Приложение</label>
-                                        <select id="local_ai_provider">
+                                        <select name="local_ai_provider" id="local_ai_provider">
                                             <option value="ollama">Ollama</option>
                                             <option value="lmstudio">LM Studio</option>
                                         </select>
@@ -377,13 +377,20 @@
                                     <div class="form-group">
                                         <label class="form-label" for="local_model">Модель</label>
                                         <div class="model-select-row">
-                                            <input type="text" name="local_model" id="local_model" list="localModelOptions" required
-                                                   autocomplete="off" placeholder="Например, qwen2.5:7b" aria-describedby="localModelStatus">
-                                            <datalist id="localModelOptions"></datalist>
+                                            <select name="local_model" id="local_model" required aria-describedby="localModelStatus">
+                                                <option value="">Загружаем список моделей…</option>
+                                                <option value="__manual__">Ввести имя вручную…</option>
+                                            </select>
                                             <button type="button" class="btn btn-ghost model-refresh-btn" id="refreshLocalModelsBtn"
                                                     aria-label="Обновить список моделей" title="Обновить список моделей">↻</button>
                                         </div>
-                                        <div class="form-hint">Выберите подсказку или введите имя модели вручную.</div>
+                                        <div class="form-hint">Нажмите ↻, чтобы получить список, затем выберите модель.</div>
+                                        <div class="local-model-manual" id="localModelManualWrap" hidden>
+                                            <label class="form-label" for="local_model_manual">Имя модели</label>
+                                            <input type="text" id="local_model_manual" autocomplete="off"
+                                                   placeholder="Например, qwen2.5:7b">
+                                            <div class="form-hint">Укажите точное имя модели из вашего AI-сервера.</div>
+                                        </div>
                                         <div class="form-hint" id="localModelStatus" aria-live="polite">Подключение к локальному AI…</div>
                                     </div>
                                 </div>
@@ -393,12 +400,12 @@
                                         <div class="form-group">
                                             <label class="form-label" for="local_host">Хост</label>
                                             <input type="text" name="local_host" id="local_host" value="127.0.0.1" placeholder="127.0.0.1" autocomplete="off">
-                                            <div class="form-hint">Можно указать IP другого компьютера или собственный адрес.</div>
+                                            <div class="form-hint">Для удалённого сервера список не запрашивается — укажите имя модели вручную.</div>
                                         </div>
                                         <div class="form-group">
                                             <label class="form-label" for="local_port">Порт</label>
                                             <input type="number" name="local_port" id="local_port" min="1" max="65535" value="11434" inputmode="numeric">
-                                            <div class="form-hint">Ollama: 11434 · LM Studio: 1234</div>
+                                            <div class="form-hint">Ollama: 11434 · LM Studio: 1234. Локальный нестандартный порт тоже поддерживается.</div>
                                         </div>
                                     </div>
                                 </details>
