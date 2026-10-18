@@ -1,4 +1,4 @@
-"""Проверяет синтаксис встроенных JavaScript-блоков в admin.html."""
+"""Проверяет CSS/JavaScript админ-панели, загружаемые как отдельные ресурсы."""
 from __future__ import annotations
 
 import re
@@ -10,13 +10,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HTML_PATH = ROOT / "admin.html"
-SCRIPT_TAG = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
- 
-STYLE_TAG = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.IGNORECASE | re.DOTALL)
+CSS_PATH = ROOT / "admin.css"
+JS_PATH = ROOT / "admin.js"
 
 
 def check_admin_css(css: str) -> list[str]:
-    """Catch CSS nesting regressions that break the visual layout and page switching."""
+    """Catch structural CSS regressions that can hide routes or break layouts."""
     errors: list[str] = []
     critical_rules = (
         (r"^\s*\.split-menu-status\s*\{", ".split-menu-status"),
@@ -70,9 +69,9 @@ def check_admin_css(css: str) -> list[str]:
             errors.append(f"Не найден CSS-блок {label}.")
             continue
         opening_brace = css.find("{", match.start(), match.end())
-        depth = depth_before(css, opening_brace)
-        if depth != 0:
-            errors.append(f"CSS-блок {label} неожиданно вложен на уровне {depth}.")
+        nesting = depth_before(css, opening_brace)
+        if nesting != 0:
+            errors.append(f"CSS-блок {label} неожиданно вложен на уровне {nesting}.")
 
     responsive_block = re.search(
         r"@media\s*\(max-width:\s*1100px\)\s*\{\s*"
@@ -90,71 +89,72 @@ def check_admin_css(css: str) -> list[str]:
     if missing_vars:
         errors.append("Не определены CSS-переменные: " + ", ".join(missing_vars) + ".")
 
-    # A balanced brace count alone misses accidental nesting; ensure the file
-    # also returns to the top level at the end, ignoring comments and strings.
     final_depth = depth_before(css, len(css))
     if final_depth != 0:
         errors.append(f"CSS-блоки не сбалансированы (итоговая глубина {final_depth}).")
-
     return errors
 
 
 def main() -> int:
     if shutil.which("node") is None:
-        print("Node.js не найден. Установите Node.js 20+ для проверки admin.html.", file=sys.stderr)
+        print("Node.js не найден. Установите Node.js 20+ для проверки admin.js.", file=sys.stderr)
         return 2
 
-    html = HTML_PATH.read_text(encoding="utf-8")
-    style_blocks = STYLE_TAG.findall(html)
-    if len(style_blocks) != 1:
-        print(f"Ожидался один встроенный CSS-блок, найдено: {len(style_blocks)}.", file=sys.stderr)
+    if not HTML_PATH.is_file() or not CSS_PATH.is_file() or not JS_PATH.is_file():
+        missing = [path.name for path in (HTML_PATH, CSS_PATH, JS_PATH) if not path.is_file()]
+        print("Не найдены ресурсы админки: " + ", ".join(missing), file=sys.stderr)
         return 1
-    css_errors = check_admin_css(style_blocks[0])
+
+    html = HTML_PATH.read_text(encoding="utf-8")
+    css = CSS_PATH.read_text(encoding="utf-8")
+    javascript = JS_PATH.read_text(encoding="utf-8")
+
+    if 'href="/admin.css"' not in html:
+        print("admin.html должен подключать /admin.css.", file=sys.stderr)
+        return 1
+    if 'src="/admin.js"' not in html:
+        print("admin.html должен подключать /admin.js.", file=sys.stderr)
+        return 1
+    if re.search(r"<style\b", html, re.IGNORECASE):
+        print("CSS должен храниться в admin.css, а не во встроенном style-блоке.", file=sys.stderr)
+        return 1
+
+    css_errors = check_admin_css(css)
     if css_errors:
         print("Ошибки структуры CSS админ-панели:", file=sys.stderr)
         for error in css_errors:
             print(f"  - {error}", file=sys.stderr)
         return 1
 
-    scripts = [
-        body
-        for attrs, body in SCRIPT_TAG.findall(html)
-        if not re.search(r"\bsrc\s*=", attrs, re.IGNORECASE) and body.strip()
-    ]
-    if not scripts:
-        print(f"В {HTML_PATH.name} не найден встроенный JavaScript.", file=sys.stderr)
-        return 1
-
-    combined = "\\n".join(scripts)
     stale_calls = (
         "refreshBehaviorStatus()",
         "refreshReviewsStatus()",
         "syncBehaviorFormFromSettings(",
         "syncReviewsFormFromSettings(",
     )
-    found_stale_calls = [call for call in stale_calls if call in combined]
+    found_stale_calls = [call for call in stale_calls if call in javascript]
     if found_stale_calls:
         print("Найдены вызовы удалённых модулей: " + ", ".join(found_stale_calls), file=sys.stderr)
         return 1
 
-    for index, body in enumerate(scripts, start=1):
-        with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:
-            handle.write(body)
-            temp_path = Path(handle.name)
-        try:
-            result = subprocess.run(
-                ["node", "--check", str(temp_path)],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-        finally:
-            temp_path.unlink(missing_ok=True)
-        if result.returncode:
-            print(f"JavaScript-блок #{index} не прошёл синтаксическую проверку:", file=sys.stderr)
-            print(result.stderr or result.stdout, file=sys.stderr)
-            return result.returncode
-    print(f"OK: синтаксис {len(scripts)} встроенного JavaScript-блока(ов) корректен.")
+    with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:
+        handle.write(javascript)
+        temp_path = Path(handle.name)
+    try:
+        result = subprocess.run(
+            ["node", "--check", str(temp_path)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
+    if result.returncode:
+        print("admin.js не прошёл синтаксическую проверку:", file=sys.stderr)
+        print(result.stderr or result.stdout, file=sys.stderr)
+        return result.returncode
+
+    print("OK: admin.css валиден по структурным проверкам, admin.js разбирается без ошибок.")
     return 0
 
 
