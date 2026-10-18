@@ -100,6 +100,8 @@ function inertDocument() {
     assert.ok(!/\bonclick\s*=/.test(toggleButton[0]), "start/stop action must have only one event handler");
     assert.ok(css.includes(".route:not(.active) { display: none !important; }"), "inactive pages must be hidden");
     assert.ok(css.includes(".route.active { display: block; }"), "active page must be visible");
+    assert.ok(css.includes("grid-template-columns: var(--sidebar-w) minmax(0, 1fr);"), "desktop grid must allow content to shrink");
+    assert.ok(!css.includes(".content-inner { padding: 32px 24px 80px; }"), "breakpoint padding must not be duplicated inside content");
 }
 
 // Exercise the real route function with lightweight DOM elements. This catches
