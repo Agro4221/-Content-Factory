@@ -37,6 +37,7 @@
 
             /* Borders — separation by spacing first, then by hairline */
             --border-subtle: #181d28;
+            --border-soft:   #202638;
             --border:        #232a3a;
             --border-strong: #36405a;
 
@@ -227,7 +228,7 @@
         .module-status-dot[data-state="stopped"] { background: var(--text-mute); }
         .module-status-dot[data-state="starting"],
         .module-status-dot[data-state="stopping"] {
-            background: var(--warning);
+            background: var(--warn);
             box-shadow: 0 0 8px rgba(252, 176, 69, 0.45);
         }
         .module-status-dot[data-state="development"] {
@@ -352,10 +353,10 @@
 
         .topbar-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
         .topbar-runner { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-        .split-menu-status {
+        .split-menu-status { display: inline-flex; align-items: center; font-size: 11px; }
         .split-menu-status.ready { color: var(--success); }
         .split-menu-status.dev { color: var(--text-mute); }
-        .split-menu-status.warn { color: var(--warning); }
+        .split-menu-status.warn { color: var(--warn); }
         .split-menu-status.danger { color: var(--danger); }
 
         /* Status pill — restrained, never loud */
@@ -965,6 +966,7 @@
         /* ============================================================
            ONBOARDING CHECKLIST
            ============================================================ */
+        @media (max-width: 1100px) {
             .type-grid { grid-template-columns: 1fr; }
             .content-inner { padding: 32px 24px 80px; }
         }
