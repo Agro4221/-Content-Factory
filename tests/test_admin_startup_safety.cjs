@@ -29,6 +29,7 @@ function inertDocument() {
         getElementById() { return null; },
         querySelectorAll() { return []; },
         querySelector() { return null; },
+        addEventListener() {},
     };
 }
 
