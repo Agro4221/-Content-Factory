@@ -84,7 +84,7 @@ function setLocalAiModelStatus(message, stateName = '') {
     else delete status.dataset.state;
 }
 
-async function refreshLocalAiModels(preferredModel = '') {
+async function refreshLocalAiModels(preferredModel = null) {
     const providerSelect = document.getElementById('local_ai_provider');
     const modelSelect = document.getElementById('local_model');
     const refreshButton = document.getElementById('refreshLocalModelsBtn');
@@ -92,7 +92,7 @@ async function refreshLocalAiModels(preferredModel = '') {
 
     const requestId = ++_localAiModelRequest;
     const provider = providerSelect.value === 'ollama' ? 'ollama' : 'lmstudio';
-    const currentModel = String(preferredModel || modelSelect.value || '').trim();
+    const currentModel = String(preferredModel === null ? (modelSelect.value || '') : preferredModel).trim();
     modelSelect.disabled = true;
     if (refreshButton) refreshButton.disabled = true;
     setLocalAiModelStatus(provider === 'ollama' ? 'Ищем модели в Ollama…' : 'Ищем модели в LM Studio…');
@@ -1775,19 +1775,6 @@ function refreshProxySummary() {
 }
 
 /* ============================================================
-   ONBOARDING — first-time / unlicensed checklist
-   ============================================================ */
-const ONBOARDING_STEPS = [
-    { key: 'license',  title: 'Активировать лицензию',  sub: 'Ключ от разработчика',          route: null,           check: (s) => s.license },
-    { key: 'tg',       title: 'Telegram API',             sub: 'tg_api_id, tg_api_hash, token', route: 'posts/parsing', check: (s) => s.tg },
-    { key: 'ai',       title: 'Настроить AI',            sub: 'Локально или облако',           route: 'posts/ai',     check: (s) => s.ai },
-    { key: 'sources',  title: 'Добавить источники',      sub: 'Каналы-доноры',                 route: 'posts/parsing', check: (s) => s.sources },
-    { key: 'targets',  title: 'Настроить категории',     sub: 'Тема → канал',                  route: 'posts/parsing', check: (s) => s.targets },
-    { key: 'proxy',    title: 'Прокси (опционально)',    sub: 'HTTP / SOCKS5 / MTProto',       route: 'posts/proxy',  check: () => true },
-    { key: 'bot',      title: 'Запуск модулей',          sub: 'Кнопка запуска в шапке',        route: null,           check: () => true },
-];
-
-/* ============================================================
    DASHBOARD WIRING — клики по карточкам модулей
    ============================================================ */
 function setupDashboard() {
@@ -1814,10 +1801,10 @@ function setupDashboard() {
    ============================================================
    Состояния:
      idle    — обычная кнопка, готова к нажатию
-     loading — крутится спиннер, кнопка заблокирована
-     success — зелёный фон, иконка ✓
-     error   — красный фон, текст ошибки
-     blocked — серая, с объяснением (например, нет лицензии)
+     loading — ожидание ответа
+     success — сохранение прошло успешно
+     error   — действие не выполнено
+     blocked — действие временно недоступно
 
    Помимо короткого state-feedback, рядом с кнопкой появляется
    persistent-индикатор "✓ Сохранено N мин назад" — он не
@@ -1853,7 +1840,7 @@ function setSaveState(btn, stateName, label) {
             }
         }, 1600);
     } else if (stateName === 'blocked') {
-        // Заблокировано (нет лицензии) — disabled + серый стиль
+        // Заблокировано по причине, которую показываем пользователю
         btn.disabled = true;
     }
 }
@@ -1915,13 +1902,7 @@ function startSaveMetaTicker() {
 }
 
 /* ============================================================
-   DASHBOARD — рендер сводки системы
-   ============================================================
-   Дашборд отвечает на четыре вопроса:
-     1. Лицензия в порядке?
-     2. Бот в нужном состоянии?
-     3. Прокси настроен?
-     4. Что нужно сделать прямо сейчас?
+   DASHBOARD — реальное состояние локального pipeline
    ============================================================ */
 function renderDashboard(botStatus, settings) {
     if (!settings) return;
@@ -1977,8 +1958,8 @@ function renderDashboard(botStatus, settings) {
     const checks = [
         { ok: telegramReady, label: 'Telegram', meta: telegramReady ? 'ключи указаны' : 'нужны API ID, Hash и токен' },
         { ok: aiReady, label: 'AI', meta: model || 'модель не выбрана' },
-        { ok: sources.length > 0, label: 'Источники', meta: sources.length ? `${sources.length} канал(а/ов)` : 'добавьте источник' },
-        { ok: topicCount > 0, label: 'Маршруты', meta: topicCount ? `${topicCount} тем настроено` : 'сопоставьте тему и канал' },
+        { ok: sources.length > 0, label: 'Источники', meta: sources.length ? `каналов: ${sources.length}` : 'добавьте источник' },
+        { ok: topicCount > 0, label: 'Маршруты', meta: topicCount ? `тем: ${topicCount}` : 'сопоставьте тему и канал' },
     ];
     renderDashChecks('dashModPostsChecks', checks);
 
@@ -2114,7 +2095,7 @@ async function refreshPostsStats() {
      5. Следующее действие (CTA)
 
    Три модуля — три разных renderer'а, потому что наборы полей разные.
-   Источник истины — /api/stats/{posts|behavior|reviews}.
+   Источник истины — /api/stats/posts.
    ============================================================ */
 async function renderModuleDashboard(module) {
     if (module !== 'posts') return;
@@ -2760,12 +2741,7 @@ function setupModuleButtons() {
 
 }
 
-const _pollTimers = {
-    logs: null,
-    bot: null,
-    posts: null,
-    proxy: null,
-};
+const _pollTimers = { logs: null, bot: null, posts: null, proxy: null };
 
 function stopPollingTimers() {
     Object.keys(_pollTimers).forEach((key) => {
