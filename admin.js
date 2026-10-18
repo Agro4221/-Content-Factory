@@ -123,7 +123,7 @@ async function refreshLocalAiModels(preferredModel = null) {
         return;
     }
 
-    if (!/^\\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
         modelOptions.textContent = '';
         setLocalAiModelStatus('Укажите корректный порт от 1 до 65535. Имя модели можно ввести вручную.', 'error');
         if (refreshButton) refreshButton.disabled = false;
