@@ -1420,7 +1420,7 @@ async function loadSettings() {
         const data = await res.json();
         for (const key in data) {
             const el = document.querySelector(`[name="${key}"]`);
-            if (el && key !== 'local_model') {
+            if (el) {
                 el.value = data[key];
                 if (key === 'poll_delay') {
                     const dv = document.getElementById('delayValue');
