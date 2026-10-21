@@ -10,11 +10,12 @@
 публикует в целевые каналы. Всё работает на вашем компьютере: база,
 секреты и медиа не покидают машину.
 
-[![Windows release](https://img.shields.io/badge/release-vestovaya%20sborka-blue)](https://github.com/Agro4221/-Content-Factory/releases)
-[![Python](https://img.shields.io/badge/python-3.11%2B-3776ab)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Windows release](https://img.shields.io/badge/download-Parser.exe-2f6feb?style=flat-square&logo=github)](https://github.com/Agro4221/-Content-Factory/releases)
+[![CI](https://github.com/Agro4221/-Content-Factory/actions/workflows/local-bugfix-regression.yml/badge.svg)](https://github.com/Agro4221/-Content-Factory/actions/workflows/local-bugfix-regression.yml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
-[⬇ Скачать для Windows](https://github.com/Agro4221/-Content-Factory/releases)
+[⬇ Скачать для Windows](https://github.com/Agro4221/-Content-Factory/releases) · [Что внутри релиза](https://github.com/Agro4221/-Content-Factory/releases)
 
 </div>
 

@@ -49,6 +49,8 @@ def test_dpapi_rejects_corrupted_payload() -> None:
 # ---------- Запись в базу ----------
 
 def test_secret_is_stored_encrypted_and_read_back_decrypted(tmp_path) -> None:
+    if not secrets_store.supported():
+        pytest.skip("DPAPI доступен только в Windows")
     db = make_db(tmp_path)
     try:
         token = "123456:AAExampleTokenValue"
@@ -77,6 +79,8 @@ def test_non_secret_settings_stay_readable(tmp_path) -> None:
 
 
 def test_batch_save_encrypts_secrets(tmp_path) -> None:
+    if not secrets_store.supported():
+        pytest.skip("DPAPI доступен только в Windows")
     db = make_db(tmp_path)
     try:
         db.set_settings(
