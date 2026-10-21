@@ -5,8 +5,6 @@ FastAPI-приложение: HTML-админка, JSON API для управл�
 from __future__ import annotations
 
 import os
-import base64
-import hmac
 import re
 import time
 import asyncio
@@ -30,9 +28,6 @@ from proxy_check import (
     resolve_proxy_type,
 )
 from config import (
-    ADMIN_USERNAME,
-    ADMIN_PASSWORD,
-    API_HOST,
     ADMIN_HTML_PATH,
     APP_VERSION,
     BASE_DIR,
@@ -72,118 +67,6 @@ def _is_loopback_host(host: str | None) -> bool:
         # do not rely on DNS resolution to decide whether authentication is needed.
         return False
 
-
-def _unauthorized_response() -> JSONResponse:
-    return JSONResponse(
-        status_code=401,
-        content={"detail": "Требуется авторизация администратора"},
-        headers={"WWW-Authenticate": 'Basic realm="Content Factory", charset="UTF-8"'},
-    )
-
-
-def _basic_auth_matches(header: str | None, username: str, password: str) -> bool:
-    """Проверяет заголовок Authorization против ожидаемых учётных данных.
-
-    Сравнение постоянного времени, чтобы по времени ответа нельзя было
-    подобрать пароль по частям.
-    """
-    if not header:
-        return False
-    scheme, _, encoded = header.partition(" ")
-    if scheme.lower() != "basic" or not encoded:
-        return False
-    try:
-        raw_credentials = base64.b64decode(encoded, validate=True).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
-        return False
-    supplied_username, separator, supplied_password = raw_credentials.partition(":")
-    if not separator:
-        return False
-    username_matches = hmac.compare_digest(
-        supplied_username.encode("utf-8"), username.encode("utf-8")
-    )
-    password_matches = hmac.compare_digest(
-        supplied_password.encode("utf-8"), password.encode("utf-8")
-    )
-    return username_matches and password_matches
-
-
-def validate_api_auth_configuration(host: str, username: str, password: str) -> None:
-    """Проверяет конфигурацию доступа к панели до запуска сервера.
-
-    Ошибки выбрасываются как RuntimeError с понятным текстом: пользователь
-    видит причину прямо в терминале, а не получает страницу с ошибкой 503
-    в браузере и гадает, что не так.
-    """
-    if bool(username) != bool(password):
-        raise RuntimeError(
-            "Укажите одновременно ADMIN_USERNAME и ADMIN_PASSWORD — "
-            "сейчас задано только одно из них."
-        )
-    if ":" in username:
-        raise RuntimeError(
-            "ADMIN_USERNAME не может содержать символ ':' — базовый протокол "
-            "аутентификации разделяет имя и пароль по первому двоеточию, "
-            "такое имя невозможно сопоставить."
-        )
-    if not (username and password) and not _is_loopback_host(host):
-        raise RuntimeError(
-            f"API_HOST={host} — это не loopback-адрес, но ADMIN_USERNAME и "
-            "ADMIN_PASSWORD не заданы. Панель была бы доступна из сети без "
-            "защиты. Задайте учётные данные или верните API_HOST к 127.0.0.1."
-        )
-
-
-@app.middleware("http")
-async def protect_admin_panel(request: Request, call_next):
-    """Protect every panel/API/static route when credentials are configured.
-
-    The app is intentionally local-first. A non-loopback bind without explicit
-    credentials fails closed; non-local clients must use HTTPS (normally via
-    a TLS-terminating reverse proxy).
-    """
-    has_username = bool(ADMIN_USERNAME)
-    has_password = bool(ADMIN_PASSWORD)
-    if has_username != has_password:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "Настройте одновременно ADMIN_USERNAME и ADMIN_PASSWORD"},
-        )
-
-    auth_enabled = has_username and has_password
-    client_host = request.client.host if request.client else None
-    # Also detect exposure through a loopback-bound reverse proxy when Uvicorn
-    # has accepted a trusted forwarded client address. "testclient" is the
-    # in-process Starlette test transport, not a routable network client.
-    remote_client = bool(
-        client_host
-        and client_host != "testclient"
-        and not _is_loopback_host(client_host)
-    )
-    if not auth_enabled and (not _is_loopback_host(API_HOST) or remote_client):
-        return JSONResponse(
-            status_code=503,
-            content={
-                "detail": (
-                    "Панель доступна не только локально, но защита не настроена. "
-                    "Задайте ADMIN_USERNAME и ADMIN_PASSWORD; для удалённого доступа используйте HTTPS."
-                )
-            },
-        )
-
-    if auth_enabled and remote_client and request.url.scheme != "https":
-        return JSONResponse(
-            status_code=403,
-            content={"detail": "Для удалённого доступа к панели требуется HTTPS"},
-        )
-
-    if auth_enabled:
-        if not _basic_auth_matches(
-            request.headers.get("authorization", ""), ADMIN_USERNAME, ADMIN_PASSWORD
-        ):
-            return _unauthorized_response()
-
-    return await call_next(request)
 
 _STATIC_ASSETS: dict[str, str] = {
     "favicon.png": "image/png",
@@ -1518,11 +1401,9 @@ async def api_stats_posts() -> dict:
 async def _api_startup_tasks() -> None:
     from startup import prepare_runtime_directories
     prepare_runtime_directories()
-    validate_api_auth_configuration(API_HOST, ADMIN_USERNAME, ADMIN_PASSWORD)
 
 
 if __name__ == "__main__":
     import uvicorn
     from config import API_HOST, API_PORT
-    validate_api_auth_configuration(API_HOST, ADMIN_USERNAME, ADMIN_PASSWORD)
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level=API_LOG_LEVEL)

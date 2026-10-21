@@ -50,11 +50,6 @@ API_LOG_LEVEL = os.environ.get("API_LOG_LEVEL", "warning").strip().lower()
 if API_LOG_LEVEL not in {"critical", "error", "warning", "info", "debug", "trace"}:
     print("[WARN] Некорректный API_LOG_LEVEL; используется значение по умолчанию.")
     API_LOG_LEVEL = "warning"
-# Optional HTTP Basic credentials for the local admin panel. If the API binds
-# to a non-loopback interface, both values are mandatory. Use HTTPS at the
-# reverse proxy when exposing the panel beyond localhost.
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 BROWSER_OPEN_ON_START = os.environ.get("BROWSER_OPEN_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
 BROWSER_OPEN_DELAY_S = _env_float("BROWSER_OPEN_DELAY_S", 2.5, minimum=0.0, maximum=60.0)
 

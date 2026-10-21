@@ -189,5 +189,3 @@ exe = EXE(
     # icon=str(PROJECT_DIR / "icon.ico"),  # раскомментируй, если есть иконка
 )
 
-# Если хочешь .app для macOS или onedir-сборку — раскомментируй ниже:
-# coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, name="Parser")
