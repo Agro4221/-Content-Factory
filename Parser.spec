@@ -123,6 +123,8 @@ hiddenimports = [
     "uvicorn.lifespan.on",
     "uvicorn.logging",
     "websockets",
+    # Внутренний модуль: настройка кодировки консоли (кириллица в Windows)
+    "console_setup",
 ]
 
 # === Исключения (то, что НЕ надо тащить) ===

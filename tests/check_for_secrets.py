@@ -2,9 +2,15 @@
 import io
 import os
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import console_setup  # noqa: E402  (импорт сам настраивает вывод в UTF-8)
+
 SKIP_DIRS = {".git", "build", "dist", "release", "__pycache__", ".pytest_cache",
               "_test_screenshots", "temp_media", "queue_media", ".venv", "node_modules"}
 SKIP_FILES = {".pyc"}

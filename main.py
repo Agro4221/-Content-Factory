@@ -5,6 +5,10 @@
 # ==========================================
 import sys as _sys
 
+# Кириллица в консоли Windows: без этого печать русских сообщений
+# роняет процесс на системах с кодировкой cp1252.
+import console_setup as _console  # noqa: F401  (импорт сам настраивает вывод)
+
 # python main.py --check  — самопроверка окружения без запуска парсера.
 if "--check" in _sys.argv or "--doctor" in _sys.argv:
     from pathlib import Path as _Path

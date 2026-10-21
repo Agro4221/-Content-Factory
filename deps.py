@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 
+import console_setup  # noqa: F401  (импорт сам настраивает вывод в UTF-8)
 from config import BASE_DIR, REQUIRED_PACKAGES
 from paths import is_frozen
 

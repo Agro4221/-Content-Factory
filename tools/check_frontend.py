@@ -13,6 +13,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import console_setup  # noqa: E402  (импорт сам настраивает вывод в UTF-8)
+
 HTML_PATH = ROOT / "admin.html"
 
 # Правила CSS, потеря которых может скрыть раздел или сломать раскладку.
