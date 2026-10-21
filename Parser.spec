@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-.spec для PyInstaller — Project MaryJane (Parser.exe)
+.spec для PyInstaller — Content Factory (Parser.exe)
 
 Сборка:
     pyinstaller Parser.spec --clean

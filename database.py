@@ -1,6 +1,6 @@
 # REFACTORED: navigation / UX / UI restructured per expert spec v2.0
 """
-SQLite-обёртка для проекта Project MaryJane.
+SQLite-обёртка для проекта Content Factory.
 
 Особенности:
   - Singleton через SharedDB: одна коннекция на всё приложение, не плодим
