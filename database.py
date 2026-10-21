@@ -13,8 +13,7 @@ SQLite-обёртка для проекта Project MaryJane.
     Каждое изменение схемы — новая запись в _MIGRATIONS с номером версии.
     При открытии БД автоматически применяются миграции от текущей до
     последней версии. Идемпотентно, безопасно для отката к старой версии.
-  - **Дефолты разделены на активные (этот файл) и зарезервированные для
-    будущих модулей** (future_defaults.py). Бот использует только активные.
+  - **Секреты шифруются** средствами Windows DPAPI (см. secrets_store.py).
 """
 from __future__ import annotations
 
@@ -84,8 +83,15 @@ def _parse_sqlite_modifier(modifier: str) -> int:
     }
     return sign * value * multipliers.get(unit, 1)
 
-from config import DB_PATH, make_post_key
-from future_defaults import ALL_FUTURE_DEFAULTS
+from config import DB_PATH, SECRET_MASK, SECRET_SETTING_KEYS, make_post_key
+from secrets_store import (
+    SecretDecryptionError,
+    SecretEncryptionError,
+    decrypt as _decrypt_secret,
+    encrypt as _encrypt_secret,
+    is_encrypted as _is_encrypted_secret,
+    supported as _secret_storage_supported,
+)
 
 _logger = logging.getLogger("database")
 if not _logger.handlers:
@@ -173,133 +179,17 @@ def _migration_v2(db: "DB") -> None:
 
 
 def _migration_v3(db: "DB") -> None:
-    """v3: storage for behavior/reviews modules (Milestone A)."""
-    statements = (
-        """
-        CREATE TABLE IF NOT EXISTS behavior_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            started_at TEXT NOT NULL,
-            finished_at TEXT,
-            target_url TEXT,
-            keyword TEXT,
-            scenario TEXT,
-            pages_visited INTEGER DEFAULT 0,
-            clicks INTEGER DEFAULT 0,
-            dwell_sec INTEGER DEFAULT 0,
-            success INTEGER DEFAULT 0,
-            error_code TEXT
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS reviews_accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL UNIQUE,
-            credentials_enc TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'new',
-            warmup_until TEXT,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            last_used_at TEXT,
-            notes TEXT DEFAULT ''
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS reviews_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER,
-            target TEXT NOT NULL,
-            payload TEXT NOT NULL DEFAULT '{}',
-            status TEXT NOT NULL DEFAULT 'pending',
-            error_code TEXT,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            published_at TEXT,
-            FOREIGN KEY(account_id) REFERENCES reviews_accounts(id) ON DELETE SET NULL
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS reviews_targets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            target TEXT NOT NULL UNIQUE,
-            active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        "CREATE INDEX IF NOT EXISTS idx_behavior_sessions_started_at ON behavior_sessions(started_at)",
-        "CREATE INDEX IF NOT EXISTS idx_behavior_sessions_success ON behavior_sessions(success)",
-        "CREATE INDEX IF NOT EXISTS idx_reviews_accounts_status ON reviews_accounts(status)",
-        "CREATE INDEX IF NOT EXISTS idx_reviews_queue_status_created_at ON reviews_queue(status, created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_reviews_queue_published_at ON reviews_queue(published_at)",
-    )
-    with db.conn:
-        for stmt in statements:
-            db.conn.execute(stmt)
+    """v3: reserved for future modules.
+
+    The modules were removed from the project, so the migration creates
+    nothing. The version number is kept so existing databases stay valid.
+    """
+    return None
 
 
 def _migration_v4(db: "DB") -> None:
-    """v4: resilient reviews queue schema (dedupe + retries)."""
-
-    columns = {
-        row[1]
-        for row in db.conn.execute("PRAGMA table_info(reviews_queue)").fetchall()
-    }
-
-    with db.conn:
-        if "source" not in columns:
-            db.conn.execute(
-                "ALTER TABLE reviews_queue ADD COLUMN source TEXT NOT NULL DEFAULT 'internal'"
-            )
-        if "external_id" not in columns:
-            db.conn.execute(
-                "ALTER TABLE reviews_queue ADD COLUMN external_id TEXT NOT NULL DEFAULT ''"
-            )
-        if "normalized_text" not in columns:
-            db.conn.execute(
-                "ALTER TABLE reviews_queue ADD COLUMN normalized_text TEXT NOT NULL DEFAULT ''"
-            )
-        if "fingerprint" not in columns:
-            db.conn.execute(
-                "ALTER TABLE reviews_queue ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''"
-            )
-        if "attempts" not in columns:
-            db.conn.execute(
-                "ALTER TABLE reviews_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
-            )
-        if "next_retry_at" not in columns:
-            db.conn.execute(
-                "ALTER TABLE reviews_queue ADD COLUMN next_retry_at TEXT"
-            )
-
-        db.conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_reviews_queue_source_external "
-            "ON reviews_queue(source, external_id) "
-            "WHERE external_id <> ''"
-        )
-        db.conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_reviews_queue_fingerprint "
-            "ON reviews_queue(fingerprint) "
-            "WHERE fingerprint <> ''"
-        )
-        db.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_reviews_queue_next_retry_at "
-            "ON reviews_queue(next_retry_at)"
-        )
-        db.conn.execute(
-            "UPDATE reviews_queue SET source = 'internal' "
-            "WHERE source IS NULL OR source = ''"
-        )
-        db.conn.execute(
-            "UPDATE reviews_queue SET external_id = '' "
-            "WHERE external_id IS NULL"
-        )
-        db.conn.execute(
-            "UPDATE reviews_queue SET normalized_text = '' "
-            "WHERE normalized_text IS NULL"
-        )
-        db.conn.execute(
-            "UPDATE reviews_queue SET fingerprint = '' "
-            "WHERE fingerprint IS NULL"
-        )
+    """v4: reserved - the reviews module was removed, schema is unchanged."""
+    return None
 
 
 def _migration_v5(db: "DB") -> None:
@@ -369,6 +259,41 @@ def _migration_v7(db: "DB") -> None:
     )
 
 
+def _migration_v8(db: "DB") -> None:
+    """v8: очередь постов для ручного контроля, отложенной публикации и правок."""
+    db.conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS post_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_name TEXT NOT NULL,
+            post_id TEXT NOT NULL,
+            group_id TEXT DEFAULT '',
+            original_text TEXT NOT NULL DEFAULT '',
+            publish_text TEXT NOT NULL DEFAULT '',
+            media_files TEXT NOT NULL DEFAULT '[]',
+            media_kind TEXT NOT NULL DEFAULT '',
+            category TEXT NOT NULL DEFAULT '',
+            target_chat TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'draft',
+            scheduled_at TEXT,
+            published_at TEXT,
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(source_name, post_id)
+        )
+        """
+    )
+    db.conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_post_queue_status "
+        "ON post_queue(status, scheduled_at, id)"
+    )
+    db.conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_post_queue_source "
+        "ON post_queue(source_name, post_id)"
+    )
+
+
 # Регистрируем миграции
 MIGRATIONS.append((1, _migration_v1))
 MIGRATIONS.append((2, _migration_v2))
@@ -377,15 +302,13 @@ MIGRATIONS.append((4, _migration_v4))
 MIGRATIONS.append((5, _migration_v5))
 MIGRATIONS.append((6, _migration_v6))
 MIGRATIONS.append((7, _migration_v7))
+MIGRATIONS.append((8, _migration_v8))
 
 CURRENT_SCHEMA_VERSION: int = max(v for v, _ in MIGRATIONS)
 
 
 # Дефолты вынесены в константу — DRY и легче расширять.
-# Только то, что БОТ использует прямо сейчас. Зарезервированные дефолты
-# для будущих модулей (Поведенческий фактор / Отзывы) лежат в
-# future_defaults.py — они подтягиваются в БД через SETTING_KEYS
-# whitelist, но не нужны боту для работы.
+# Только то, что бот использует прямо сейчас.
 _DEFAULT_SETTINGS: dict[str, str] = {
     # --- Telegram (глобально) ---
     "tg_api_id": "",
@@ -420,14 +343,11 @@ _DEFAULT_SETTINGS: dict[str, str] = {
     "proxy_pass": "",
     "mtproto_key": "",
 
-    # --- Лицензия ---
-    "license_key": "",
+    # --- Публикация ---
+    "publish_mode": "auto",
+    "media_retention_days": "3",
+    "media_cleanup_enabled": "1",
 }
-
-# Сливаем с зарезервированными дефолтами из future_defaults.py.
-# Эти ключи попадут в БД при первом запуске (для админки и будущих модулей),
-# но main.py их сейчас не читает.
-_DEFAULT_SETTINGS = {**_DEFAULT_SETTINGS, **ALL_FUTURE_DEFAULTS}
 
 
 class DatabaseWriteError(RuntimeError):
@@ -475,6 +395,10 @@ class DB:
         self._ensure_created_at_columns()
         self._run_migrations()
         self._migrate_legacy_post_keys()  # для очень старых БД до версионирования
+        # Секреты, сохранённые до включения шифрования, переводятся в
+        # зашифрованный вид. Значения не выводятся никуда.
+        self.migrate_plaintext_secrets()
+        self._warn_if_secret_storage_unavailable()
 
     # ---------- init ----------
     def _configure_pragmas(self) -> None:
@@ -752,33 +676,112 @@ class DB:
                     (k, v),
                 )
 
+    def _warn_if_secret_storage_unavailable(self) -> None:
+        """Сообщает, если секреты не удаётся шифровать на этой платформе."""
+        if _secret_storage_supported():
+            return
+        try:
+            self.add_log(
+                "WARN-503",
+                "Шифрование секретов недоступно на этой платформе (DPAPI — только Windows). "
+                "Токены и ключи хранятся в базе открытым текстом — защищайте папку приложения.",
+            )
+        except Exception:
+            pass
+
     # ---------- settings ----------
+    def _decode_setting(self, key: str, value: Any) -> Any:
+        """Расшифровывает значение секретной настройки.
+
+        Значения, сохранённые до включения шифрования (legacy-plaintext),
+        возвращаются без изменений. Если блоб не расшифровывается (база
+        перенесена на другой ПК или другой пользователь Windows), значение
+        считается пустым, а в журнал пишется ошибка без значения секрета.
+        """
+        if key not in SECRET_SETTING_KEYS or not isinstance(value, str):
+            return value
+        if not value:
+            return value
+        try:
+            return _decrypt_secret(value)
+        except SecretDecryptionError as exc:
+            self._log_secret_failure("ERR-502", key, exc)
+            return ""
+
+    def _encode_setting(self, key: str, value: Any) -> str:
+        """Шифрует значение секретной настройки перед записью в базу."""
+        text = "" if value is None else str(value)
+        if key not in SECRET_SETTING_KEYS or not text:
+            return text
+        if _is_encrypted_secret(text):
+            return text
+        if not _secret_storage_supported():
+            # Платформа без DPAPI: значение остаётся в базе как есть, чтобы
+            # приложение оставалось рабочим. Ограничение фиксируется в журнале.
+            return text
+        try:
+            return _encrypt_secret(text)
+        except SecretEncryptionError as exc:
+            # Значение нельзя потерять, поэтому сохраняем как есть и явно
+            # сообщаем об этом в журнале (без самого значения).
+            self._log_secret_failure("ERR-503", key, exc)
+            return text
+
+    def _log_secret_failure(self, log_type: str, key: str, exc: Exception) -> None:
+        """Пишет в журнал факт проблемы с секретом, не раскрывая его значение."""
+        try:
+            self.add_log(
+                log_type,
+                f"Настройка «{key}»: не удалось обработать сохранённый секрет "
+                f"({type(exc).__name__}). Введите значение заново в панели управления.",
+            )
+        except Exception:
+            pass
+
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self._lock:
             cur = self.conn.cursor()
             cur.execute("SELECT value FROM bot_settings WHERE key=?", (key,))
             row = cur.fetchone()
-            return row[0] if row else default
+            value = row[0] if row else default
+        return self._decode_setting(key, value)
 
     def set_setting(self, key: str, value: Any) -> None:
+        stored = self._encode_setting(key, value)
         with self._lock:
             with self.conn:
                 self.conn.execute(
                     "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
-                    (key, str(value)),
+                    (key, stored),
                 )
 
     def get_all_settings(self) -> dict[str, str]:
         with self._lock:
             cur = self.conn.cursor()
             cur.execute("SELECT key, value FROM bot_settings")
-            return {row[0]: row[1] for row in cur.fetchall()}
+            rows = cur.fetchall()
+        return {row[0]: self._decode_setting(row[0], row[1]) for row in rows}
+
+    def get_masked_settings(self) -> dict[str, str]:
+        """Настройки для интерфейса: секреты заменены маской.
+
+        Значения секретов не покидают бэкенд в открытом виде — панель видит
+        только признак «сохранено» и может заменить значение или удалить его.
+        """
+        settings = self.get_all_settings()
+        for key in SECRET_SETTING_KEYS:
+            if key in settings:
+                settings[key] = "" if not settings.get(key) else SECRET_MASK
+        return settings
 
     def set_settings(self, settings: dict[str, Any]) -> None:
         """Persist a batch of settings atomically or roll the entire batch back."""
         if not settings:
             return
-        rows = [(str(key), str(value)) for key, value in settings.items()]
+        rows = [
+            (str(key), self._encode_setting(str(key), value))
+            for key, value in settings.items()
+        ]
         with self._lock:
             try:
                 self.conn.execute("BEGIN IMMEDIATE")
@@ -796,65 +799,57 @@ class DB:
                 _logger.error("set_settings batch failed (%d keys): %s", len(rows), exc)
                 raise RuntimeError("could not save settings batch; transaction rolled back") from exc
 
-    # ---------- credentials (reviews accounts) ----------
-    def _credentials_seed(self) -> bytes:
-        """Per-install seed for reversible local obfuscation.
+    def migrate_plaintext_secrets(self) -> int:
+        """Переводит ранее сохранённые plaintext-секреты в зашифрованный вид.
 
-        Milestone A: avoid plaintext storage without introducing new runtime deps.
+        Возвращает количество переведённых настроек. Значения секретов не
+        выводятся ни в журнал, ни в терминал.
+        """
+        if not _secret_storage_supported():
+            return 0
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT key, value FROM bot_settings")
+            rows = cur.fetchall()
+
+        migrated = 0
+        for key, value in rows:
+            if key not in SECRET_SETTING_KEYS:
+                continue
+            if not value or _is_encrypted_secret(value):
+                continue
+            try:
+                encrypted = _encrypt_secret(value)
+            except SecretEncryptionError as exc:
+                self._log_secret_failure("ERR-503", key, exc)
+                continue
+            with self._lock:
+                with self.conn:
+                    self.conn.execute(
+                        "UPDATE bot_settings SET value = ? WHERE key = ?",
+                        (encrypted, key),
+                    )
+            migrated += 1
+        if migrated:
+            _logger.info("[DB] Encrypted %d stored secret(s) with Windows DPAPI", migrated)
+            self._purge_free_pages()
+        return migrated
+
+    def _purge_free_pages(self) -> None:
+        """Пересобирает файл базы, чтобы старые страницы со значениями исчезли.
+
+        SQLite не обнуляет освобождённые страницы: после перезаписи секрета
+        его открытый текст может остаться в неиспользуемых страницах файла.
+        VACUUM пересобирает базу и удаляет их.
         """
         try:
-            row = self.conn.execute(
-                "SELECT value FROM bot_settings WHERE key='license_key'"
-            ).fetchone()
-            license_key = row[0] if row and row[0] else ""
-        except sqlite3.Error:
-            license_key = ""
-        hwid = "unknown-hwid"
-        try:
-            # Late import: Auth imports database.get_db at module import time.
-            import Auth  # type: ignore
-
-            hwid = Auth.get_hwid()
-        except Exception:
-            pass
-        return hashlib.sha256(
-            f"{license_key}|{hwid}|project-maryjane-cred-v1".encode("utf-8")
-        ).digest()
-
-    @staticmethod
-    def _stream_xor(seed: bytes, payload: bytes) -> bytes:
-        out = bytearray(len(payload))
-        counter = 0
-        idx = 0
-        while idx < len(payload):
-            block = hmac.new(seed, counter.to_bytes(4, "big"), hashlib.sha256).digest()
-            chunk = min(len(block), len(payload) - idx)
-            for i in range(chunk):
-                out[idx + i] = payload[idx + i] ^ block[i]
-            idx += chunk
-            counter += 1
-        return bytes(out)
-
-    def encrypt_credentials(self, raw: str) -> str:
-        if not raw:
-            return ""
-        payload = raw.encode("utf-8")
-        salt = os.urandom(8)
-        token = self._stream_xor(self._credentials_seed() + salt, payload)
-        return base64.urlsafe_b64encode(salt + token).decode("ascii")
-
-    def decrypt_credentials(self, encrypted: str) -> str:
-        if not encrypted:
-            return ""
-        try:
-            blob = base64.urlsafe_b64decode(encrypted.encode("ascii"))
-            if len(blob) < 8:
-                return ""
-            salt, cipher = blob[:8], blob[8:]
-            payload = self._stream_xor(self._credentials_seed() + salt, cipher)
-            return payload.decode("utf-8", errors="ignore")
-        except Exception:
-            return ""
+            with self._lock:
+                self.conn.execute("VACUUM")
+            _logger.info("[DB] Rebuilt database file to purge replaced secret pages")
+        except sqlite3.Error as exc:
+            # Не критично: значения в базе уже зашифрованы, остаётся лишь
+            # возможный хвост в свободных страницах файла.
+            _logger.warning("[DB] VACUUM skipped: %s", exc)
 
     # ---------- posts ----------
     def is_published(self, source: str, post_id: int | str) -> bool:
@@ -1219,6 +1214,22 @@ class DB:
             )
             return cur.fetchall()
 
+    def clear_logs(self) -> int:
+        """Удаляет все записи журнала и возвращает их количество.
+
+        Вызывается только через защищённый API-эндпоинт с подтверждением
+        пользователя. Сами тексты записей в отчёт не попадают.
+        """
+        with self._lock:
+            with self.conn:
+                cur = self.conn.execute("SELECT COUNT(*) FROM system_logs")
+                row = cur.fetchone()
+                removed = int(row[0]) if row else 0
+            with self.conn:
+                cur = self.conn.execute("DELETE FROM system_logs")
+                deleted = int(cur.rowcount or 0)
+        return deleted if deleted > 0 else removed
+
     def sqlite_datetime(self, modifier: str | None = None) -> str:
         """Возвращает локальное datetime для сравнения с created_at/timestamp."""
         if not modifier:
@@ -1227,6 +1238,202 @@ class DB:
         if normalized in {"start of day", "start of month", "start of year"}:
             return _anchor_sqlite_modifier(normalized)
         return _local_datetime_str(_parse_sqlite_modifier(str(modifier)))
+
+    # ---------- очередь постов ----------
+    def save_post_to_queue(self, post: dict) -> int:
+        """Кладёт пост в очередь ручной публикации. Возвращает id записи."""
+        now = _local_now_str()
+        with self._lock:
+            with self.conn:
+                cur = self.conn.execute(
+                    """
+                    INSERT INTO post_queue (
+                        source_name, post_id, group_id, original_text, publish_text,
+                        media_files, media_kind, category, target_chat, status,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+                    ON CONFLICT(source_name, post_id) DO UPDATE SET
+                        original_text = excluded.original_text,
+                        media_files = excluded.media_files,
+                        media_kind = excluded.media_kind,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        str(post.get("source_name", "")),
+                        str(post.get("post_id", "")),
+                        str(post.get("group_id", "")),
+                        str(post.get("original_text", "")),
+                        str(post.get("publish_text", "")),
+                        str(post.get("media_files", "[]")),
+                        str(post.get("media_kind", "")),
+                        str(post.get("category", "")),
+                        str(post.get("target_chat", "")),
+                        now,
+                        now,
+                    ),
+                )
+                if cur.lastrowid:
+                    return int(cur.lastrowid)
+            cur = self.conn.execute(
+                "SELECT id FROM post_queue WHERE source_name = ? AND post_id = ?",
+                (str(post.get("source_name", "")), str(post.get("post_id", ""))),
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
+    def list_queued_posts(self, status: str = "", limit: int = 200) -> list[dict]:
+        """Список постов очереди. Пустой status — все статусы."""
+        sql = (
+            "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
+            "media_files, media_kind, category, target_chat, status, scheduled_at, "
+            "published_at, last_error, created_at, updated_at "
+            "FROM post_queue"
+        )
+        params: list[Any] = []
+        if status:
+            sql += " WHERE status = ?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 1000)))
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        columns = [
+            "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
+            "media_files", "media_kind", "category", "target_chat", "status",
+            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+        ]
+        return [dict(zip(columns, row)) for row in rows]
+
+    def get_queued_post(self, post_id: int) -> dict | None:
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
+                "media_files, media_kind, category, target_chat, status, scheduled_at, "
+                "published_at, last_error, created_at, updated_at "
+                "FROM post_queue WHERE id = ?",
+                (int(post_id),),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        columns = [
+            "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
+            "media_files", "media_kind", "category", "target_chat", "status",
+            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+        ]
+        return dict(zip(columns, row))
+
+    def update_queued_post(self, post_id: int, changes: dict) -> bool:
+        allowed = {
+            "publish_text", "category", "target_chat", "status", "scheduled_at",
+            "media_files", "media_kind", "last_error", "published_at",
+        }
+        fields = {k: v for k, v in changes.items() if k in allowed}
+        if not fields:
+            return False
+        assignments = ", ".join(f"{name} = ?" for name in fields)
+        params = list(fields.values()) + [_local_now_str(), int(post_id)]
+        with self._lock:
+            with self.conn:
+                cur = self.conn.execute(
+                    f"UPDATE post_queue SET {assignments}, updated_at = ? WHERE id = ?",
+                    params,
+                )
+                return cur.rowcount > 0
+
+    def delete_queued_post(self, post_id: int) -> bool:
+        with self._lock:
+            with self.conn:
+                cur = self.conn.execute("DELETE FROM post_queue WHERE id = ?", (int(post_id),))
+                return cur.rowcount > 0
+
+    def due_scheduled_posts(self, limit: int = 20) -> list[dict]:
+        """Отложенные посты, время публикации которых наступило."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
+                "media_files, media_kind, category, target_chat, status, scheduled_at, "
+                "published_at, last_error, created_at, updated_at "
+                "FROM post_queue WHERE status = 'scheduled' "
+                "AND scheduled_at IS NOT NULL AND scheduled_at <= ? "
+                "ORDER BY scheduled_at ASC LIMIT ?",
+                (_local_now_str(), max(1, min(int(limit), 100))),
+            )
+            rows = cur.fetchall()
+        columns = [
+            "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
+            "media_files", "media_kind", "category", "target_chat", "status",
+            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+        ]
+        return [dict(zip(columns, row)) for row in rows]
+
+    def count_queued_posts(self) -> dict[str, int]:
+        """Счётчики постов по статусам для панели."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT status, COUNT(*) FROM post_queue GROUP BY status")
+            rows = cur.fetchall()
+        return {str(status): int(count) for status, count in rows}
+
+    def published_posts_with_media(self, older_than_days: int) -> list[dict]:
+        """Опубликованные посты с медиа, у которых медиа старше срока хранения.
+
+        Возвращает записи с полем `media_files` в виде списка имён файлов.
+        """
+        if int(older_than_days) <= 0:
+            return []
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT id, media_files, published_at, updated_at, created_at "
+                "FROM post_queue WHERE status = 'published' "
+                "AND media_files IS NOT NULL AND media_files NOT IN ('', '[]')"
+            )
+            rows = cur.fetchall()
+        cutoff = (datetime.now() - timedelta(days=int(older_than_days))).strftime("%Y-%m-%d %H:%M:%S")
+        result: list[dict] = []
+        for post_id, media_files, published_at, updated_at, created_at in rows:
+            stamp = published_at or updated_at or created_at or ""
+            if not stamp or str(stamp) > cutoff:
+                continue
+            try:
+                names = json.loads(media_files or "[]")
+            except (TypeError, ValueError):
+                names = []
+            if not isinstance(names, list) or not names:
+                continue
+            result.append({"id": post_id, "media_files": [str(n) for n in names]})
+        return result
+
+    def clear_post_media(self, post_id: int) -> list[str]:
+        """Отвязывает медиа от поста и возвращает имена файлов для удаления."""
+        row = self.get_queued_post(post_id)
+        if not row:
+            return []
+        try:
+            names = json.loads(row.get("media_files") or "[]")
+        except (TypeError, ValueError):
+            names = []
+        if not isinstance(names, list):
+            names = []
+        names = [str(n) for n in names]
+        self.update_queued_post(post_id, {"media_files": "[]", "media_kind": ""})
+        return names
+
+    def total_media_size(self) -> tuple[int, int]:
+        """Суммарный размер и количество медиафайлов очереди (для оценки места)."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT id, media_files FROM post_queue "
+                "WHERE media_files IS NOT NULL AND media_files NOT IN ('', '[]')"
+            )
+            rows = cur.fetchall()
+        return len(rows), rows
 
     # ---------- агрегаты для модульных дашбордов ----------
     def count_since(self, table: str, since_iso: str) -> int:
@@ -1453,533 +1660,6 @@ class DB:
                 "last_session_at": last_session_at,
             }
 
-    # ---------- reviews module ----------
-    def create_reviews_account(
-        self,
-        *,
-        email: str,
-        password: str,
-        recovery: str = "",
-        status: str = "new",
-        warmup_until: str | None = None,
-        notes: str = "",
-    ) -> int | None:
-        email_norm = (email or "").strip().lower()
-        if not email_norm:
-            return None
-        credentials = self.encrypt_credentials(f"{password}:{recovery}")
-        if not credentials:
-            return None
-
-        with self._lock:
-            cur = self.conn.cursor()
-            cur.execute(
-                """
-                INSERT OR IGNORE INTO reviews_accounts (
-                    email, credentials_enc, status, warmup_until, notes, updated_at
-                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """,
-                (email_norm, credentials, status, warmup_until, notes),
-            )
-            if cur.rowcount == 0:
-                return None
-            return int(cur.lastrowid)
-
-    def list_reviews_accounts(self) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self.conn.execute(
-                """
-                SELECT
-                    id, email, status, warmup_until,
-                    created_at, updated_at, last_used_at, notes
-                FROM reviews_accounts
-                ORDER BY id DESC
-                """
-            ).fetchall()
-            result: list[dict[str, Any]] = []
-            for row in rows:
-                result.append(
-                    {
-                        "id": int(row[0]),
-                        "email": row[1],
-                        "status": row[2],
-                        "warmup_until": row[3],
-                        "created_at": row[4],
-                        "updated_at": row[5],
-                        "last_used_at": row[6],
-                        "notes": row[7] or "",
-                    }
-                )
-            return result
-
-    def delete_reviews_account(self, account_id: int) -> bool:
-        with self._lock:
-            cur = self.conn.cursor()
-            cur.execute("DELETE FROM reviews_accounts WHERE id = ?", (int(account_id),))
-            return cur.rowcount > 0
-
-    def create_reviews_accounts_batch(self, count: int) -> int:
-        generated = 0
-        safe_count = max(0, min(int(count), 100))
-        for _ in range(safe_count):
-            salt = base64.urlsafe_b64encode(os.urandom(6)).decode("ascii").rstrip("=")
-            email = f"generated_{salt}@example.invalid"
-            password = base64.urlsafe_b64encode(os.urandom(9)).decode("ascii").rstrip("=")
-            recovery = f"recovery_{salt}@example.invalid"
-            if self.create_reviews_account(email=email, password=password, recovery=recovery):
-                generated += 1
-        return generated
-
-    def import_reviews_accounts(self, lines: list[str]) -> dict[str, int]:
-        created = 0
-        skipped = 0
-        for line in lines:
-            raw = (line or "").strip()
-            if not raw:
-                continue
-            parts = [part.strip() for part in raw.split(":", 2)]
-            if len(parts) < 2 or not parts[0] or not parts[1]:
-                skipped += 1
-                continue
-            email, password = parts[0], parts[1]
-            recovery = parts[2] if len(parts) > 2 else ""
-            account_id = self.create_reviews_account(
-                email=email,
-                password=password,
-                recovery=recovery,
-                status="imported",
-            )
-            if account_id:
-                created += 1
-            else:
-                skipped += 1
-        return {"created": created, "skipped": skipped}
-
-    def enqueue_review_item(
-        self,
-        *,
-        target: str,
-        payload: str = "{}",
-        account_id: int | None = None,
-        source: str = "internal",
-        external_id: str = "",
-        normalized_text: str = "",
-        fingerprint: str = "",
-        status: str = "pending",
-    ) -> int | None:
-        with self._lock:
-            cur = self.conn.cursor()
-            cur.execute(
-                """
-                INSERT OR IGNORE INTO reviews_queue (
-                    account_id,
-                    target,
-                    payload,
-                    status,
-                    source,
-                    external_id,
-                    normalized_text,
-                    fingerprint,
-                    attempts,
-                    next_retry_at,
-                    updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, CURRENT_TIMESTAMP)
-                """,
-                (
-                    account_id,
-                    target,
-                    payload or "{}",
-                    status,
-                    (source or "internal").strip(),
-                    (external_id or "").strip(),
-                    normalized_text or "",
-                    (fingerprint or "").strip(),
-                ),
-            )
-            if cur.rowcount > 0:
-                return int(cur.lastrowid)
-
-            row = None
-            if external_id:
-                row = self.conn.execute(
-                    """
-                    SELECT id
-                    FROM reviews_queue
-                    WHERE source = ? AND external_id = ?
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    ((source or "internal").strip(), (external_id or "").strip()),
-                ).fetchone()
-            elif fingerprint:
-                row = self.conn.execute(
-                    """
-                    SELECT id
-                    FROM reviews_queue
-                    WHERE fingerprint = ?
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    ((fingerprint or "").strip(),),
-                ).fetchone()
-            return int(row[0]) if row else None
-
-    def fetch_pending_review_items(self, limit: int = 20) -> list[dict[str, Any]]:
-        safe_limit = max(1, min(int(limit), 500))
-        with self._lock:
-            rows = self.conn.execute(
-                """
-                SELECT
-                    id,
-                    account_id,
-                    target,
-                    payload,
-                    source,
-                    external_id,
-                    normalized_text,
-                    attempts,
-                    created_at
-                FROM reviews_queue
-                WHERE status = 'pending'
-                  AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP)
-                ORDER BY created_at ASC, id ASC
-                LIMIT ?
-                """,
-                (safe_limit,),
-            ).fetchall()
-            result: list[dict[str, Any]] = []
-            for row in rows:
-                result.append(
-                    {
-                        "id": int(row[0]),
-                        "account_id": row[1],
-                        "target": row[2] or "",
-                        "payload": row[3] or "{}",
-                        "source": row[4] or "internal",
-                        "external_id": row[5] or "",
-                        "normalized_text": row[6] or "",
-                        "attempts": int(row[7] or 0),
-                        "created_at": row[8],
-                    }
-                )
-            return result
-
-    def review_item_exists(
-        self,
-        *,
-        source: str,
-        external_id: str,
-        fingerprint: str = "",
-    ) -> bool:
-        src = (source or "internal").strip()
-        ext = (external_id or "").strip()
-        fp = (fingerprint or "").strip()
-        with self._lock:
-            row = self.conn.execute(
-                """
-                SELECT 1
-                FROM reviews_queue
-                WHERE source = ? AND external_id = ?
-                LIMIT 1
-                """,
-                (src, ext),
-            ).fetchone()
-            if row:
-                return True
-            if fp:
-                row = self.conn.execute(
-                    """
-                    SELECT 1
-                    FROM reviews_queue
-                    WHERE fingerprint = ?
-                    LIMIT 1
-                    """,
-                    (fp,),
-                ).fetchone()
-                return bool(row)
-            return False
-
-    def mark_review_item_status(
-        self,
-        item_id: int,
-        *,
-        status: str,
-        error_code: str = "",
-        attempts: int | None = None,
-        retry_in_seconds: int | None = None,
-    ) -> bool:
-        with self._lock:
-            sets = ["status = ?", "error_code = ?", "updated_at = CURRENT_TIMESTAMP"]
-            params: list[Any] = [status, error_code or ""]
-            if status == "published":
-                sets.append("published_at = CURRENT_TIMESTAMP")
-            if attempts is not None:
-                sets.append("attempts = ?")
-                params.append(max(0, int(attempts)))
-            if retry_in_seconds is None:
-                sets.append("next_retry_at = NULL")
-            else:
-                sets.append("next_retry_at = ?")
-                params.append(_local_datetime_str(int(retry_in_seconds)))
-            params.append(int(item_id))
-            cur = self.conn.execute(
-                f"UPDATE reviews_queue SET {', '.join(sets)} WHERE id = ?",
-                tuple(params),
-            )
-            return cur.rowcount > 0
-
-    def get_reviews_status_counts(self) -> dict[str, int]:
-        with self._lock:
-            accounts_row = self.conn.execute(
-                "SELECT COUNT(*) FROM reviews_accounts"
-            ).fetchone()
-            queue_row = self.conn.execute(
-                "SELECT COUNT(*) FROM reviews_queue WHERE status = 'pending'"
-            ).fetchone()
-            return {
-                "accounts_total": int(accounts_row[0] or 0) if accounts_row else 0,
-                "queue_pending": int(queue_row[0] or 0) if queue_row else 0,
-            }
-
-    def get_reviews_stats_snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            accounts_row = self.conn.execute(
-                """
-                SELECT
-                    COUNT(*) AS total,
-                    SUM(CASE WHEN status IN ('new', 'imported', 'active', 'ready') THEN 1 ELSE 0 END) AS active
-                FROM reviews_accounts
-                """
-            ).fetchone()
-            queue_row = self.conn.execute(
-                """
-                SELECT
-                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
-                    SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END) AS published_total,
-                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_total,
-                    SUM(CASE WHEN status = 'published' AND date(published_at) = date('now', 'localtime') THEN 1 ELSE 0 END) AS published_today,
-                    MAX(published_at) AS last_publish_at
-                FROM reviews_queue
-                """
-            ).fetchone()
-
-            return {
-                "accounts_total": int(accounts_row[0] or 0) if accounts_row else 0,
-                "accounts_active": int(accounts_row[1] or 0) if accounts_row else 0,
-                "queue_pending": int(queue_row[0] or 0) if queue_row else 0,
-                "published_total": int(queue_row[1] or 0) if queue_row else 0,
-                "failed_total": int(queue_row[2] or 0) if queue_row else 0,
-                "published_today": int(queue_row[3] or 0) if queue_row else 0,
-                "last_publish_at": queue_row[4] if queue_row else None,
-            }
-
-    def pick_reviews_account(self) -> dict[str, Any] | None:
-        with self._lock:
-            row = self.conn.execute(
-                """
-                SELECT id, email, status, warmup_until, created_at, updated_at, last_used_at, notes
-                FROM reviews_accounts
-                WHERE status IN ('ready', 'active', 'imported', 'new', 'warming')
-                  AND (
-                    warmup_until IS NULL
-                    OR warmup_until = ''
-                    OR datetime(warmup_until) <= datetime('now', 'localtime')
-                  )
-                ORDER BY (last_used_at IS NULL) DESC, last_used_at ASC, id ASC
-                LIMIT 1
-                """
-            ).fetchone()
-            if not row:
-                return None
-            return {
-                "id": int(row[0]),
-                "email": row[1] or "",
-                "status": row[2] or "",
-                "warmup_until": row[3],
-                "created_at": row[4],
-                "updated_at": row[5],
-                "last_used_at": row[6],
-                "notes": row[7] or "",
-            }
-
-    def get_reviews_account(self, account_id: int) -> dict[str, Any] | None:
-        with self._lock:
-            row = self.conn.execute(
-                """
-                SELECT id, email, status, warmup_until, created_at, updated_at, last_used_at, notes
-                FROM reviews_accounts
-                WHERE id = ?
-                """,
-                (int(account_id),),
-            ).fetchone()
-            if not row:
-                return None
-            return {
-                "id": int(row[0]),
-                "email": row[1] or "",
-                "status": row[2] or "",
-                "warmup_until": row[3],
-                "created_at": row[4],
-                "updated_at": row[5],
-                "last_used_at": row[6],
-                "notes": row[7] or "",
-            }
-
-    def touch_reviews_account(self, account_id: int) -> None:
-        with self._lock:
-            self.conn.execute(
-                """
-                UPDATE reviews_accounts
-                SET last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (int(account_id),),
-            )
-
-    def advance_reviews_account_warmup(self, account_id: int) -> None:
-        settings = self.get_all_settings()
-        try:
-            warmup_days = max(
-                0,
-                int(str(settings.get("reviews_warmup_days", "7") or "7").strip()),
-            )
-        except ValueError:
-            warmup_days = 7
-
-        with self._lock:
-            row = self.conn.execute(
-                "SELECT status, warmup_until FROM reviews_accounts WHERE id = ?",
-                (int(account_id),),
-            ).fetchone()
-            if not row:
-                return
-            status = (row[0] or "").strip().lower()
-            warmup_until = row[1]
-            if status in {"banned", "disabled", "ready", "active"}:
-                return
-            if warmup_days <= 0:
-                self.conn.execute(
-                    """
-                    UPDATE reviews_accounts
-                    SET status = 'ready', warmup_until = NULL, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (int(account_id),),
-                )
-                return
-            if not warmup_until:
-                self.conn.execute(
-                    """
-                    UPDATE reviews_accounts
-                    SET status = 'warming',
-                        warmup_until = ?,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (_local_datetime_str(warmup_days * 86400), int(account_id)),
-                )
-                return
-            warmed = self.conn.execute(
-                """
-                SELECT 1
-                WHERE datetime(?) <= datetime('now', 'localtime')
-                """,
-                (warmup_until,),
-            ).fetchone()
-            if warmed:
-                self.conn.execute(
-                    """
-                    UPDATE reviews_accounts
-                    SET status = 'ready', warmup_until = NULL, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                    """,
-                    (int(account_id),),
-                )
-
-    def _collect_review_targets_from_settings(self, settings: dict[str, str]) -> list[tuple[str, str, str, str]]:
-        entries: list[tuple[str, str, str, str]] = []
-        seen: set[str] = set()
-
-        def add(target: str, source: str, external_id: str, payload: dict[str, Any]) -> None:
-            cleaned = (target or "").strip()
-            if not cleaned or cleaned in seen:
-                return
-            seen.add(cleaned)
-            entries.append(
-                (
-                    cleaned,
-                    source,
-                    external_id or cleaned,
-                    json.dumps(payload, ensure_ascii=False),
-                )
-            )
-
-        for line in (settings.get("reviews_target_cards") or "").splitlines():
-            add(line, "target_card", line.strip(), {"kind": "target_card"})
-
-        for part in re.split(r"[,;\n]", settings.get("reviews_place_ids") or ""):
-            add(part, "place_id", part.strip(), {"kind": "place_id"})
-
-        place_url = (settings.get("reviews_place_url") or "").strip()
-        if place_url:
-            add(place_url, "place_url", place_url, {"kind": "place_url"})
-
-        return entries
-
-    def sync_reviews_queue_from_targets(self) -> int:
-        settings = self.get_all_settings()
-        entries = self._collect_review_targets_from_settings(settings)
-        added = 0
-        for target, source, external_id, payload in entries:
-            with self._lock:
-                self.conn.execute(
-                    """
-                    INSERT OR IGNORE INTO reviews_targets (target, active)
-                    VALUES (?, 1)
-                    """,
-                    (target,),
-                )
-            item_id = self.enqueue_review_item(
-                target=target,
-                payload=payload,
-                source=source,
-                external_id=external_id,
-                fingerprint=f"{source}:{external_id}",
-            )
-            if item_id:
-                added += 1
-        return added
-
-    def list_reviews_queue_items(self, limit: int = 50) -> list[dict[str, Any]]:
-        safe_limit = max(1, min(int(limit), 500))
-        with self._lock:
-            rows = self.conn.execute(
-                """
-                SELECT id, account_id, target, status, source, external_id,
-                       attempts, error_code, created_at, published_at
-                FROM reviews_queue
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (safe_limit,),
-            ).fetchall()
-            return [
-                {
-                    "id": int(row[0]),
-                    "account_id": row[1],
-                    "target": row[2] or "",
-                    "status": row[3] or "",
-                    "source": row[4] or "",
-                    "external_id": row[5] or "",
-                    "attempts": int(row[6] or 0),
-                    "error_code": row[7] or "",
-                    "created_at": row[8],
-                    "published_at": row[9],
-                }
-                for row in rows
-            ]
-
     # ---------- lifecycle ----------
     def close(self) -> None:
         try:
@@ -1989,7 +1669,7 @@ class DB:
 
 
 # === Singleton ===
-# Все модули (main, Site, Auth) импортируют этот объект, а не создают DB() сами.
+# Все модули (main, Site) импортируют этот объект, а не создают DB() сами.
 # Это устраняет двойную инициализацию PRAGMA и конкуренцию за лок-файл.
 _shared_db: DB | None = None
 

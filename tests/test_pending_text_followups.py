@@ -66,8 +66,9 @@ def test_existing_v6_database_migrates_the_followup_queue(tmp_path) -> None:
             )
         }
 
-        assert version == 7
+        assert version == CURRENT_SCHEMA_VERSION
         assert "pending_text_followups" in tables
+        assert "post_queue" in tables
         assert upgraded.get_due_pending_text_followups() == []
     finally:
         upgraded.conn.close()

@@ -95,6 +95,40 @@ def try_reexec_via_venv() -> bool:
         return False
 
 
+def ensure_dependencies_installed(packages: list[str]) -> None:
+    """Устанавливает перечисленные пакеты в текущее окружение.
+
+    Используется самопроверкой окружения (tools/doctor.py) и запуском
+    приложения. Если системный pip недоступен, пакеты ставятся в локальное
+    окружение .venv рядом с проектом.
+    """
+    if not packages:
+        return
+    print("--> [СИСТЕМА] Устанавливаем: " + ", ".join(packages))
+    try:
+        _pip_install(sys.executable, packages)
+        if not _packages_ok(sys.executable):
+            raise subprocess.CalledProcessError(1, "pip")
+        print("--> [СИСТЕМА] Готово.")
+        return
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
+    print("--> [СИСТЕМА] Системный pip недоступен. Создаю .venv рядом с приложением...")
+    try:
+        venv_python = ensure_venv()
+        _pip_install(venv_python, packages, use_requirements=True)
+        if not _packages_ok(venv_python):
+            _pip_install(venv_python, packages)
+        print("--> [СИСТЕМА] Зависимости установлены в .venv.")
+    except Exception as exc:
+        raise RuntimeError(
+            "Не удалось установить зависимости: "
+            f"{exc}. Установите их вручную: "
+            f"{sys.executable} -m pip install -r {REQUIREMENTS_FILE}"
+        ) from exc
+
+
 def check_and_install_dependencies() -> None:
     """
     Если не хватает библиотек — устанавливает их через pip в текущее окружение

@@ -46,11 +46,14 @@ jobs:
       - name: Compile all Python sources
         run: python -m compileall -q .
 
-      - name: Check standalone JavaScript syntax
-        run: node --check script.js
-
       - name: Check admin panel JavaScript syntax
         run: python tools/check_frontend.py
+
+      - name: Check for leaked secrets in sources
+        run: python tests/check_for_secrets.py
+
+      - name: Verify runtime environment
+        run: python tools/doctor.py
 
       - name: Test proxy-check UI failures
         run: node tests/test_proxy_connection_rejection.cjs

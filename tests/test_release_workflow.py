@@ -78,5 +78,8 @@ def test_release_and_regression_workflows_check_all_source_syntax() -> None:
 
     for workflow in (regression, release):
         assert "python -m compileall -q ." in workflow
-        assert "node --check script.js" in workflow
+        # Панель самодостаточна: её скрипт проверяет tools/check_frontend.py.
+        assert "python tools/check_frontend.py" in workflow
+        # Отдельного admin.js в проекте больше нет.
+        assert "node --check script.js" not in workflow
 

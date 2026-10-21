@@ -3,6 +3,31 @@
 # ==========================================
 # АВТО-УСТАНОВКА БИБЛИОТЕК ПРИ ПЕРВОМ ЗАПУСКЕ
 # ==========================================
+import sys as _sys
+
+# python main.py --check  — самопроверка окружения без запуска парсера.
+if "--check" in _sys.argv or "--doctor" in _sys.argv:
+    from pathlib import Path as _Path
+
+    _here = _Path(__file__).resolve().parent
+    _doctor = None
+    for _candidate in (_here / "tools" / "doctor.py", _here.parent / "tools" / "doctor.py"):
+        if _candidate.is_file():
+            _doctor = _candidate
+            break
+    if _doctor is not None:
+        import runpy
+
+        _sys.argv = [_sys.argv[0]] + [
+            arg for arg in _sys.argv[1:] if arg not in ("--check", "--doctor")
+        ]
+        if "--install" not in _sys.argv:
+            _sys.argv.append("--install")
+        runpy.run_path(str(_doctor), run_name="__main__")
+        raise SystemExit(0)
+    print("tools/doctor.py не найден — проверка окружения недоступна.", file=_sys.stderr)
+    raise SystemExit(1)
+
 from deps import check_and_install_dependencies
 
 check_and_install_dependencies()
@@ -60,6 +85,7 @@ from config import (
     BROWSER_OPEN_DELAY_S,
     BROWSER_OPEN_ON_START,
     MAX_PROXY_PORT,
+    MEDIA_CLEANUP_INTERVAL_HOURS,
     MIN_AD_WORD_LEN,
     MIN_PROXY_PORT,
     POLL_DELAY_DEFAULT,
@@ -534,6 +560,7 @@ def _load_config() -> dict:
         "proxy_user": get_setting("proxy_user", ""),
         "proxy_pass": get_setting("proxy_pass", ""),
         "mtproto_key": get_setting("mtproto_key", ""),
+        "publish_mode": (get_setting("publish_mode", "auto") or "auto").strip().lower(),
         "watermark": get_setting("watermark_text", ""),
     }
 
@@ -737,6 +764,175 @@ def _truncate_telegram_text(text: str, max_length: int = 4096) -> str:
     return marker
 
 
+def _queue_media_dir() -> str:
+    """Каталог для медиафайлов очереди постов."""
+    return os.path.join(BASE_DIR, "queue_media")
+
+
+#: Момент последней автоочистки медиа (монотонное время, не зависит от часов).
+_last_media_cleanup_ts = 0.0
+
+
+def _save_post_to_queue(
+    source: str,
+    messages: list[Message],
+    publish_text: str,
+    target_chat: str,
+    category: str,
+    media_list: list,
+    temp_paths: list[str],
+) -> int:
+    """Сохраняет пост в очередь ручной публикации вместе с медиа."""
+    os.makedirs(_queue_media_dir(), exist_ok=True)
+    media_files: list[str] = []
+    media_kind = ""
+    for path in temp_paths:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            # Уникальное имя не даёт разным постам перезаписать один файл.
+            stem, ext = os.path.splitext(os.path.basename(path))
+            name = f"{int(time.time() * 1000)}_{len(media_files)}{ext}"
+            target_path = os.path.join(_queue_media_dir(), name)
+            shutil.copy2(path, target_path)
+            media_files.append(name)
+        except OSError as exc:
+            db.add_log("WARN-511", f"Медиафайл не сохранён в очереди: {exc}")
+            continue
+
+    if media_list:
+        first = media_list[0]
+        if isinstance(first, InputMediaPhoto):
+            media_kind = "photo"
+        elif isinstance(first, InputMediaVideo):
+            media_kind = "video"
+        else:
+            media_kind = "document"
+
+    original_text = "\n".join(m.message for m in messages if m.message).strip()
+    group_id = ""
+    for message in messages:
+        candidate = getattr(message, "grouped_id", None)
+        if candidate:
+            group_id = str(candidate)
+            break
+
+    return db.save_post_to_queue(
+        {
+            "source_name": source,
+            "post_id": str(messages[0].id),
+            "group_id": group_id,
+            "original_text": original_text,
+            "publish_text": publish_text,
+            "media_files": json.dumps(media_files, ensure_ascii=False),
+            "media_kind": media_kind,
+            "category": (category or "").strip().lower(),
+            "target_chat": target_chat,
+        }
+    )
+
+
+async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
+    """Публикует пост из очереди. Возвращает (успех, сообщение)."""
+    target_chat = str(post.get("target_chat") or "").strip()
+    if not target_chat:
+        return False, "Не указан канал назначения."
+
+    text = str(post.get("publish_text") or "")
+    try:
+        media_files = json.loads(post.get("media_files") or "[]")
+    except (TypeError, ValueError):
+        media_files = []
+    if not isinstance(media_files, list):
+        media_files = []
+
+    media_dir = _queue_media_dir()
+    paths = []
+    for name in media_files:
+        safe_name = os.path.basename(str(name).replace("\\", "/"))
+        if not safe_name or safe_name != str(name):
+            continue
+        full = os.path.join(media_dir, safe_name)
+        if os.path.isfile(full):
+            paths.append(full)
+
+    try:
+        if not paths:
+            if text:
+                await bot.send_message(chat_id=target_chat, text=text)
+            else:
+                return False, "В посте нет ни текста, ни медиа."
+        elif len(paths) == 1:
+            kind = str(post.get("media_kind") or "document")
+            if kind == "photo":
+                await bot.send_photo(chat_id=target_chat, photo=FSInputFile(paths[0]), caption=text or None)
+            elif kind == "video":
+                await bot.send_video(chat_id=target_chat, video=FSInputFile(paths[0]), caption=text or None)
+            else:
+                await bot.send_document(chat_id=target_chat, document=FSInputFile(paths[0]), caption=text or None)
+        else:
+            media = []
+            for path in paths:
+                media.append(InputMediaDocument(media=FSInputFile(path), caption=text or None))
+            await bot.send_media_group(chat_id=target_chat, media=media)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, "Опубликовано."
+
+
+async def _cleanup_expired_media() -> int:
+    """Удаляет медиа опубликованных постов старше срока хранения.
+
+    Возвращает количество удалённых файлов.
+    """
+    settings = db.get_all_settings()
+    if str(settings.get("media_cleanup_enabled", "1")).strip() not in {"1", "true", "yes", "on"}:
+        return 0
+    try:
+        retention = int(str(settings.get("media_retention_days", "3") or "0").strip() or 0)
+    except (TypeError, ValueError):
+        retention = 0
+    if retention <= 0:
+        return 0
+
+    media_dir = _queue_media_dir()
+    removed = 0
+    for post in db.published_posts_with_media(retention):
+        for name in post["media_files"]:
+            safe_name = os.path.basename(str(name).replace("\\", "/"))
+            if not safe_name or safe_name != str(name):
+                continue
+            full = os.path.join(media_dir, safe_name)
+            try:
+                if os.path.isfile(full):
+                    os.remove(full)
+                    removed += 1
+            except OSError:
+                continue
+        db.clear_post_media(post["id"])
+    if removed:
+        db.add_log("OK-513", f"Автоочистка медиа: удалено файлов {removed} (срок хранения {retention} дн.).")
+    return removed
+
+
+async def _publish_due_scheduled_posts(bot: Bot) -> int:
+    """Публикует отложенные посты, у которых наступило время."""
+    published = 0
+    for post in db.due_scheduled_posts(limit=10):
+        ok, message = await publish_queued_post(bot, post)
+        if ok:
+            db.update_queued_post(
+                post["id"],
+                {"status": "published", "published_at": time.strftime("%Y-%m-%d %H:%M:%S"), "last_error": ""},
+            )
+            db.add_log("OK-511", f"Отложенный пост {post['id']} опубликован в {post.get('target_chat')}.")
+            published += 1
+        else:
+            db.update_queued_post(post["id"], {"last_error": message})
+            db.add_log("ERR-511", f"Не удалось опубликовать отложенный пост {post['id']}: {message}")
+    return published
+
+
 async def _process_message_group(
     client: TelegramClient,
     source: str,
@@ -844,6 +1040,25 @@ async def _process_message_group(
         )
 
     caption_remainder = _media_caption_remainder(final_text)
+
+    # Ручной режим: пост не публикуется сразу, а попадает в очередь,
+    # где его можно поправить, отложить, отправить или отменить.
+    if (cfg.get("publish_mode") or "auto") == "manual":
+        try:
+            _save_post_to_queue(source, messages, final_text, target_chat, topic, media_list, temp_paths)
+        except Exception as exc:
+            db.add_log(
+                "ERR-510",
+                f"Пост {source}/{messages[0].id} не попал в очередь: {exc}.",
+            )
+            print(f"!!! Не удалось сохранить пост {source}/{messages[0].id} в очередь: {exc}")
+            return
+        db.add_log(
+            "OK-510",
+            f"Пост {source}/{messages[0].id} добавлен в очередь и ждёт подтверждения.",
+        )
+        print(f"Пост {source}/{messages[0].id} -> очередь (цель: {target_chat}).")
+        return
 
     retry_delay_s = 0
     secondary_send_error: Exception | None = None
@@ -1595,6 +1810,23 @@ async def main() -> None:
                 bot_running.clear()
                 continue
             print("\n=== КРУГ ОБХОДА ИСТОЧНИКОВ НАЧАТ ===")
+            # Отложенные посты публикуются независимо от наличия новых в ленте.
+            try:
+                due = await _publish_due_scheduled_posts(bot)
+                if due:
+                    print(f"--> Опубликовано отложенных постов: {due}")
+            except Exception as exc:
+                db.add_log("ERR-512", f"Не удалось опубликовать отложенные посты: {exc}")
+            # Периодическая очистка старых медиафайлов.
+            now_ts = time.time()
+            if now_ts - _last_media_cleanup_ts > MEDIA_CLEANUP_INTERVAL_HOURS * 3600:
+                _last_media_cleanup_ts = now_ts
+                try:
+                    cleaned = await _cleanup_expired_media()
+                    if cleaned:
+                        print(f"--> Очищено просроченных медиафайлов: {cleaned}")
+                except Exception as exc:
+                    db.add_log("WARN-513", f"Автоочистка медиа не удалась: {exc}")
             for source in cfg["sources"]:
                 if await _process_one_source(client, source, cfg, bot, ai_session):
                     need_reconnect = True

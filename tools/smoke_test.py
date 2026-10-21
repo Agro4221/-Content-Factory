@@ -41,19 +41,17 @@ def main() -> int:
         "config",
         "startup",
         "database",
-        "Auth",
-        # Удалённые модули больше не проверяем
-        # "licensing.client",  <-- удалён
-        # "modules.behavior.engine",  <-- удалён
-        # "modules.reviews.engine",  <-- удалён
+        "secrets_store",
+        "proxy_check",
+        "state",
     ):
         check_import(mod)
 
     try:
         from config import (
             ADMIN_HTML_PATH,
-            ACTIVATE_HTML_PATH,
             BUNDLE_DIR,
+            QUEUE_MEDIA_DIR,
             REQUIRED_PACKAGES,
         )
 
@@ -61,15 +59,12 @@ def main() -> int:
         ok("config.REQUIRED_PACKAGES dict")
         for path, label in (
             (ADMIN_HTML_PATH, "admin.html"),
-            (ACTIVATE_HTML_PATH, "activate.html"),
-            (os.path.join(BUNDLE_DIR, "admin.css"), "admin.css"),
-            (os.path.join(BUNDLE_DIR, "admin.js"), "admin.js"),
         ):
             if not os.path.isfile(path):
                 fail(label, FileNotFoundError(path))
             else:
                 ok(label)
-        
+
         env_example = os.path.join(BUNDLE_DIR, ".env.example")
         if not os.path.isfile(env_example):
             env_example = os.path.join(ROOT, ".env.example")
@@ -79,20 +74,6 @@ def main() -> int:
             fail(".env.example", FileNotFoundError(env_example))
     except Exception as exc:
         fail("config paths", exc)
-
-    try:
-        # Заглушка проверки лицензии — импортируем, если модуль существует
-        from licensing.client import LicenseClient  # type: ignore[import-not-found]
-        
-        client = LicenseClient()
-        assert hasattr(client, "refresh_online_if_needed")
-        ok("LicenseClient.refresh_online_if_needed(force=)")
-    except ImportError as exc:
-        # Модуль лицензий удалён — пропускаем проверку
-        print(f"  SKIP licensing.client (модуль удалён)")
-        FAILURES.append(f"licensing.client skipped: {exc}")
-    except Exception as exc:
-        fail("licensing.client", exc)
 
     try:
         from Site import app, MODULE_RUNTIME_META

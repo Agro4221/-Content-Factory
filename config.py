@@ -42,7 +42,7 @@ def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> 
 
 load_environment()
 
-APP_VERSION = "1.28.3.6"
+APP_VERSION = "1.29.0.0"
 
 API_HOST = os.environ.get("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 API_PORT = _env_int("API_PORT", 8000, minimum=1, maximum=65535)
@@ -61,27 +61,14 @@ BROWSER_OPEN_DELAY_S = _env_float("BROWSER_OPEN_DELAY_S", 2.5, minimum=0.0, maxi
 DB_PATH = os.path.join(BASE_DIR, "bot_storage.db")
 SESSION_PATH = os.path.join(BASE_DIR, "session_name")
 TEMP_DIR = os.path.join(BASE_DIR, "temp_media")
+QUEUE_MEDIA_DIR = os.path.join(BASE_DIR, "queue_media")
 ADMIN_HTML_PATH = os.path.join(BUNDLE_DIR, "admin.html")
-ACTIVATE_HTML_PATH = os.path.join(BUNDLE_DIR, "activate.html")
-
-# Реальные значения legacy licensing приходят только из .env.
-LEGACY_LICENSE_SALT = (os.environ.get("LEGACY_LICENSE_SALT", "") or "").strip()
-LICENSE_SIGNING_SECRET = (os.environ.get("LICENSE_SIGNING_SECRET", "") or "").strip()
-LICENSE_SERVER_URL = (os.environ.get("LICENSE_SERVER_URL", "") or "").strip().rstrip("/")
-LICENSE_ONLINE_REFRESH_SECONDS = _env_int(
-    "LICENSE_ONLINE_REFRESH_SECONDS", 3600, minimum=60, maximum=86400
-)
-LICENSE_SERVER_TIMEOUT_S = _env_float(
-    "LICENSE_SERVER_TIMEOUT_S", 15.0, minimum=0.5, maximum=120.0
-)
-LICENSE_VERIFY_ON_STARTUP = os.environ.get("LICENSE_VERIFY_ON_STARTUP", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 MODULE_POSTS = "posts"
 ALL_MODULES = frozenset({MODULE_POSTS})
 
 POLL_PAUSE_S = 1
 SLEEP_BETWEEN_POSTS_S = 5
-SLEEP_LICENSE_MISSING_S = 30
 SLEEP_API_ERROR_S = 30
 SLEEP_FLOOD_POLL_S = 1
 
@@ -112,8 +99,129 @@ SETTING_KEYS = frozenset({
     "remote_url", "remote_api_key", "remote_model", "system_prompt",
     "sources", "topic_channels", "ads_words", "watermark_text",
     "poll_delay", "use_proxy", "proxy_type", "proxy_host", "proxy_port",
-    "proxy_user", "proxy_pass", "mtproto_key", "license_key",
+    "proxy_user", "proxy_pass", "mtproto_key",
+    "publish_mode", "media_retention_days", "media_cleanup_enabled",
 })
+
+# Настройки, которые хранятся в базе в зашифрованном виде (Windows DPAPI).
+# Их значения никогда не выводятся в журнал, терминал или панель управления.
+SECRET_SETTING_KEYS = frozenset({
+    "bot_token",
+    "tg_api_hash",
+    "remote_api_key",
+    "proxy_pass",
+    "mtproto_key",
+})
+
+#: Плейсхолдер, который панель показывает вместо сохранённого секрета.
+SECRET_MASK = "••••••••"
+
+#: Значение-сигнал, которым панель просит удалить сохранённый секрет.
+SECRET_CLEAR_SIGNAL = "__clear__"
+
+#: Режим публикации: auto — сразу после сбора, manual — через очередь постов.
+PUBLISH_MODES = ("auto", "manual")
+DEFAULT_PUBLISH_MODE = "auto"
+
+#: Сколько дней хранить медиафайлы опубликованных постов. 0 — хранить вечно.
+MEDIA_RETENTION_DAYS = (0, 1, 2, 3, 7)
+DEFAULT_MEDIA_RETENTION_DAYS = 3
+
+#: Как часто (в часах) парсер проверяет очередь на просроченные медиа.
+MEDIA_CLEANUP_INTERVAL_HOURS = 6
+
+#: Локальные провайдеры AI: ключ -> параметры подключения и список моделей.
+#: `port` — порт по умолчанию, `path` — эндпоинт со списком моделей.
+#: Эндпоинт чат-completions у всех совместим с OpenAI (/v1/chat/completions).
+LOCAL_AI_PROVIDERS: dict[str, dict] = {
+    "ollama": {
+        "label": "Ollama",
+        "host": "127.0.0.1",
+        "port": 11434,
+        "path": "/api/tags",
+        "collection": "models",
+        "name": "name",
+        "hint": "Запуск: ollama serve",
+    },
+    "lmstudio": {
+        "label": "LM Studio",
+        "host": "127.0.0.1",
+        "port": 1234,
+        "path": "/v1/models",
+        "collection": "data",
+        "name": "id",
+        "hint": "Включите Local Server во вкладке Developer",
+    },
+    "anythingllm": {
+        "label": "AnythingLLM",
+        "host": "127.0.0.1",
+        "port": 3001,
+        "path": "/v1/models",
+        "collection": "data",
+        "name": "id",
+        "hint": "Включите Developer API",
+    },
+    "localai": {
+        "label": "LocalAI",
+        "host": "127.0.0.1",
+        "port": 8080,
+        "path": "/v1/models",
+        "collection": "data",
+        "name": "id",
+        "hint": "Запуск: local-ai run",
+    },
+    "llamacpp": {
+        "label": "llama.cpp server",
+        "host": "127.0.0.1",
+        "port": 8080,
+        "path": "/v1/models",
+        "collection": "data",
+        "name": "id",
+        "hint": "Запуск: llama-server -m model.gguf --port 8080",
+    },
+    "vllm": {
+        "label": "vLLM",
+        "host": "127.0.0.1",
+        "port": 8000,
+        "path": "/v1/models",
+        "collection": "data",
+        "name": "id",
+        "hint": "Запуск: vllm serve model",
+    },
+    "gpt4all": {
+        "label": "GPT4All",
+        "host": "127.0.0.1",
+        "port": 4891,
+        "path": "/v1/models",
+        "collection": "data",
+        "name": "id",
+        "hint": "Включите API-сервер в настройках",
+    },
+    "koboldcpp": {
+        "label": "KoboldCpp",
+        "host": "127.0.0.1",
+        "port": 5001,
+        "path": "/v1/models",
+        "collection": "data",
+        "name": "id",
+        "hint": "Запуск: koboldcpp.py --api",
+    },
+    "textgenwebui": {
+        "label": "text-generation-webui",
+        "host": "127.0.0.1",
+        "port": 5000,
+        "path": "/v1/models",
+        "collection": "data",
+        "name": "id",
+        "hint": "Запуск: ./start.sh --api",
+    },
+}
+
+#: Провайдер по умолчанию, если пользователь ничего не выбрал.
+DEFAULT_LOCAL_AI_PROVIDER = "ollama"
+
+#: Путь чат-completions, совместимый с OpenAI. Одинаков для всех провайдеров.
+LOCAL_AI_CHAT_PATH = "/v1/chat/completions"
 
 POLL_DELAY_MIN = 5
 POLL_DELAY_MAX = 3600
@@ -133,7 +241,6 @@ REQUIRED_PACKAGES: dict[str, str] = {
 }
 
 SLEEP_NO_CONFIG_S = 30
-SLEEP_NO_LICENSE_S = 30
 SLEEP_DB_ERROR_S = 15
 SLEEP_BOT_STOPPED_S = 2
 

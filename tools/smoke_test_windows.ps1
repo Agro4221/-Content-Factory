@@ -52,14 +52,27 @@ try {
         throw "Admin panel page did not return the expected HTML"
     }
 
-    $css = Invoke-WebRequest -Uri "http://127.0.0.1:18765/admin.css" -TimeoutSec 5 -UseBasicParsing
-    if ($css.StatusCode -ne 200 -or $css.Content -notmatch ":root") {
-        throw "Admin stylesheet is not served"
+    # Панель самодостаточна: стили и скрипт должны быть встроены в HTML,
+    # иначе собранный EXE покажет пустую страницу.
+    if ($page.Content -notmatch "<style") {
+        throw "Admin panel page has no embedded stylesheet"
+    }
+    if ($page.Content -notmatch "<script>") {
+        throw "Admin panel page has no embedded script"
+    }
+    if ($page.Content -notmatch "btn-bot-toggle") {
+        throw "Admin panel page does not contain the parser control"
     }
 
-    $js = Invoke-WebRequest -Uri "http://127.0.0.1:18765/admin.js" -TimeoutSec 5 -UseBasicParsing
-    if ($js.StatusCode -ne 200 -or $js.Content -notmatch "setupTheme") {
-        throw "Admin JavaScript is not served"
+    # Устаревшие отдельные файлы панели больше не существуют и не отдаются.
+    foreach ($legacy in @("admin.css", "admin.js")) {
+        try {
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:18765/$legacy" -TimeoutSec 5 -UseBasicParsing
+            throw "Legacy asset $legacy is still served"
+        }
+        catch {
+            if ($_.Exception.Message -like "Legacy asset*") { throw }
+        }
     }
 
     $favicon = Invoke-WebRequest -Uri "http://127.0.0.1:18765/favicon.png" -TimeoutSec 5 -UseBasicParsing
@@ -67,7 +80,7 @@ try {
         throw "Bundled favicon is not served"
     }
 
-    Write-Host "Parser.exe smoke test passed: API, admin HTML/CSS/JS, and favicon are reachable."
+    Write-Host "Parser.exe smoke test passed: API, self-contained admin HTML, and favicon are reachable."
 }
 catch {
     if (Test-Path $stdout) { Get-Content $stdout }

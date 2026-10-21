@@ -1,777 +1,2584 @@
 <!DOCTYPE html>
-<!-- Content Factory admin: minimal controls for the local publishing pipeline. -->
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#f5f5f7">
-    <title>Marej — Панель управления</title>
-    <link rel="icon" type="image/png" href="/favicon.png">
-    <link rel="stylesheet" href="/admin.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#ffffff">
+<link rel="icon" type="image/png" href="/favicon.png">
+<title>Content Factory — Панель управления</title>
+<script>
+/* Тема применяется до отрисовки, иначе страница мигает светлой темой. */
+(function () {
+  try {
+    var saved = localStorage.getItem('content-factory-theme');
+    if (saved !== 'dark' && saved !== 'light') {
+      saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    }
+    document.documentElement.dataset.theme = saved;
+  } catch (e) { document.documentElement.dataset.theme = 'light'; }
+})();
+</script>
+<style>
+  /* ============================================================
+     ТОКЕНЫ ДИЗАЙН-СИСТЕМЫ
+     ============================================================ */
+  :root {
+    color-scheme: light;
+
+    --bg:            #f6f7f9;
+    --surface:       #ffffff;
+    --surface-2:     #fbfcfd;
+    --surface-3:     #f1f3f6;
+    --surface-hover: #f7f8fa;
+
+    --border:        #e3e6eb;
+    --border-strong: #cfd4dc;
+    --border-focus:  #1c5fd8;
+
+    --text:   #14161a;
+    --text-2: #4b535f;
+    --text-3: #767e8b;
+    --text-4: #9aa1ac;
+
+    --accent:        #1c5fd8;
+    --accent-hover:  #1750bb;
+    --accent-active: #123f96;
+    --accent-soft:   #eaf1fd;
+    --accent-border: #bcd3f7;
+
+    --success:      #0f7b52;
+    --success-soft: #e8f5ef;
+    --success-border:#a9dcc6;
+
+    --warning:      #9a5b09;
+    --warning-soft: #fdf4e6;
+    --warning-border:#f0d5a8;
+
+    --danger:       #c22f26;
+    --danger-hover: #a5261e;
+    --danger-soft:  #fdecea;
+    --danger-border:#f0bdb8;
+
+    --radius:    6px;
+    --radius-sm: 4px;
+
+    --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+    --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.09);
+    --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.14);
+
+    --appbar-h: 56px;
+    --tabs-h:   44px;
+    --page-max: 1180px;
+
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* Полупрозрачные поверхности, отдельные для светлой и тёмной темы. */
+    --surface-glass: rgba(255, 255, 255, .93);
+    --switch-off: #c8ced8;
+    --input-bg: #ffffff;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --bg:            #0e1116;
+    --surface:       #151a21;
+    --surface-2:     #1a2029;
+    --surface-3:     #202833;
+    --surface-hover: #1e2531;
+
+    --border:        #262e3a;
+    --border-strong: #39434f;
+    --border-focus:  #4d8bf5;
+
+    --text:   #e6e9ee;
+    --text-2: #aab3c0;
+    --text-3: #7d8796;
+    --text-4: #5c6673;
+
+    --accent:        #4d8bf5;
+    --accent-hover:  #6a9dfa;
+    --accent-active: #3d7ae8;
+    --accent-soft:   rgba(77, 139, 245, .15);
+    --accent-border: rgba(77, 139, 245, .42);
+
+    --success:      #3ecf8e;
+    --success-soft: rgba(62, 207, 142, .13);
+    --success-border: rgba(62, 207, 142, .34);
+
+    --warning:      #e0a340;
+    --warning-soft: rgba(224, 163, 64, .13);
+    --warning-border: rgba(224, 163, 64, .34);
+
+    --danger:       #f27066;
+    --danger-hover: #e05a50;
+    --danger-soft:  rgba(242, 112, 102, .13);
+    --danger-border: rgba(242, 112, 102, .38);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, .45);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, .55);
+
+    --surface-glass: rgba(21, 26, 33, .93);
+    --switch-off: #3a4450;
+    --input-bg: #11161d;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  /* Атрибут hidden должен побеждать авторские правила display.
+     Без этого .secret-btn и .confirm-box остаются видимыми при hidden. */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--accent); text-decoration: none; }
+  h1, h2, h3, p { margin: 0; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #d3d8e0; border-radius: 6px; border: 2px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background: #b9c0cb; }
+
+  .icon { width: 16px; height: 16px; flex-shrink: 0; stroke: currentColor; fill: none;
+          stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .icon-lg { width: 18px; height: 18px; }
+  .icon-sm { width: 14px; height: 14px; }
+
+  /* ============================================================
+     ШАПКА ПРИЛОЖЕНИЯ
+     ============================================================ */
+  .appbar {
+    position: sticky; top: 0; z-index: 40;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .appbar-inner {
+    max-width: var(--page-max); margin: 0 auto; height: var(--appbar-h);
+    padding: 0 24px; display: flex; align-items: center; gap: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .brand-mark {
+    width: 28px; height: 28px; border-radius: var(--radius-sm); flex-shrink: 0;
+    object-fit: contain; display: block; background: #fff;
+    box-shadow: 0 1px 3px rgba(16, 24, 40, .18);
+  }
+  .brand-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+  .brand-text strong { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+  .brand-text span { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+  .appbar-spacer { flex: 1; }
+  .appbar-actions { display: flex; align-items: center; gap: 8px; }
+
+  .runtime-state {
+    display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 11px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface-2); font-size: 12.5px; color: var(--text-2); white-space: nowrap;
+  }
+  .runtime-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); flex-shrink: 0; }
+  .runtime-state[data-state="running"] { color: var(--success); border-color: var(--success-border); background: var(--success-soft); }
+  .runtime-state[data-state="running"] .runtime-dot { background: var(--success); }
+  .runtime-state[data-state="stopped"] .runtime-dot { background: var(--text-4); }
+  .runtime-state[data-state="error"] { color: var(--danger); border-color: var(--danger-border); background: var(--danger-soft); }
+  .runtime-state[data-state="error"] .runtime-dot { background: var(--danger); }
+
+  /* ============================================================
+     КНОПКИ
+     ============================================================ */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    height: 34px; padding: 0 14px; border-radius: var(--radius);
+    border: 1px solid transparent; background: var(--surface-3); color: var(--text);
+    font-size: 13.5px; font-weight: 550; white-space: nowrap;
+    transition: background-color .12s ease, border-color .12s ease, color .12s ease;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-primary:active:not(:disabled) { background: var(--accent-active); }
+  .btn-secondary { background: var(--surface); border-color: var(--border-strong); color: var(--text-2); }
+  .btn-secondary:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); border-color: var(--text-4); }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover:not(:disabled) { background: var(--danger-hover); }
+  .btn-danger-ghost { background: var(--surface); border-color: var(--danger-border); color: var(--danger); }
+  .btn-danger-ghost:hover:not(:disabled) { background: var(--danger-soft); }
+  .btn-icon { width: 34px; padding: 0; background: var(--surface); border-color: var(--border-strong); color: var(--text-2); }
+  .btn-icon:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+  .btn-block { width: 100%; }
+  .btn-sm { height: 30px; padding: 0 11px; font-size: 13px; }
+
+  /* ============================================================
+     НАВИГАЦИЯ
+     ============================================================ */
+  .tabs {
+    position: sticky; top: var(--appbar-h); z-index: 30;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .tabs-inner {
+    max-width: var(--page-max); margin: 0 auto; height: var(--tabs-h); padding: 0 24px;
+    display: flex; align-items: stretch; gap: 2px;
+  }
+  /* На широком экране разделы — обычная горизонтальная строка. */
+  .tabs-current { display: none; }
+  .sections-menu { display: flex; align-items: stretch; gap: 2px; flex: 1; min-width: 0; }
+  .nav-tab {
+    position: relative; border: none; background: none; padding: 0 14px;
+    font-size: 13.5px; font-weight: 500; color: var(--text-3); white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 7px; transition: color .12s ease;
+  }
+  .nav-tab:hover { color: var(--text); }
+  .nav-tab.active { color: var(--accent); font-weight: 600; }
+  .nav-tab.active::after {
+    content: ''; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px;
+    background: var(--accent); border-radius: 2px 2px 0 0;
+  }
+  .nav-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  /* ============================================================
+     КОНТЕНТ
+     ============================================================ */
+  .main { padding: 24px 24px 96px; }
+  .main-inner { max-width: var(--page-max); margin: 0 auto; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .page-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 20px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .page-title { font-size: 21px; font-weight: 650; letter-spacing: -0.02em; color: var(--text); }
+  .page-desc { font-size: 13.5px; color: var(--text-3); margin-top: 5px; max-width: 74ch; }
+  .page-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  /* ============================================================
+     СТАТУС — ПЛОТНЫЕ МЕТРИКИ
+     ============================================================ */
+  .status-strip {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1px; background: var(--border);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; margin-bottom: 20px; box-shadow: var(--shadow-sm);
+  }
+  .card {
+    background: var(--surface); padding: 14px 16px 15px; min-width: 0;
+    position: relative; display: flex; flex-direction: column; gap: 2px;
+  }
+  .card-label {
+    font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .07em; color: var(--text-3);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .card-value {
+    font-size: 20px; font-weight: 650; letter-spacing: -0.02em; color: var(--text);
+    line-height: 1.25; margin-top: 4px;
+  }
+  .card-sub { font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+  .card.ok .card-value { color: var(--success); }
+  .card.warn .card-value { color: var(--warning); }
+  .card.err .card-value { color: var(--danger); }
+  .card::after {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: transparent;
+  }
+  .card.ok::after { background: var(--success); }
+  .card.warn::after { background: var(--warning); }
+  .card.err::after { background: var(--danger); }
+
+  /* ============================================================
+     ФОРМЫ
+     ============================================================ */
+  .block {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); margin-bottom: 16px; box-shadow: var(--shadow-sm);
+  }
+  .block-head { padding: 13px 18px; border-bottom: 1px solid var(--border); }
+  .block-title { font-size: 13.5px; font-weight: 620; color: var(--text); }
+  .block-desc { font-size: 12.5px; color: var(--text-3); margin-top: 3px; }
+  .block-body { padding: 18px; }
+  .block-foot {
+    padding: 12px 18px; border-top: 1px solid var(--border);
+    background: var(--surface-2); display: flex; align-items: center;
+    justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+
+  .fieldset + .fieldset { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); }
+  .fieldset-label {
+    font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--text-3); margin-bottom: 12px; display: flex; align-items: center; gap: 7px;
+  }
+  .fieldset-label .icon { color: var(--text-4); }
+  .fieldset-note {
+    font-size: 12px; color: var(--text-3); margin: -6px 0 12px; max-width: 78ch;
+  }
+
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
+  .grid-1 { grid-template-columns: minmax(0, 1fr); }
+  .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .field-full { grid-column: 1 / -1; }
+  .field-label {
+    font-size: 12.5px; font-weight: 570; color: var(--text-2);
+    display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  }
+  .field-req { color: var(--danger); font-size: 11px; }
+  .field-hint { font-size: 11.5px; color: var(--text-3); line-height: 1.45; }
+  .field-hint code {
+    font-family: var(--mono); font-size: 11px; background: var(--surface-3);
+    padding: 1px 5px; border-radius: var(--radius-sm); color: var(--text-2);
+  }
+
+  input[type="text"], input[type="number"], input[type="password"], select, textarea {
+    width: 100%; padding: 8px 11px; background: var(--input-bg);
+    border: 1px solid var(--border-strong); border-radius: var(--radius);
+    color: var(--text); font-size: 13.5px; min-height: 36px;
+    transition: border-color .12s ease, box-shadow .12s ease;
+  }
+  input:hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) { border-color: var(--text-4); }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--border-focus);
+    box-shadow: 0 0 0 3px rgba(28, 95, 216, .13);
+  }
+  input::placeholder, textarea::placeholder { color: var(--text-4); }
+  textarea { min-height: 92px; resize: vertical; line-height: 1.55; font-family: var(--mono); font-size: 12.5px; }
+  select {
+    appearance: none; padding-right: 32px; cursor: pointer;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%23767e8b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3e%3cpath d='M3 4.5L6 7.5L9 4.5'/%3e%3c/svg%3e");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+  input[type="number"] { font-variant-numeric: tabular-nums; }
+
+  /* Переключатель */
+  .switch-row {
+    display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface-2); cursor: pointer; user-select: none;
+  }
+  .switch-row:hover { border-color: var(--border-strong); }
+  .switch-row input { display: none; }
+  .switch-track {
+    width: 34px; height: 20px; border-radius: 999px; background: var(--switch-off); position: relative;
+    flex-shrink: 0; margin-top: 1px; transition: background-color .15s ease;
+  }
+  .switch-track::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: #fff; box-shadow: var(--shadow-sm);
+    transition: transform .15s ease;
+  }
+  .switch-row input:checked + .switch-track { background: var(--accent); }
+  .switch-row input:checked + .switch-track::after { transform: translateX(14px); }
+  .switch-text { min-width: 0; }
+  .switch-title { display: block; font-size: 13.5px; font-weight: 560; color: var(--text); }
+  .switch-desc { display: block; font-size: 12px; color: var(--text-3); margin-top: 2px; }
+
+  /* Секретные поля */
+  /* Выбор модели из списка установленных */
+  .model-picker { display: flex; gap: 8px; align-items: stretch; }
+  .model-picker input { flex: 1; min-width: 0; }
+  .model-picker .btn { height: auto; min-height: 36px; white-space: nowrap; }
+  .model-list {
+    margin-top: 8px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); max-height: 260px; overflow-y: auto;
+  }
+  .model-list-empty { padding: 16px; text-align: center; font-size: 12.5px; color: var(--text-3); }
+  .model-list-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    width: 100%; padding: 9px 12px; border: none; background: none; text-align: left;
+    font-size: 13px; color: var(--text-2); border-bottom: 1px solid var(--border);
+  }
+  .model-list-item:last-child { border-bottom: none; }
+  .model-list-item:hover { background: var(--surface-hover); color: var(--text); }
+  .model-list-item.is-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .model-list-item .model-tag { font-size: 11px; color: var(--text-4); }
+
+  /* Фильтры очереди постов */
+  .filter-btn {
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2);
+    border-radius: var(--radius); padding: 5px 11px; font-size: 12.5px; font-weight: 550;
+    transition: background-color .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .filter-btn:hover { background: var(--surface-hover); color: var(--text); }
+  .filter-btn.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-border); }
+
+  .media-usage {
+    padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface-2); font-size: 13px; color: var(--text-2); min-height: 38px;
+    display: flex; align-items: center;
+  }
+
+  /* Справка: расшифровка кодов журнала */
+  .faq-search {
+    flex: 1; max-width: 320px; min-height: 32px; padding: 6px 11px;
+    font-size: 13px; border-radius: var(--radius);
+  }
+  .faq-list { display: flex; flex-direction: column; }
+  .faq-item { padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  .faq-item:last-child { border-bottom: none; }
+  .faq-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .faq-code {
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    padding: 2px 8px; border-radius: var(--radius-sm); border: 1px solid transparent;
+  }
+  .faq-code.error { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+  .faq-code.warn { background: var(--warning-soft); color: var(--warning); border-color: var(--warning-border); }
+  .faq-code.ok { background: var(--success-soft); color: var(--success); border-color: var(--success-border); }
+  .faq-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+  .faq-meaning { font-size: 13px; color: var(--text-2); margin-top: 6px; }
+  .faq-solution {
+    font-size: 12.5px; color: var(--text-3); margin-top: 6px;
+    padding-left: 11px; border-left: 2px solid var(--border-strong);
+  }
+  .faq-empty { padding: 40px 20px; text-align: center; color: var(--text-4); font-size: 13px; }
+
+  /* Очередь постов */
+  .posts-list { display: flex; flex-direction: column; }
+  .post-item { padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .post-item:last-child { border-bottom: none; }
+  .post-item:hover { background: var(--surface-2); }
+  .post-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+  .post-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-3); }
+  .post-status {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px;
+    border-radius: 999px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em;
+    border: 1px solid transparent;
+  }
+  .post-status.draft { background: var(--surface-3); color: var(--text-2); border-color: var(--border-strong); }
+  .post-status.scheduled { background: var(--warning-soft); color: var(--warning); border-color: var(--warning-border); }
+  .post-status.published { background: var(--success-soft); color: var(--success); border-color: var(--success-border); }
+  .post-status.cancelled { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+  .post-status.failed { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+  .post-text { font-size: 13.5px; color: var(--text-2); margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .post-text.is-original { color: var(--text-3); font-size: 12.5px; }
+  .post-media { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .post-media a {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
+    border: 1px solid var(--border-strong); border-radius: var(--radius);
+    font-size: 12px; color: var(--text-2); background: var(--surface);
+  }
+  .post-media a:hover { border-color: var(--accent); color: var(--accent); }
+  .post-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .post-edit { display: grid; gap: 10px; margin-top: 12px; padding: 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
+  .post-edit .grid { gap: 12px; }
+  .posts-empty { padding: 40px 20px; text-align: center; color: var(--text-4); font-size: 13px; }
+
+  .secret-row { display: flex; gap: 6px; align-items: stretch; }
+  .secret-row input { flex: 1; min-width: 0; }
+  .secret-btn {
+    flex: 0 0 36px; width: 36px; border-radius: var(--radius);
+    background: var(--surface); border: 1px solid var(--border-strong);
+    color: var(--text-3); display: inline-flex; align-items: center; justify-content: center;
+    transition: background-color .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .secret-btn:hover { background: var(--surface-hover); color: var(--text); border-color: var(--text-4); }
+  .secret-btn[data-secret-clear]:hover { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+  .secret-row input.pending-clear { border-color: var(--danger); color: var(--danger); }
+
+  /* Переключатель режима AI */
+  .mode-switch {
+    display: inline-flex; padding: 3px; gap: 3px; background: var(--surface-3);
+    border-radius: var(--radius); border: 1px solid var(--border);
+  }
+  .mode-switch label {
+    display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+    border-radius: var(--radius-sm); font-size: 13px; font-weight: 540; color: var(--text-2);
+    cursor: pointer; transition: background-color .12s ease, color .12s ease;
+  }
+  .mode-switch input { display: none; }
+  .mode-switch label:hover { color: var(--text); }
+  .mode-switch input:checked + span { }
+  .mode-switch label:has(input:checked) {
+    background: var(--surface); color: var(--accent); font-weight: 600; box-shadow: var(--shadow-sm);
+  }
+
+  /* ============================================================
+     СПИСОК МАРШРУТОВ
+     ============================================================ */
+  .route-list { display: flex; flex-direction: column; gap: 8px; }
+  .route-head {
+    display: grid; grid-template-columns: 1fr 1.35fr 34px; gap: 10px; margin-bottom: 2px;
+  }
+  .route-head span {
+    font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .07em; color: var(--text-3);
+  }
+  .route-row {
+    display: grid; grid-template-columns: 1fr 1.35fr 34px; gap: 10px; align-items: start;
+  }
+  .route-remove {
+    width: 34px; height: 36px; border-radius: var(--radius); background: var(--surface);
+    border: 1px solid var(--border-strong); color: var(--text-3);
+    display: inline-flex; align-items: center; justify-content: center; transition: .12s ease;
+  }
+  .route-remove:hover { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+  .route-label { display: none; font-size: 11px; font-weight: 600; color: var(--text-3); margin-bottom: 4px; }
+  .empty-note {
+    padding: 18px; border: 1px dashed var(--border-strong); border-radius: var(--radius);
+    text-align: center; font-size: 13px; color: var(--text-3); background: var(--surface-2);
+  }
+
+  /* ============================================================
+     ЖУРНАЛ
+     ============================================================ */
+  .log-toolbar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--surface-2);
+  }
+  .log-toolbar .hint { margin-left: auto; }
+  .log {
+    background: var(--surface); max-height: 460px; overflow-y: auto;
+    font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  }
+  .log-row {
+    display: grid; grid-template-columns: 148px 74px minmax(0, 1fr);
+    gap: 12px; padding: 7px 18px; border-bottom: 1px solid var(--border);
+  }
+  .log-row:last-child { border-bottom: none; }
+  .log-row:hover { background: var(--surface-2); }
+  .log-time { color: var(--text-4); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .log-type { font-weight: 650; font-size: 11px; letter-spacing: .03em; }
+  .log-type.ok { color: var(--success); }
+  .log-type.err { color: var(--danger); }
+  .log-type.warn { color: var(--warning); }
+  .log-msg { color: var(--text-2); overflow-wrap: anywhere; }
+  .log-empty { padding: 32px; text-align: center; color: var(--text-4); font-size: 13px; }
+
+  .confirm-box {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 11px 14px; border-top: 1px solid var(--border);
+    background: var(--danger-soft); font-size: 13px; color: var(--text-2);
+  }
+
+  /* ============================================================
+     ПАНЕЛЬ ДЕЙСТВИЙ
+     ============================================================ */
+  .action-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 35;
+    background: var(--surface-glass);
+    backdrop-filter: saturate(180%) blur(10px);
+    border-top: 1px solid var(--border);
+  }
+  .action-bar-inner {
+    max-width: var(--page-max); margin: 0 auto; padding: 11px 24px;
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  }
+  .save-state { font-size: 12.5px; color: var(--text-3); display: inline-flex; align-items: center; gap: 7px; }
+  .save-state.dirty { color: var(--warning); }
+  .save-state.dirty .icon { color: var(--warning); }
+
+  /* ============================================================
+     УВЕДОМЛЕНИЯ
+     ============================================================ */
+  .toast-container {
+    position: fixed; right: 20px; bottom: 74px; z-index: 60;
+    display: flex; flex-direction: column-reverse; gap: 8px; max-width: 380px;
+  }
+  .toast {
+    display: flex; align-items: flex-start; gap: 10px;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-left: 3px solid var(--accent); border-radius: var(--radius);
+    padding: 11px 14px; box-shadow: var(--shadow-lg); font-size: 13px; color: var(--text);
+    animation: toastIn .18s ease;
+  }
+  .toast.success { border-left-color: var(--success); }
+  .toast.success .toast-icon { color: var(--success); }
+  .toast.warn { border-left-color: var(--warning); }
+  .toast.warn .toast-icon { color: var(--warning); }
+  .toast.err { border-left-color: var(--danger); }
+  .toast.err .toast-icon { color: var(--danger); }
+  .toast-icon { color: var(--accent); display: flex; margin-top: 1px; }
+  .toast-text { color: var(--text-2); overflow-wrap: anywhere; }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .inline-result { font-size: 12.5px; display: flex; align-items: center; gap: 7px; margin-top: 10px; }
+  .inline-result.ok { color: var(--success); }
+  .inline-result.err { color: var(--danger); }
+
+  /* ============================================================
+     АДАПТИВНОСТЬ
+     ============================================================ */
+  @media (max-width: 900px) {
+    .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid { grid-template-columns: minmax(0, 1fr); }
+    .brand-text span { display: none; }
+  }
+  @media (max-width: 620px) {
+    .appbar-inner, .tabs-inner, .action-bar-inner { padding-left: 14px; padding-right: 14px; }
+    .main { padding: 16px 14px 92px; }
+    .status-strip { grid-template-columns: minmax(0, 1fr); }
+    .page-head { flex-direction: column; gap: 12px; }
+    .page-actions { width: 100%; }
+    /* Шапка должна уместиться в 375 px: скрываем название, оставляем метку. */
+    .brand-text { display: none; }
+    .runtime-state { padding: 0 9px; }
+    .runtime-state #runtime-label { display: none; }
+    #btn-bot-text { display: none; }
+    #btn-bot-toggle { width: 34px; padding: 0; }
+    .route-row { grid-template-columns: minmax(0, 1fr) 34px; grid-template-areas: "name remove" "chat remove"; }
+    .route-head { display: none; }
+    .route-row .topic-name { grid-area: name; }
+    .route-row .topic-chat { grid-area: chat; }
+    .route-row .route-remove { grid-area: remove; align-self: center; }
+    .route-label { display: block; }
+    .log-row { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 9px 14px; }
+    .log-time { font-size: 11px; }
+    .toast-container { left: 14px; right: 14px; max-width: none; bottom: 80px; }
+    .save-state { font-size: 11.5px; max-width: 48%; }
+    .btn-text-sm { display: none; }
+    .mode-switch { display: grid; grid-template-columns: minmax(0, 1fr); }
+    .mode-switch label { justify-content: flex-start; }
+
+    /* Разделы превращаются в выпадающий список: горизонтальная строка
+       не помещается в 375 px и вкладки уезжают за край экрана. */
+    .tabs-inner { position: relative; height: auto; min-height: var(--tabs-h); padding: 0 14px; }
+    .tabs-current {
+      display: flex; align-items: center; gap: 9px; width: 100%;
+      min-height: var(--tabs-h); padding: 0 2px; border: none; background: none;
+      font-size: 14px; font-weight: 600; color: var(--text);
+    }
+    .tabs-current > .icon:last-child { margin-left: auto; color: var(--text-3); }
+    .tabs-current[aria-expanded="true"] > .icon:last-child { transform: rotate(180deg); }
+    .sections-menu {
+      display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 40;
+      flex-direction: column; align-items: stretch; gap: 0;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow-md); padding: 6px 8px 8px;
+    }
+    .sections-menu.open { display: flex; }
+    .sections-menu .nav-tab {
+      padding: 11px 12px; border-radius: var(--radius); justify-content: flex-start; width: 100%;
+    }
+    .sections-menu .nav-tab.active { background: var(--accent-soft); }
+    .sections-menu .nav-tab.active::after { display: none; }
+  }
+</style>
 </head>
 <body>
 
-<div class="app" id="app">
-    <aside class="sidebar" aria-label="Главная навигация">
-        <div class="sidebar-brand">
-            <img class="brand-mark"
-                 src="brand-logo.webp"
-                 srcset="brand-logo.webp 1x, brand-logo@2x.webp 2x"
-                 type="image/webp"
-                 alt="Marej" aria-hidden="true"
-                 onerror="this.onerror=null;this.src='brand-logo.png';this.srcset='brand-logo.png 1x, brand-logo@2x.png 2x';">
-            <div class="brand-text">
-                <div class="brand-name">Marej</div>
-                <div class="brand-sub">CONTENT FACTORY</div>
-            </div>
+<!-- ============================================================
+     БИБЛИОТЕКА ИКОНОК
+     ============================================================ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M9.9 5.2A9.9 9.9 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6A17.6 17.6 0 0 0 2 12s3.6 7 10 7a9.7 9.7 0 0 0 4.5-1.1"/><path d="M3 3l18 18"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"/><polyline points="22 4 12 14.01 9 11.01"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+    <symbol id="i-error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><circle cx="18" cy="5" r="3"/><path d="M9 19h5a4 4 0 0 0 0-8h-4a4 4 0 0 1 0-8h5"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M22 3H2l8 9.5V19l4 2v-8.5L22 3Z"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></symbol>
+    <symbol id="i-file-text" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></symbol>
+  </defs>
+</svg>
+
+<!-- ============================================================
+     ШАПКА
+     ============================================================ -->
+<header class="appbar">
+  <div class="appbar-inner">
+    <div class="brand">
+      <img class="brand-mark" src="/favicon.png" alt="Content Factory" width="28" height="28">
+      <span class="brand-text">
+        <strong>Content Factory</strong>
+        <span>Локальная панель управления</span>
+      </span>
+    </div>
+    <div class="appbar-spacer"></div>
+    <div class="appbar-actions">
+      <div class="runtime-state" id="runtime-state" data-state="stopped">
+        <span class="runtime-dot"></span>
+        <span id="runtime-label">Остановлен</span>
+      </div>
+      <button class="btn btn-primary" id="btn-bot-toggle" onclick="toggleBot()">
+        <svg class="icon" id="btn-bot-icon"><use href="#i-play"/></svg>
+        <span id="btn-bot-text">Запустить парсер</span>
+      </button>
+      <button class="btn btn-icon" id="btn-refresh" onclick="refreshAll()" title="Обновить состояние" aria-label="Обновить состояние">
+        <svg class="icon"><use href="#i-refresh"/></svg>
+      </button>
+      <button class="btn btn-icon" id="btn-theme" onclick="toggleTheme()" title="Включить тёмную тему" aria-label="Переключить тему оформления">
+        <svg class="icon" id="theme-icon"><use href="#i-moon"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ============================================================
+     НАВИГАЦИЯ
+     ============================================================ -->
+<nav class="tabs" aria-label="Разделы настроек">
+  <div class="tabs-inner" id="tabs">
+    <button class="tabs-current" type="button" id="btn-sections"
+            onclick="toggleSectionsMenu()" aria-expanded="false" aria-controls="sections-menu">
+      <svg class="icon icon-sm" id="sections-current-icon"><use href="#i-send"/></svg>
+      <span id="sections-current-label">Подключение</span>
+      <svg class="icon icon-sm"><use href="#i-chevron-down"/></svg>
+    </button>
+    <div class="sections-menu" id="sections-menu">
+      <button class="nav-tab" type="button" data-panel="quick">
+        <svg class="icon icon-sm"><use href="#i-send"/></svg>Подключение
+      </button>
+      <button class="nav-tab" type="button" data-panel="targets">
+        <svg class="icon icon-sm"><use href="#i-route"/></svg>Маршруты
+      </button>
+      <button class="nav-tab" type="button" data-panel="ai">
+        <svg class="icon icon-sm"><use href="#i-cpu"/></svg>AI
+      </button>
+      <button class="nav-tab" type="button" data-panel="proxy">
+        <svg class="icon icon-sm"><use href="#i-globe"/></svg>Прокси
+      </button>
+      <button class="nav-tab" type="button" data-panel="filters">
+        <svg class="icon icon-sm"><use href="#i-filter"/></svg>Фильтры
+      </button>
+      <button class="nav-tab" type="button" data-panel="posts">
+        <svg class="icon icon-sm"><use href="#i-file-text"/></svg>Посты
+      </button>
+      <button class="nav-tab" type="button" data-panel="logs">
+        <svg class="icon icon-sm"><use href="#i-list"/></svg>Журнал
+      </button>
+      <button class="nav-tab" type="button" data-panel="faq">
+        <svg class="icon icon-sm"><use href="#i-help"/></svg>Справка
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- ============================================================
+     ОСНОВНОЕ СОДЕРЖИМОЕ
+     ============================================================ -->
+<main class="main">
+  <div class="main-inner">
+
+    <!-- Статус -->
+    <section class="status-strip" aria-label="Состояние системы">
+      <div class="card" id="card-bot">
+        <div class="card-label"><svg class="icon icon-sm"><use href="#i-play"/></svg>Парсер</div>
+        <div class="card-value" id="val-bot">—</div>
+        <div class="card-sub" id="sub-bot">Состояние не определено</div>
+      </div>
+      <div class="card" id="card-ai">
+        <div class="card-label"><svg class="icon icon-sm"><use href="#i-cpu"/></svg>AI</div>
+        <div class="card-value" id="val-ai">—</div>
+        <div class="card-sub" id="sub-ai">Настройки не проверены</div>
+      </div>
+      <div class="card" id="card-proxy">
+        <div class="card-label"><svg class="icon icon-sm"><use href="#i-globe"/></svg>Прокси</div>
+        <div class="card-value" id="val-proxy">—</div>
+        <div class="card-sub" id="sub-proxy">Не настроен</div>
+      </div>
+      <div class="card" id="card-stats">
+        <div class="card-label"><svg class="icon icon-sm"><use href="#i-list"/></svg>Постов за 24 ч</div>
+        <div class="card-value" id="val-stats">—</div>
+        <div class="card-sub" id="sub-stats">Загрузка…</div>
+      </div>
+    </section>
+
+    <!-- ==========================================================
+         РАЗДЕЛ: ПОДКЛЮЧЕНИЕ
+         ========================================================== -->
+    <section class="panel" id="acc-quick" data-panel="quick">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Подключение к Telegram</h1>
+          <p class="page-desc">Учётные данные Telegram-клиента, список каналов-доноров и частота опроса. Эти параметры определяют, что бот читает и как быстро реагирует.</p>
         </div>
-
-        <nav class="sidebar-nav" id="sidebarNav">
-            <div class="nav-group" data-module="posts">
-                <button class="nav-group-toggle" type="button" aria-expanded="true">
-                    <span class="nav-group-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></span>
-                    <span class="nav-group-label">Публикация</span>
-                    <span class="module-status-dot" data-module-dot="posts" data-state="stopped" aria-hidden="true"></span>
-                    <svg class="nav-group-arrow" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 1L7 5L3 9" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </button>
-                <div class="nav-group-items"><div>
-                    <a class="nav-item" href="#" data-route="posts/overview"><span class="nav-item-label">Обзор</span></a>
-                    <a class="nav-item" href="#" data-route="posts/dashboard"><span class="nav-item-label">Публикации</span></a>
-                    <a class="nav-item" href="#" data-route="posts/ai"><span class="nav-item-label">AI</span></a>
-                    <a class="nav-item" href="#" data-route="posts/parsing"><span class="nav-item-label">Источники и правила</span></a>
-                    <a class="nav-item" href="#" data-route="posts/proxy"><span class="nav-item-label">Сеть</span></a>
-                    <a class="nav-item" href="#" data-route="posts/logs"><span class="nav-item-label">Журнал</span></a>
-                    <a class="nav-item" href="#" data-route="posts/faq"><span class="nav-item-label">Помощь</span></a>
-                </div></div>
-            </div>
-
-        </nav>
-
-        <div class="sidebar-footer">
-            <div class="sidebar-footer-meta"><div style="font-size:12px;color:var(--text-3);">Локальная панель</div></div>
-            <button class="sidebar-collapse-btn" id="collapseBtn" title="Свернуть меню" aria-label="Свернуть меню">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-            </button>
+        <div class="page-actions">
+          <button class="btn btn-secondary" onclick="refreshAll()">
+            <svg class="icon icon-sm"><use href="#i-refresh"/></svg>Проверить настройки
+          </button>
         </div>
-    </aside>
+      </div>
 
-    <main class="main">
-        <header class="topbar">
-            <button class="topbar-burger" id="drawerBtn" aria-label="Открыть меню">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-            </button>
-            <nav class="breadcrumbs" id="breadcrumbs" aria-label="Хлебные крошки"></nav>
-            <div class="topbar-actions">
-                <button type="button" class="theme-toggle-btn" id="themeToggleBtn" aria-label="Переключить тему" title="Переключить тему" aria-pressed="false"><svg id="themeIcon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.9 13A8.2 8.2 0 0 1 11 3.1 8.8 8.8 0 1 0 20.9 13z"/></svg></button>
-                <button type="button" class="pill proxy proxy-btn" id="proxyPill" data-state="check" title="Настройки Сеть">
-                    <span class="dot"></span><span class="label">Прокси</span><span id="proxyText">—</span>
-                </button>
-                <div class="topbar-runner" id="topbarRunner">
-                    <button class="btn btn-success btn-run" id="botToggleBtn" data-state="stopped" type="button">
-                        <svg id="botIcon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                        <span id="botLabel">Запустить</span>
-                    </button>
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Доступ к Telegram</div>
+          <div class="block-desc">Ключи Telegram-клиента и токен бота-отправителя. Хранятся в базе в зашифрованном виде.</div>
+        </div>
+        <div class="block-body">
+          <div class="fieldset">
+            <div class="fieldset-label"><svg class="icon icon-sm"><use href="#i-lock"/></svg>Основное</div>
+            <div class="grid">
+              <div class="field">
+                <label class="field-label" for="f-tg_api_id">Telegram API ID <span class="field-req">обязательно</span></label>
+                <input id="f-tg_api_id" type="text" inputmode="numeric" placeholder="12345678" autocomplete="off">
+                <div class="field-hint">Числовой ID приложения с <code>my.telegram.org</code>. Это не секрет.</div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="f-tg_api_hash">Telegram API Hash <span class="field-req">обязательно</span></label>
+                <div class="secret-row">
+                  <input id="f-tg_api_hash" type="password" placeholder="не задан" autocomplete="off">
+                  <button type="button" class="secret-btn" data-secret-toggle="f-tg_api_hash" title="Показать или скрыть" aria-label="Показать или скрыть Telegram API Hash"><svg class="icon icon-sm"><use href="#i-eye"/></svg></button>
+                  <button type="button" class="secret-btn" data-secret-clear="f-tg_api_hash" title="Удалить сохранённый секрет" aria-label="Удалить сохранённый Telegram API Hash" hidden><svg class="icon icon-sm"><use href="#i-x"/></svg></button>
                 </div>
+                <div class="field-hint" data-secret-hint="f-tg_api_hash">32 hex-символа. Хранится в зашифрованном виде.</div>
+              </div>
+              <div class="field field-full">
+                <label class="field-label" for="f-bot_token">Bot Token <span class="field-req">обязательно</span></label>
+                <div class="secret-row">
+                  <input id="f-bot_token" type="password" placeholder="не задан" autocomplete="off">
+                  <button type="button" class="secret-btn" data-secret-toggle="f-bot_token" title="Показать или скрыть" aria-label="Показать или скрыть Bot Token"><svg class="icon icon-sm"><use href="#i-eye"/></svg></button>
+                  <button type="button" class="secret-btn" data-secret-clear="f-bot_token" title="Удалить сохранённый секрет" aria-label="Удалить сохранённый Bot Token" hidden><svg class="icon icon-sm"><use href="#i-x"/></svg></button>
+                </div>
+                <div class="field-hint" data-secret-hint="f-bot_token">Токен от <code>@BotFather</code>. Бот должен быть добавлен в целевые каналы как администратор. Хранится в зашифрованном виде.</div>
+              </div>
             </div>
-        </header>
-
-        <div class="content">
-             <div class="content-inner">
-
-                <!-- Overview focuses on the real state of the local pipeline. -->
-
-                <!-- ============================================================
-                     DASHBOARD — точка входа по умолчанию
-                     ============================================================ -->
-
-                <section class="route" data-route="posts/overview">
-                    <div class="page-header">
-                        <div class="page-eyebrow"><span class="dot"></span> CONTENT FACTORY</div>
-                        <h1 class="page-title">Обзор</h1>
-                        <p class="page-desc">Главное о состоянии и готовности к публикации.</p>
-                        <div class="page-meta">
-                            <span class="badge" id="dashUpdatedAt">Загрузка состояния…</span>
-                        </div>
-                    </div>
-
-                    <div class="dash-stats" id="dashStats">
-                        <div class="dash-stat" data-state="check" data-stat="bot">
-                            <div class="dash-stat-head"><span class="dash-stat-icon">▶</span><span>Парсер</span></div>
-                            <div class="dash-stat-value" id="dashBotValue">—</div>
-                            <div class="dash-stat-hint" id="dashBotHint">Получаем состояние…</div>
-                        </div>
-                        <div class="dash-stat" data-state="check" data-stat="ai">
-                            <div class="dash-stat-head"><span class="dash-stat-icon">✳</span><span>AI</span></div>
-                            <div class="dash-stat-value" id="dashAiValue">—</div>
-                            <div class="dash-stat-hint" id="dashAiHint">Проверяем настройки…</div>
-                        </div>
-                        <div class="dash-stat" data-state="check" data-stat="sources">
-                            <div class="dash-stat-head"><span class="dash-stat-icon">↗</span><span>Источники</span></div>
-                            <div class="dash-stat-value" id="dashSourcesValue">—</div>
-                            <div class="dash-stat-hint" id="dashSourcesHint">Проверяем настройки…</div>
-                        </div>
-                        <div class="dash-stat" data-state="check" data-stat="proxy">
-                            <div class="dash-stat-head"><span class="dash-stat-icon">⇄</span><span>Сеть</span></div>
-                            <div class="dash-stat-value" id="dashProxyValue">—</div>
-                            <div class="dash-stat-hint" id="dashProxyHint">Проверяем соединение…</div>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <div class="card-header">
-                            <h2 class="card-title">Публикация постов</h2>
-                            <p class="card-desc">Сбор, обработка и публикация контента из Telegram.</p>
-                        </div>
-                        <div class="card-body">
-                            <div class="dash-modules" id="dashModules">
-                                <div class="dash-module" data-mod="posts" data-state="check" data-target="posts/dashboard" role="button" tabindex="0" aria-label="Открыть пульт публикации постов">
-                                    <div class="dash-module-head">
-                                        <span class="dash-module-dot"></span>
-                                        <span class="dash-module-name">Публикация постов</span>
-                                        <span class="badge badge-info" id="dashModPostsBadge">Проверка…</span>
-                                    </div>
-                                    <p class="dash-module-desc">Сбор, обработка и публикация постов в ваши Telegram-каналы.</p>
-                                    <ul class="dash-module-checks" id="dashModPostsChecks">
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Telegram</span><span class="dash-check-meta">Проверка…</span></li>
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">AI</span><span class="dash-check-meta">Проверка…</span></li>
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Источники</span><span class="dash-check-meta">Проверка…</span></li>
-                                        <li><span class="dash-check">·</span><span class="dash-check-text">Маршруты</span><span class="dash-check-meta">Проверка…</span></li>
-                                    </ul>
-                                    <div class="dash-module-foot">
-                                        <span class="dash-module-link">Открыть пульт <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <div class="card-header">
-                            <h2 class="card-title">Быстрые действия</h2>
-                            <p class="card-desc">Часто используемые действия.</p>
-                        </div>
-                        <div class="card-body">
-                            <div class="module-launch-actions">
-                                <button class="btn btn-ghost" type="button" data-go-route="posts/ai">Настроить AI</button>
-                                <button class="btn btn-ghost" type="button" data-go-route="posts/parsing">Источники и фильтры</button>
-                                <button class="btn btn-ghost" type="button" data-go-route="posts/proxy">Сеть</button>
-                                <button class="btn btn-ghost" type="button" data-go-route="posts/logs">Открыть журнал</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="card dash-next" id="dashNext">
-                        <div class="card-body">
-                            <div class="dash-next-body">
-                                <div class="dash-next-icon" id="dashNextIcon">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-                                </div>
-                                <div class="dash-next-text">
-                                    <p class="dash-next-title" id="dashNextTitle">Следующее действие</p>
-                                    <p class="dash-next-desc" id="dashNextDesc">Загружаем настройки и состояние приложения…</p>
-                                </div>
-                                <button class="btn btn-primary" id="dashNextBtn" type="button">Проверить настройки →</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="card">
-                        <div class="card-header">
-                            <div>
-                                <h2 class="card-title">Последние события</h2>
-                                <p class="card-desc">Свежие события работы парсера. Нажмите на журнал для подробностей.</p>
-                            </div>
-                            <button class="btn btn-ghost" type="button" data-go-route="posts/logs">Все события →</button>
-                        </div>
-                        <div class="card-body" id="dashRecent">
-                            <div class="dash-empty-recent">Загружаем журнал…</div>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="route" data-route="posts/dashboard">
-                    <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
-                        <h1 class="page-title">Публикации</h1>
-                        <p class="page-desc">Статистика, ошибки и следующий шаг.</p>
-                        <div class="page-meta"><span class="badge badge-info" id="postsDashModuleState">—</span></div>
-                    </div>
-
-                    <div class="card module-launch-card" id="postsOverviewLaunchCard">
-                        <div class="card-header">
-                            <h2 class="card-title">Быстрый запуск модуля</h2>
-                            <p class="card-desc">Управление обработкой постов.</p>
-                        </div>
-                        <div class="card-body">
-                            <div class="module-launch-actions">
-                                <button type="button" class="btn btn-success" id="postsLocalStartBtn">▶ Запустить модуль</button>
-                                <button type="button" class="btn btn-danger" id="postsLocalStopBtn">■ Остановить</button>
-                            </div>
-                            <p class="module-launch-note" id="postsLocalHint">Если модуль уже работает, можно остановить его здесь же.</p>
-                        </div>
-                    </div>
-
-                    <!-- Панель здоровья (4 мини-карточки) -->
-                    <div class="mod-health" id="postsHealth" data-module="posts">
-                        <div class="mod-health-item" data-h="bot">
-                            <span class="mod-health-icon">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                            </span>
-                            <div class="mod-health-body">
-                                <div class="mod-health-label">Парсер</div>
-                                <div class="mod-health-value" data-hv="bot">—</div>
-                                <div class="mod-health-hint" data-hh="bot">—</div>
-                            </div>
-                        </div>
-                        <div class="mod-health-item" data-h="ai">
-                            <span class="mod-health-icon">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10 10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2z"/><path d="M12 6v6l4 2"/></svg>
-                            </span>
-                            <div class="mod-health-body">
-                                <div class="mod-health-label">AI</div>
-                                <div class="mod-health-value" data-hv="ai">—</div>
-                                <div class="mod-health-hint" data-hh="ai">—</div>
-                            </div>
-                        </div>
-                        <div class="mod-health-item" data-h="proxy">
-                            <span class="mod-health-icon">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-                            </span>
-                            <div class="mod-health-body">
-                                <div class="mod-health-label">Прокси</div>
-                                <div class="mod-health-value" data-hv="proxy">—</div>
-                                <div class="mod-health-hint" data-hh="proxy">—</div>
-                            </div>
-                        </div>
-                        <div class="mod-health-item" data-h="sources">
-                            <span class="mod-health-icon">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                            </span>
-                            <div class="mod-health-body">
-                                <div class="mod-health-label">Источники</div>
-                                <div class="mod-health-value" data-hv="sources">—</div>
-                                <div class="mod-health-hint" data-hh="sources">—</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Большие счётчики (4 карточки) -->
-                    <div class="dash-stats" id="postsCounters">
-                        <div class="dash-stat" data-state="check" data-stat="published-today">
-                            <div class="dash-stat-head"><span class="dash-stat-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span><span>Опубликовано сегодня</span></div>
-                            <div class="dash-stat-value" id="pPubToday">—</div>
-                            <div class="dash-stat-hint" id="pPubTodayHint">—</div>
-                        </div>
-                        <div class="dash-stat" data-state="check" data-stat="published-24h">
-                            <div class="dash-stat-head"><span class="dash-stat-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span><span>За 24 часа</span></div>
-                            <div class="dash-stat-value" id="pPub24h">—</div>
-                            <div class="dash-stat-hint" id="pPub24hHint">—</div>
-                        </div>
-                        <div class="dash-stat" data-state="check" data-stat="successes-24h">
-                            <div class="dash-stat-head"><span class="dash-stat-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span><span>Успехов 24ч</span></div>
-                            <div class="dash-stat-value" id="pSucc24h">—</div>
-                            <div class="dash-stat-hint" id="pSucc24hHint">—</div>
-                        </div>
-                        <div class="dash-stat" data-state="check" data-stat="errors-24h">
-                            <div class="dash-stat-head"><span class="dash-stat-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></span><span>Ошибок 24ч</span></div>
-                            <div class="dash-stat-value" id="pErr24h">—</div>
-                            <div class="dash-stat-hint" id="pErr24hHint">—</div>
-                        </div>
-                    </div>
-
-                    <!-- Что требует внимания -->
-                    <div class="card" id="postsAlerts" hidden>
-                        <div class="card-header">
-                            <h2 class="card-title">Требует внимания</h2>
-                            <p class="card-desc" id="postsAlertsDesc">—</p>
-                        </div>
-                        <div class="card-body" id="postsAlertsBody"></div>
-                    </div>
-
-                    <!-- Последние события + Топ-источники (двухколоночно) -->
-                    <div class="dash-two-col">
-                        <div class="card" style="margin-bottom: 0;">
-                            <div class="card-header" style="display: flex; align-items: center; justify-content: space-between;">
-                                <div>
-                                    <h2 class="card-title">Последние события</h2>
-                                    <p class="card-desc">5 свежих записей модуля. Кликните строку — откроется журнал с фильтром.</p>
-                                </div>
-                                <button class="btn btn-ghost" type="button" onclick="navigate('posts/logs')">Открыть журнал →</button>
-                            </div>
-                            <div class="card-body" id="postsRecent"></div>
-                        </div>
-                        <div class="card" style="margin-bottom: 0;">
-                            <div class="card-header" style="display: flex; align-items: center; justify-content: space-between;">
-                                <div>
-                                    <h2 class="card-title">Топ-источники (24ч)</h2>
-                                    <p class="card-desc">Каналы-доноры, из которых пришло больше всего постов.</p>
-                                </div>
-                            </div>
-                            <div class="card-body" id="postsTopSources"></div>
-                        </div>
-                    </div>
-
-                    <!-- Следующее действие -->
-                    <div class="card dash-next" id="postsNext" style="margin-top: 20px;">
-                        <div class="card-body">
-                            <div class="dash-next-body">
-                                <div class="dash-next-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></div>
-                                <div class="dash-next-text">
-                                    <p class="dash-next-title" id="postsNextTitle">Следующее действие</p>
-                                    <p class="dash-next-desc"  id="postsNextDesc">—</p>
-                                </div>
-                                <button class="btn btn-primary" id="postsNextBtn" type="button">Перейти →</button>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- ============================================================
-                     МОДУЛЬ 1: ПУБЛИКАЦИЯ ПОСТОВ
-                     ============================================================ -->
-
-                <section class="route" data-route="posts/ai">
-                    <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
-                        <h1 class="page-title">AI</h1>
-                        <p class="page-desc">Выберите установленную локальную модель или подключите облачный API.</p>
-                        <div class="page-meta">
-                            
-                            
-                        </div>
-                    </div>
-                    <div class="mod-health" data-module="posts">
-                        <div class="mod-health-item" data-h="bot"><span class="mod-health-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></span><div class="mod-health-body"><div class="mod-health-label">Парсер</div><div class="mod-health-value" data-hv="bot">—</div><div class="mod-health-hint" data-hh="bot">—</div></div></div>
-                        <div class="mod-health-item" data-h="ai"><span class="mod-health-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10 10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2z"/><path d="M12 6v6l4 2"/></svg></span><div class="mod-health-body"><div class="mod-health-label">AI</div><div class="mod-health-value" data-hv="ai">—</div><div class="mod-health-hint" data-hh="ai">—</div></div></div>
-                        <div class="mod-health-item" data-h="proxy"><span class="mod-health-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><div class="mod-health-body"><div class="mod-health-label">Прокси</div><div class="mod-health-value" data-hv="proxy">—</div><div class="mod-health-hint" data-hh="proxy">—</div></div></div>
-                        <div class="mod-health-item" data-h="sources"><span class="mod-health-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><div class="mod-health-body"><div class="mod-health-label">Источники</div><div class="mod-health-value" data-hv="sources">—</div><div class="mod-health-hint" data-hh="sources">—</div></div></div>
-                    </div>
-                    <form id="form-ai" autocomplete="off">
-                        <div class="card">
-                            <div class="card-header"><h2 class="card-title">Режим работы</h2><p class="card-desc">Локальная модель или облачный API.</p></div>
-                            <div class="card-body">
-                                <div class="form-group full">
-                                    <label class="form-label" for="ai_mode">Источник модели</label>
-                                    <select name="ai_mode" id="ai_mode" onchange="toggleAIFields()">
-                                        <option value="LOCAL">Локально (Ollama / LM Studio)</option>
-                                        <option value="REMOTE">Облако (OpenRouter / DeepSeek / API)</option>
-                                    </select>
-                                    <div class="form-hint">Локальная модель работает на вашем компьютере. Для облака понадобится API-ключ.</div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="card" id="local-ai-fields">
-                            <div class="card-header">
-                                <h2 class="card-title">Локальная модель</h2>
-                                <p class="card-desc">Выберите приложение, а модель — из списка или по имени.</p>
-                            </div>
-                            <div class="card-body">
-                                <div class="form-grid">
-                                    <div class="form-group">
-                                        <label class="form-label" for="local_ai_provider">Приложение</label>
-                                        <select name="local_ai_provider" id="local_ai_provider">
-                                            <option value="ollama">Ollama</option>
-                                            <option value="lmstudio">LM Studio</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label class="form-label" for="local_model">Модель</label>
-                                        <div class="model-select-row">
-                                            <select name="local_model" id="local_model" required aria-describedby="localModelStatus">
-                                                <option value="">Загружаем список моделей…</option>
-                                                <option value="__manual__">Ввести имя вручную…</option>
-                                            </select>
-                                            <button type="button" class="btn btn-ghost model-refresh-btn" id="refreshLocalModelsBtn"
-                                                    aria-label="Обновить список моделей" title="Обновить список моделей">↻</button>
-                                        </div>
-                                        <div class="form-hint">Нажмите ↻, чтобы получить список, затем выберите модель.</div>
-                                        <div class="local-model-manual" id="localModelManualWrap" hidden>
-                                            <label class="form-label" for="local_model_manual">Имя модели</label>
-                                            <input type="text" id="local_model_manual" autocomplete="off"
-                                                   placeholder="Например, qwen2.5:7b">
-                                            <div class="form-hint">Укажите точное имя модели из вашего AI-сервера.</div>
-                                        </div>
-                                        <div class="form-hint" id="localModelStatus" aria-live="polite">Подключение к локальному AI…</div>
-                                    </div>
-                                </div>
-                                <details class="local-ai-advanced" id="localAiAdvanced">
-                                    <summary>Дополнительные параметры подключения</summary>
-                                    <div class="form-grid local-ai-advanced-grid">
-                                        <div class="form-group">
-                                            <label class="form-label" for="local_host">Хост</label>
-                                            <input type="text" name="local_host" id="local_host" value="127.0.0.1" placeholder="127.0.0.1" autocomplete="off">
-                                            <div class="form-hint">Для удалённого сервера список не запрашивается — укажите имя модели вручную.</div>
-                                        </div>
-                                        <div class="form-group">
-                                            <label class="form-label" for="local_port">Порт</label>
-                                            <input type="number" name="local_port" id="local_port" min="1" max="65535" value="11434" inputmode="numeric">
-                                            <div class="form-hint">Ollama: 11434 · LM Studio: 1234. Локальный нестандартный порт тоже поддерживается.</div>
-                                        </div>
-                                    </div>
-                                </details>
-                            </div>
-                        </div>
-                        <div class="card" id="remote-ai-fields" style="display:none;">
-                            <div class="card-header"><h2 class="card-title">Облачный провайдер</h2><p class="card-desc">Совместимый с OpenAI Chat Completions API. Поддерживаются OpenRouter, DeepSeek, Groq и другие.</p></div>
-                            <div class="card-body">
-                                <div class="form-grid">
-                                    <div class="form-group full"><label class="form-label" for="remote_url">URL API</label><input type="text" name="remote_url" id="remote_url" placeholder="https://openrouter.ai/api/v1/chat/completions"></div>
-                                    <div class="form-group"><label class="form-label" for="remote_api_key">API Key</label><input type="password" name="remote_api_key" id="remote_api_key" placeholder="sk-or-v1-..." autocomplete="off"><div class="form-hint">Ключ хранится локально, не передаётся третьим лицам.</div></div>
-                                    <div class="form-group"><label class="form-label" for="remote_model">Модель</label><input type="text" name="remote_model" id="remote_model" placeholder="google/gemma-3-27b"></div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="card">
-                            <div class="card-body">
-                                <div class="form-group full">
-                                    <label class="form-label" for="system_prompt">Системный промпт для ИИ</label>
-                                    <textarea name="system_prompt" id="system_prompt" rows="4" placeholder="Например: Ты — редактор канала про технологии. Перепиши текст кратко, в стиле casual, без эмодзи."></textarea>
-                                    <div class="form-hint">Необязательно. Используется для настройки стиля переписывания текста.</div>
-                                </div>
-                            </div>
-                            <div class="card-footer">
-                                <div class="meta">Изменения применятся к следующему циклу.</div>
-                                <button type="button" class="btn btn-primary" data-save="form-ai">Сохранить настройки AI</button>
-                            </div>
-                        </div>
-                    </form>
-                </section>
-
-                <section class="route" data-route="posts/parsing">
-                    <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
-                        <h1 class="page-title">Источники и правила</h1>
-                        <p class="page-desc">Источники, темы, задержки и фильтры. Эти параметры определяют, что бот забирает, как обрабатывает и куда публикует.</p>
-                        <div class="page-meta"></div>
-                    </div>
-                    <div class="mod-health" data-module="posts">
-                        <div class="mod-health-item" data-h="bot"><span class="mod-health-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></span><div class="mod-health-body"><div class="mod-health-label">Парсер</div><div class="mod-health-value" data-hv="bot">—</div><div class="mod-health-hint" data-hh="bot">—</div></div></div>
-                        <div class="mod-health-item" data-h="ai"><span class="mod-health-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10 10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2z"/><path d="M12 6v6l4 2"/></svg></span><div class="mod-health-body"><div class="mod-health-label">AI</div><div class="mod-health-value" data-hv="ai">—</div><div class="mod-health-hint" data-hh="ai">—</div></div></div>
-                        <div class="mod-health-item" data-h="proxy"><span class="mod-health-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><div class="mod-health-body"><div class="mod-health-label">Прокси</div><div class="mod-health-value" data-hv="proxy">—</div><div class="mod-health-hint" data-hh="proxy">—</div></div></div>
-                        <div class="mod-health-item" data-h="sources"><span class="mod-health-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><div class="mod-health-body"><div class="mod-health-label">Источники</div><div class="mod-health-value" data-hv="sources">—</div><div class="mod-health-hint" data-hh="sources">—</div></div></div>
-                    </div>
-                    <form id="form-parsing" autocomplete="off">
-                        <div class="card">
-                            <div class="card-header"><h2 class="card-title">Telegram API <span class="tag">обязательно</span></h2><p class="card-desc">Ключи от <code>my.telegram.org</code> и токен бота от <code>@BotFather</code>. Без них бот не запустится.</p></div>
-                            <div class="card-body">
-                                <div class="form-grid">
-                                    <div class="form-group">
-                                        <label class="form-label" for="tg_api_id">API ID</label>
-                                        <input type="text" name="tg_api_id" id="tg_api_id" inputmode="numeric" pattern="[0-9]*" placeholder="12345678" autocomplete="off">
-                                        <div class="form-hint">Числовой ID приложения на <code>my.telegram.org</code>.</div>
-                                    </div>
-                                    <div class="form-group">
-                                        <label class="form-label" for="tg_api_hash">API Hash</label>
-                                        <input type="text" name="tg_api_hash" id="tg_api_hash" placeholder="a1b2c3d4e5f6..." autocomplete="off">
-                                        <div class="form-hint">32 hex-символа.</div>
-                                    </div>
-                                    <div class="form-group full">
-                                        <label class="form-label" for="bot_token">Bot Token</label>
-                                        <input type="text" name="bot_token" id="bot_token" placeholder="123456789:AAH..." autocomplete="off">
-                                        <div class="form-hint">Токен от <code>@BotFather</code>. Бот должен быть добавлен в целевые каналы как администратор.</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="card">
-                            <div class="card-header"><h2 class="card-title">Источники</h2><p class="card-desc">Каналы-доноры, откуда бот берёт посты. Указывайте @username или числовой ID.</p></div>
-                            <div class="card-body">
-                                <div class="form-group full">
-                                    <label class="form-label" for="sources">ID или ссылки доноров</label>
-                                    <textarea name="sources" id="sources" rows="5" placeholder="Channel1&#10;Channel2&#10;-100123456789" oninput="updateEmptyStates(_dashCache.settings || {}, parseTopicChannels(_dashCache.settings?.topic_channels))"></textarea>
-                                    <div class="form-hint">Каждый канал с новой строки. Бот должен иметь доступ на чтение.</div>
-                                </div>
-                                <div class="empty-state" id="sourcesEmpty" style="display:none;">
-                                    <div class="empty-state-icon">
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                                    </div>
-                                    <p class="empty-state-title">Нет источников</p>
-                                    <p class="empty-state-desc">Бот не знает, откуда брать посты. Укажите @username канала или числовой ID — каждый с новой строки.</p>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="card">
-                            <div class="card-header"><h2 class="card-title">Категории и каналы для постинга</h2><p class="card-desc">Тема, которую выберет ИИ, сопоставляется с целевым каналом. Минимум одна пара «тема → канал» обязательна.</p></div>
-                            <div class="card-body">
-                                <div class="form-group full">
-                                    <label class="form-label">Сопоставления</label>
-                                    <div class="dynamic-list" id="categories-container"></div>
-                                    <button type="button" class="dynamic-add" id="addCategory">
-                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                        Добавить категорию
-                                    </button>
-                                    <div class="form-hint">Если ИИ не находит подходящую тему, используется <code>общее</code> — заведите такую пару, чтобы посты не терялись.</div>
-                                </div>
-                                <div class="empty-state" id="categoriesEmpty" style="display:none;">
-                                    <div class="empty-state-icon">
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18M3 12h18M3 17h18"/></svg>
-                                    </div>
-                                    <p class="empty-state-title">Нет сопоставлений</p>
-                                    <p class="empty-state-desc">Создайте пары «тема → канал». Если ИИ не находит тему, используется <code>общее</code> — без пары посты будут пропускаться.</p>
-                                    <button type="button" class="btn btn-ghost empty-state-cta" onclick="document.getElementById('addCategory').click()">
-                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                        Добавить первую категорию
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="card">
-                            <div class="card-header"><h2 class="card-title">Фильтры и оформление</h2><p class="card-desc">Что бот пропускает и как подписывает опубликованные посты.</p></div>
-                            <div class="card-body">
-                                <div class="form-grid">
-                                    <div class="form-group">
-                                        <label class="form-label">Задержка опроса: <span id="delayValue" style="color:var(--text-1);">60</span> сек</label>
-                                        <input type="range" name="poll_delay" min="10" max="300" value="60" oninput="document.getElementById('delayValue').innerText = this.value" style="width:100%; accent-color: var(--accent);">
-                                        <div class="form-hint">Чем меньше, тем чаще опрос — но выше риск FloodWait. 60 сек — безопасный дефолт.</div>
-                                    </div>
-                                    <div class="form-group">
-                                        <label class="form-label" for="watermark_text">Водяной знак</label>
-                                        <input type="text" name="watermark_text" id="watermark_text" placeholder="📝 Переведено и адаптировано специально для...">
-                                        <div class="form-hint">Добавляется в конец каждого поста. Можно оставить пустым.</div>
-                                    </div>
-                                    <div class="form-group full">
-                                        <label class="form-label" for="ads_words">ADS-слова</label>
-                                        <textarea name="ads_words" id="ads_words" rows="4" placeholder="реклама&#10;спонсор&#10;подписывайтесь"></textarea>
-                                        <div class="form-hint">Посты с этими словами будут пропущены. Каждое с новой строки. Минимум 3 символа в слове.</div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="card-footer">
-                                <div class="meta">Задержка применяется сразу, остальное — на следующем круге.</div>
-                                <button type="button" class="btn btn-primary" data-save="form-parsing">Сохранить настройки парсинга</button>
-                            </div>
-                        </div>
-                    </form>
-                </section>
-
-                <section class="route" data-route="posts/proxy">
-                    <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
-                        <h1 class="page-title">Сеть</h1>
-                        <p class="page-desc">Настройте сетевое подключение модуля за четыре шага. Все поля сохранятся после финального шага.</p>
-                        <div class="page-meta"></div>
-                    </div>
-
-                    <div class="wizard-steps" id="wizardSteps">
-                        <div class="wizard-step active" data-step="1"><span class="step-num">1</span><span class="step-name">Режим</span></div>
-                        <div class="wizard-step" data-step="2"><span class="step-num">2</span><span class="step-name">Тип</span></div>
-                        <div class="wizard-step" data-step="3"><span class="step-num">3</span><span class="step-name">Параметры</span></div>
-                        <div class="wizard-step" data-step="4"><span class="step-num">4</span><span class="step-name">Проверка</span></div>
-                    </div>
-
-                    <form id="form-proxy" autocomplete="off" onsubmit="return false">
-                        <!-- Step 1: Toggle -->
-                        <div class="card" data-wizard-panel="1">
-                            <div class="card-header"><h2 class="card-title">Шаг 1 — Использовать прокси?</h2><p class="card-desc">Если выключено, бот идёт напрямую. Можно использовать ByeDPI или системный VPN.</p></div>
-                            <div class="card-body">
-                                <div class="form-group full">
-                                    <label class="form-label" for="use_proxy">Режим подключения</label>
-                                    <select name="use_proxy" id="use_proxy">
-                                        <option value="0">Нет, прямое подключение</option>
-                                        <option value="1">Да, использовать встроенный прокси</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="card-footer">
-                                <div class="meta">Шаг 1 из 4</div>
-                                <div style="display:flex; gap:8px;">
-                                    <button type="button" class="btn btn-ghost" id="wizardBack1" disabled>Назад</button>
-                                    <button type="button" class="btn btn-primary" data-wizard-next="2">Далее</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Step 2: Type selection -->
-                        <div class="card" data-wizard-panel="2" hidden>
-                            <div class="card-header"><h2 class="card-title">Шаг 2 — Выберите тип прокси</h2><p class="card-desc">От типа зависит набор полей на следующем шаге.</p></div>
-                            <div class="card-body">
-                                <div class="type-grid">
-                                    <button type="button" class="type-card" data-type="HTTP">
-                                        <span class="type-check"></span>
-                                        <div class="type-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
-                                        <p class="type-name">HTTP</p>
-                                        <p class="type-desc">Универсальный. Логин и пароль — опционально.</p>
-                                    </button>
-                                    <button type="button" class="type-card" data-type="SOCKS5">
-                                        <span class="type-check"></span>
-                                        <div class="type-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
-                                        <p class="type-name">SOCKS5</p>
-                                        <p class="type-desc">Лучшая совместимость. Подходит для Telegram.</p>
-                                    </button>
-                                    <button type="button" class="type-card" data-type="MTProto">
-                                        <span class="type-check"></span>
-                                        <div class="type-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
-                                        <p class="type-name">MTProto</p>
-                                        <p class="type-desc">Только для чтения каналов. Нужен секретный ключ.</p>
-                                    </button>
-                                </div>
-                                <input type="hidden" name="proxy_type" id="proxy_type" value="HTTP">
-                            </div>
-                            <div class="card-footer">
-                                <div class="meta">Шаг 2 из 4</div>
-                                <div style="display:flex; gap:8px;">
-                                    <button type="button" class="btn btn-ghost" data-wizard-back="1">Назад</button>
-                                    <button type="button" class="btn btn-primary" data-wizard-next="3">Далее</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Step 3: Parameters -->
-                        <div class="card" data-wizard-panel="3" hidden>
-                            <div class="card-header">
-                                <h2 class="card-title">Шаг 3 — Параметры подключения</h2>
-                                <p class="card-desc" id="proxyTypeHint">HTTP-прокси: хост и порт обязательны, логин и пароль — нет.</p>
-                            </div>
-                            <div class="card-body">
-                                <div class="form-grid">
-                                    <div class="form-group">
-                                        <label class="form-label" for="proxy_port">Порт</label>
-                                        <input type="text" name="proxy_port" id="proxy_port" placeholder="1080">
-                                    </div>
-                                    <div class="form-group full">
-                                        <label class="form-label" for="proxy_host">Хост (IP) / MTProto-адрес</label>
-                                        <input type="text" name="proxy_host" id="proxy_host" placeholder="192.168.1.1">
-                                    </div>
-                                </div>
-
-                                <div id="proxy-creds-block" style="margin-top: 18px;">
-                                    <div class="form-grid">
-                                        <div class="form-group">
-                                            <label class="form-label" for="proxy_user">Логин <span class="form-hint-inline">(необязательно)</span></label>
-                                            <input type="text" name="proxy_user" id="proxy_user" placeholder="">
-                                        </div>
-                                        <div class="form-group">
-                                            <label class="form-label" for="proxy_pass">Пароль <span class="form-hint-inline">(необязательно)</span></label>
-                                            <input type="password" name="proxy_pass" id="proxy_pass" autocomplete="off">
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div id="proxy-secret-block" style="display:none; margin-top: 18px;">
-                                    <div class="form-group full">
-                                        <label class="form-label" for="mtproto_key">Секретный ключ <span class="form-hint-inline" style="color:var(--danger);">(обязательно)</span></label>
-                                        <input type="text" name="mtproto_key" id="mtproto_key" placeholder="dd...hex или base64">
-                                        <div class="form-hint">Берётся из настроек MTProto-прокси. Начинается с <code>dd</code> (hex) или <code>ee</code> (base64).</div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="card-footer">
-                                <div class="meta">Шаг 3 из 4</div>
-                                <div style="display:flex; gap:8px;">
-                                    <button type="button" class="btn btn-ghost" data-wizard-back="2">Назад</button>
-                                    <button type="button" class="btn btn-primary" data-wizard-next="4">Далее</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Step 4: Review & save -->
-                        <div class="card" data-wizard-panel="4" hidden>
-                            <div class="card-header"><h2 class="card-title">Шаг 4 — Проверьте и сохраните</h2><p class="card-desc">Сводка настроек. Сохранение применит прокси на следующем цикле парсинга.</p></div>
-                            <div class="card-body">
-                                <div class="form-grid">
-                                    <div class="form-group"><label class="form-label">Режим</label><div class="readonly-value" id="summaryUseProxy">—</div></div>
-                                    <div class="form-group"><label class="form-label">Тип</label><div class="readonly-value" id="summaryType">—</div></div>
-                                    <div class="form-group"><label class="form-label">Хост</label><div class="readonly-value" id="summaryHost">—</div></div>
-                                    <div class="form-group"><label class="form-label">Порт</label><div class="readonly-value" id="summaryPort">—</div></div>
-                                </div>
-                                <div class="callout info" style="margin-top: 20px;">
-                                    <div class="callout-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
-                                    <div class="callout-body">
-                                        <p class="callout-title">Применение</p>
-                                        <p class="callout-text">Прокси тестируется на следующем цикле. Ошибки попадают в «Журнал».</p>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="card-footer">
-                                <div class="meta">Шаг 4 из 4</div>
-                                <div style="display:flex; gap:8px;">
-                                    <button type="button" class="btn btn-ghost" data-wizard-back="3">Назад</button>
-                                    <button type="button" class="btn btn-primary" data-save="form-proxy" id="proxySaveBtn">Сохранить настройки сети</button>
-                                </div>
-                            </div>
-                        </div>
-                    </form>
-                </section>
-
-                <section class="route" data-route="posts/logs">
-                    <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Публикация</div>
-                        <h1 class="page-title">Журнал</h1>
-                        <p class="page-desc">События, предупреждения и ошибки обновляются автоматически.</p>
-                        <div class="page-meta"></div>
-                    </div>
-                    <div class="callout info">
-                        <div class="callout-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></div>
-                        <div class="callout-body">
-                            <p class="callout-title">Журнал</p>
-                            <p class="callout-text">Журнал показывает события всех модулей системы. Фильтры позволяют сосредоточиться на нужном уровне.</p>
-                        </div>
-                    </div>
-                    <div class="card"><div class="card-body">
-                        <div class="console-wrap" data-console data-scope="posts">
-                            <div class="console-toolbar">
-                                <button class="console-filter active" data-level="all" type="button"><span class="dot"></span>Все</button>
-                                <button class="console-filter" data-level="error" type="button"><span class="dot"></span>Ошибки</button>
-                                <button class="console-filter" data-level="warn" type="button"><span class="dot"></span>Предупреждения</button>
-                                <button class="console-filter" data-level="info" type="button"><span class="dot"></span>Инфо</button>
-                                <button class="console-filter" data-level="success" type="button"><span class="dot"></span>Успех</button>
-                                <div class="console-spacer"></div>
-                                <span class="console-meta" data-console-meta>Загрузка…</span>
-                            </div>
-                            <div class="console-window" data-console-window></div>
-                        </div>
-                    </div></div>
-                </section>
-
-                <section class="route" data-route="posts/faq">
-                    <div class="page-header">
-                        <div class="page-eyebrow" data-mod="posts"><span class="dot"></span> Справка</div>
-                        <h1 class="page-title">Помощь</h1>
-                        <p class="page-desc">Короткие ответы по настройке, запуску и ошибкам.</p>
-                    </div>
-                    <div class="faq-toolbar">
-                        <div class="faq-search">
-                            <input type="text" placeholder="Найти ответ или код ошибки…" data-faq-search aria-label="Поиск по справке">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                        </div>
-                    </div>
-                    <div class="card">
-                        <div class="card-header"><h2 class="card-title">Первый запуск</h2></div>
-                        <div class="card-body">
-                            <ol class="quick-start-list">
-                                <li><span>01</span><div><strong>Подключите Telegram</strong><p>Заполните API ID, API Hash и токен бота в разделе «Источники и правила».</p></div></li>
-                                <li><span>02</span><div><strong>Выберите AI</strong><p>Укажите установленную локальную модель или облачный API.</p></div></li>
-                                <li><span>03</span><div><strong>Добавьте источники и маршруты</strong><p>Укажите каналы-доноры и пары «тема → целевой канал».</p></div></li>
-                                <li><span>04</span><div><strong>Запустите публикацию</strong><p>Используйте кнопку запуска вверху. Результаты и ошибки видны в журнале.</p></div></li>
-                            </ol>
-                        </div>
-                    </div>
-                    <div class="faq-category">Telegram</div>
-                    <details class="faq-item" data-faq><summary>ERR-201 — Telegram API не принимает данные</summary><div class="body"><p>Проверьте API ID и API Hash на <code>my.telegram.org</code>. Введите их без пробелов.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-202 — Неверный токен бота</summary><div class="body"><p>Создайте или обновите токен через <code>@BotFather</code>. Бот должен быть администратором целевого канала с правом публикации.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-203 — Telegram-сессия не работает</summary><div class="body"><p>Остановите приложение, проверьте файл сессии и авторизацию Telegram, затем запустите снова. Не удаляйте файл сессии, если не уверены, что он не нужен.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-204 — FloodWait</summary><div class="body"><p>Telegram временно ограничил запросы. Обычно ничего делать не нужно: парсер ждёт и повторяет попытку позже.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-205 — Бот не может публиковать</summary><div class="body"><p>Добавьте бота в целевой канал и выдайте право публикации сообщений.</p></div></details>
-                    <div class="faq-category">Сеть</div>
-                    <details class="faq-item" data-faq><summary>ERR-301 — Прокси недоступен</summary><div class="body"><p>Проверьте хост, порт и доступность сервера. На странице «Сеть» используйте проверку соединения перед сохранением.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-302 — Неверные учётные данные прокси</summary><div class="body"><p>Проверьте имя пользователя и пароль. Для прокси без авторизации оставьте поля пустыми.</p></div></details>
-                    <div class="faq-category">AI</div>
-                    <details class="faq-item" data-faq><summary>ERR-401 — Локальный AI недоступен</summary><div class="body"><p>Запустите Ollama или LM Studio и убедитесь, что нужная модель установлена и доступна.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-402 — Модель не найдена</summary><div class="body"><p>Обновите список моделей в настройках AI. Если модель не отображается, загрузите её в выбранном локальном провайдере.</p></div></details>
-                    <details class="faq-item" data-faq><summary>ERR-403 — Облачный AI недоступен</summary><div class="body"><p>Проверьте адрес API, ключ, выбранную модель и баланс у провайдера.</p></div></details>
-                    <div class="faq-empty" data-faq-empty hidden>Ничего не найдено по запросу «<span data-faq-empty-q></span>».</div>
-                </section>
-
-                
-
-            </div>
+          </div>
         </div>
-    </main>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Источники и опрос</div>
+          <div class="block-desc">Каналы, из которых бот берёт посты, и частота проверки новых публикаций.</div>
+        </div>
+        <div class="block-body">
+          <div class="fieldset">
+            <div class="fieldset-label"><svg class="icon icon-sm"><use href="#i-target"/></svg>Основное</div>
+            <div class="grid">
+              <div class="field field-full">
+                <label class="field-label" for="f-sources">Каналы-доноры <span class="field-req">обязательно</span></label>
+                <textarea id="f-sources" rows="5" placeholder="@mychannel1&#10;@mychannel2&#10;-100123456789"></textarea>
+                <div class="field-hint">Каждый канал с новой строки: <code>@username</code> или числовой ID. Бот должен иметь доступ на чтение.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="fieldset">
+            <div class="fieldset-label"><svg class="icon icon-sm"><use href="#i-sliders"/></svg>Дополнительно</div>
+            <div class="grid">
+              <div class="field">
+                <label class="field-label" for="f-poll_delay">Задержка опроса, сек.</label>
+                <input id="f-poll_delay" type="number" value="60" min="10" max="3600" step="1">
+                <div class="field-hint">Как часто бот проверяет новые посты. 60 сек — безопасное значение по умолчанию.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================
+         РАЗДЕЛ: МАРШРУТЫ
+         ========================================================== -->
+    <section class="panel" id="acc-targets" data-panel="targets">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Маршруты публикации</h1>
+          <p class="page-desc">ИИ выбирает категорию для каждого поста, а категория определяет целевой канал. Нужна хотя бы одна пара «категория → канал», иначе посты не будут опубликованы.</p>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Сопоставление категорий и каналов</div>
+          <div class="block-desc">Если категория не определена, пост уходит в категорию <code>общее</code>.</div>
+        </div>
+        <div class="block-body">
+          <div class="route-head">
+            <span>Категория</span>
+            <span>Канал</span>
+            <span></span>
+          </div>
+          <div class="route-list" id="topics-list"></div>
+          <button type="button" class="btn btn-secondary btn-sm" id="add-topic" style="margin-top:12px;">
+            <svg class="icon icon-sm"><use href="#i-plus"/></svg>Добавить категорию
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================
+         РАЗДЕЛ: AI
+         ========================================================== -->
+    <section class="panel" id="acc-ai" data-panel="ai">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">AI — переписывание текста</h1>
+          <p class="page-desc">Источник модели: локальный сервер на этом компьютере или облачный API, совместимый с OpenAI Chat Completions.</p>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-secondary" onclick="testAI()">
+            <svg class="icon icon-sm"><use href="#i-check-circle"/></svg>Проверить подключение
+          </button>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Режим работы</div>
+          <div class="block-desc">Локальный сервер работает на этом компьютере и не требует оплаты. Облачный API требует ключ доступа.</div>
+        </div>
+        <div class="block-body">
+          <div class="mode-switch">
+            <label>
+              <input type="radio" name="ai_source" id="ai_source_local" checked onchange="syncAiMode(false)">
+              <span>Локально — Ollama / LM Studio</span>
+            </label>
+            <label>
+              <input type="radio" name="ai_source" id="ai_source_remote" onchange="syncAiMode(true)">
+              <span>Облако — OpenRouter / OpenAI-совместимый</span>
+            </label>
+          </div>
+          <input type="checkbox" id="f-ai_mode" onchange="toggleAIFields()" hidden>
+        </div>
+      </div>
+
+      <div class="block" id="ai-local-fields">
+        <div class="block-head">
+          <div class="block-title">Локальная модель</div>
+          <div class="block-desc">Выберите приложение — адрес и порт подставятся автоматически. Модель можно выбрать из списка установленных.</div>
+        </div>
+        <div class="block-body">
+          <div class="grid">
+            <div class="field">
+              <label class="field-label" for="f-local_ai_provider">Приложение</label>
+              <select id="f-local_ai_provider" onchange="applyAiProviderDefaults()">
+                <option value="ollama">Ollama</option>
+                <option value="lmstudio">LM Studio</option>
+                <option value="anythingllm">AnythingLLM</option>
+                <option value="localai">LocalAI</option>
+                <option value="llamacpp">llama.cpp server</option>
+                <option value="vllm">vLLM</option>
+                <option value="gpt4all">GPT4All</option>
+                <option value="koboldcpp">KoboldCpp</option>
+                <option value="textgenwebui">text-generation-webui</option>
+              </select>
+              <div class="field-hint" id="f-local_ai_provider_hint"></div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="f-local_port">Порт</label>
+              <input id="f-local_port" type="number" value="11434" min="1" max="65535">
+            </div>
+            <div class="field field-full">
+              <label class="field-label" for="f-local_host">Хост</label>
+              <input id="f-local_host" type="text" value="127.0.0.1" autocomplete="off">
+              <div class="field-hint">Для удалённого сервера список моделей недоступен — укажите имя вручную.</div>
+            </div>
+            <div class="field field-full">
+              <label class="field-label" for="f-local_model">Модель</label>
+              <div class="model-picker">
+                <input id="f-local_model" type="text" placeholder="Начните вводить или нажмите, чтобы получить список" autocomplete="off">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-models" onclick="toggleModelList()">
+                  <svg class="icon icon-sm"><use href="#i-list"/></svg><span id="btn-models-label">Показать модели</span>
+                </button>
+              </div>
+              <div class="model-list" id="model-list" hidden>
+                <div class="model-list-empty" id="model-list-empty">Нажмите «Показать модели», чтобы загрузить список установленных моделей.</div>
+              </div>
+              <div class="field-hint" id="model-status" aria-live="polite">Модель указывается вручную или выбирается из списка.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="block" id="ai-remote-fields" style="display:none;">
+        <div class="block-head">
+          <div class="block-title">Облачный провайдер</div>
+          <div class="block-desc">Совместим с OpenAI Chat Completions API: OpenRouter, DeepSeek, Groq и другие.</div>
+        </div>
+        <div class="block-body">
+          <div class="grid">
+            <div class="field field-full">
+              <label class="field-label" for="f-remote_url">URL API</label>
+              <input id="f-remote_url" type="text" placeholder="https://openrouter.ai/api/v1/chat/completions" autocomplete="off">
+              <div class="field-hint">Обязателен протокол HTTPS — иначе ключ уйдёт по открытому соединению.</div>
+            </div>
+            <div class="field field-full">
+              <label class="field-label" for="f-remote_api_key">API Key</label>
+              <div class="secret-row">
+                <input id="f-remote_api_key" type="password" placeholder="не задан" autocomplete="off">
+                <button type="button" class="secret-btn" data-secret-toggle="f-remote_api_key" title="Показать или скрыть" aria-label="Показать или скрыть API Key"><svg class="icon icon-sm"><use href="#i-eye"/></svg></button>
+                <button type="button" class="secret-btn" data-secret-clear="f-remote_api_key" title="Удалить сохранённый секрет" aria-label="Удалить сохранённый API Key" hidden><svg class="icon icon-sm"><use href="#i-x"/></svg></button>
+              </div>
+              <div class="field-hint" data-secret-hint="f-remote_api_key">Хранится в зашифрованном виде и не показывается в панели.</div>
+            </div>
+            <div class="field field-full">
+              <label class="field-label" for="f-remote_model">Модель</label>
+              <input id="f-remote_model" type="text" placeholder="google/gemma-3-27b" autocomplete="off">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Инструкция для модели</div>
+          <div class="block-desc">Определяет стиль и правила переписывания постов.</div>
+        </div>
+        <div class="block-body">
+          <div class="field">
+            <label class="field-label" for="f-system_prompt">Системный промпт</label>
+            <textarea id="f-system_prompt" rows="4" placeholder="Например: ты — редактор канала про технологии. Перепиши текст кратко, в стиле casual, без эмодзи."></textarea>
+            <div class="field-hint">Необязательно. Если оставить пустым, используется встроенный промпт по умолчанию.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================
+         РАЗДЕЛ: ПРОКСИ
+         ========================================================== -->
+    <section class="panel" id="acc-proxy" data-panel="proxy">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Прокси</h1>
+          <p class="page-desc">Маршрут сетевых подключений к Telegram и AI. Прямое подключение используется, если прокси выключен.</p>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-secondary" onclick="testProxy()">
+            <svg class="icon icon-sm"><use href="#i-check-circle"/></svg>Проверить прокси
+          </button>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Использование прокси</div>
+        </div>
+        <div class="block-body">
+          <label class="switch-row" for="f-use_proxy">
+            <input type="checkbox" id="f-use_proxy" onchange="toggleProxyFields()">
+            <span class="switch-track"></span>
+            <span class="switch-text">
+              <span class="switch-title">Подключать через прокси</span>
+              <span class="switch-desc">Все запросы к Telegram и AI будут идти через указанный сервер.</span>
+            </span>
+          </label>
+          <div class="field-hint" id="proxy-disabled-hint" style="margin-top:10px;">
+            Параметры подключения появятся ниже после включения прокси.
+          </div>
+        </div>
+      </div>
+
+      <div class="block" id="proxy-fields" style="display:none;">
+        <div class="block-head">
+          <div class="block-title">Параметры подключения</div>
+        </div>
+        <div class="block-body">
+          <div class="fieldset">
+            <div class="fieldset-label"><svg class="icon icon-sm"><use href="#i-globe"/></svg>Основное</div>
+            <div class="grid">
+              <div class="field">
+                <label class="field-label" for="f-proxy_type">Тип</label>
+                <select id="f-proxy_type" onchange="onProxyTypeChange()">
+                  <option value="socks5">SOCKS5</option>
+                  <option value="socks4">SOCKS4</option>
+                  <option value="http">HTTP</option>
+                  <option value="mtproto">MTProto</option>
+                </select>
+                <div class="field-hint" id="f-proxy_type_hint"></div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="f-proxy_host">Хост</label>
+                <input id="f-proxy_host" type="text" placeholder="proxy.example.com" autocomplete="off">
+                <div class="field-hint" id="f-proxy_host_hint">Адрес прокси-сервера.</div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="f-proxy_port">Порт</label>
+                <input id="f-proxy_port" type="number" placeholder="1080" min="1" max="65535">
+              </div>
+            </div>
+          </div>
+
+          <div class="fieldset">
+            <div class="fieldset-label"><svg class="icon icon-sm"><use href="#i-lock"/></svg>Дополнительно — учётные данные</div>
+            <div class="grid">
+              <div class="field">
+                <label class="field-label" for="f-proxy_user">Пользователь</label>
+                <input id="f-proxy_user" type="text" placeholder="необязательно" autocomplete="off">
+              </div>
+              <div class="field">
+                <label class="field-label" for="f-proxy_pass">Пароль</label>
+                <div class="secret-row">
+                  <input id="f-proxy_pass" type="password" placeholder="необязательно" autocomplete="off">
+                  <button type="button" class="secret-btn" data-secret-toggle="f-proxy_pass" title="Показать или скрыть" aria-label="Показать или скрыть пароль прокси"><svg class="icon icon-sm"><use href="#i-eye"/></svg></button>
+                  <button type="button" class="secret-btn" data-secret-clear="f-proxy_pass" title="Удалить сохранённый секрет" aria-label="Удалить сохранённый пароль прокси" hidden><svg class="icon icon-sm"><use href="#i-x"/></svg></button>
+                </div>
+                <div class="field-hint" data-secret-hint="f-proxy_pass">Хранится в зашифрованном виде.</div>
+              </div>
+              <div class="field field-full">
+                <label class="field-label" for="f-mtproto_key">MTProto-ключ</label>
+                <div class="secret-row">
+                  <input id="f-mtproto_key" type="password" placeholder="только для MTProto" autocomplete="off">
+                  <button type="button" class="secret-btn" data-secret-toggle="f-mtproto_key" title="Показать или скрыть" aria-label="Показать или скрыть MTProto-ключ"><svg class="icon icon-sm"><use href="#i-eye"/></svg></button>
+                  <button type="button" class="secret-btn" data-secret-clear="f-mtproto_key" title="Удалить сохранённый секрет" aria-label="Удалить сохранённый MTProto-ключ" hidden><svg class="icon icon-sm"><use href="#i-x"/></svg></button>
+                </div>
+                <div class="field-hint" data-secret-hint="f-mtproto_key">Хранится в зашифрованном виде. Можно вставить готовую ссылку t.me/proxy — она будет разобрана автоматически.</div>
+              </div>
+            </div>
+          </div>
+          <div class="inline-result" id="proxy-result"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================
+         РАЗДЕЛ: ФИЛЬТРЫ
+         ========================================================== -->
+    <section class="panel" id="acc-filters" data-panel="filters">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Фильтры и оформление</h1>
+          <p class="page-desc">Что бот пропускает при сборе постов и как оформляет результат публикации.</p>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Стоп-слова</div>
+          <div class="block-desc">Посты, содержащие эти слова, пропускаются и не публикуются.</div>
+        </div>
+        <div class="block-body">
+          <div class="field">
+            <label class="field-label" for="f-ads_words">Слова-маркеры рекламы</label>
+            <textarea id="f-ads_words" rows="5" placeholder="реклама&#10;спонсор&#10;подписывайтесь"></textarea>
+            <div class="field-hint">Каждое слово с новой строки. Минимум 3 символа в слове.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Оформление публикации</div>
+        </div>
+        <div class="block-body">
+          <div class="field">
+            <label class="field-label" for="f-watermark_text">Водяной знак</label>
+            <input id="f-watermark_text" type="text" placeholder="Переведено и адаптировано для нашего канала" autocomplete="off">
+            <div class="field-hint">Добавляется в конец каждого опубликованного поста. Можно оставить пустым.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==========================================================
+         РАЗДЕЛ: ПОСТЫ
+         ========================================================== -->
+    <section class="panel" id="acc-posts" data-panel="posts">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Посты</h1>
+          <p class="page-desc">Очередь публикаций. Посты можно править, откладывать, отправлять сразу или отменять. Медиа хранится локально рядом с приложением.</p>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-secondary" onclick="loadPosts()">
+            <svg class="icon icon-sm"><use href="#i-refresh"/></svg>Обновить очередь
+          </button>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Режим публикации</div>
+          <div class="block-desc">Определяет, публикуются ли посты сразу после сбора или попадают в очередь.</div>
+        </div>
+        <div class="block-body">
+          <div class="mode-switch">
+            <label>
+              <input type="radio" name="publish_mode" id="publish_mode_auto" checked onchange="setPublishMode('auto')">
+              <span>Автоматически — сразу после сбора</span>
+            </label>
+            <label>
+              <input type="radio" name="publish_mode" id="publish_mode_manual" onchange="setPublishMode('manual')">
+              <span>Через очередь — вручную в разделе «Посты»</span>
+            </label>
+          </div>
+          <div class="field-hint" id="publish-mode-hint" style="margin-top:10px;">
+            Посты публикуются сразу после сбора из каналов-доноров.
+          </div>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="block-head">
+          <div class="block-title">Хранение медиа</div>
+          <div class="block-desc">Медиафайлы очереди занимают место на диске. Выберите срок хранения и при необходимости очистите их вручную.</div>
+        </div>
+        <div class="block-body">
+          <div class="grid">
+            <div class="field">
+              <label class="field-label" for="f-media_retention_days">Срок хранения медиа</label>
+              <select id="f-media_retention_days">
+                <option value="1">1 день</option>
+                <option value="2">2 дня</option>
+                <option value="3">3 дня</option>
+                <option value="7">7 дней</option>
+                <option value="0">Хранить всегда</option>
+              </select>
+              <div class="field-hint">Медиа опубликованных постов удаляется автоматически после истечения срока.</div>
+            </div>
+            <div class="field">
+              <label class="field-label">Занято медиа</label>
+              <div class="media-usage" id="media-usage">Загрузка…</div>
+              <div class="field-hint">Файлы хранятся в папке <code>queue_media</code> рядом с приложением.</div>
+            </div>
+          </div>
+          <div class="post-actions" style="margin-top:14px;">
+            <button class="btn btn-secondary btn-sm" onclick="cleanupMedia('retention')">
+              <svg class="icon icon-sm"><use href="#i-trash"/></svg>Очистить по сроку
+            </button>
+            <button class="btn btn-danger-ghost btn-sm" onclick="cleanupMedia('all')">
+              <svg class="icon icon-sm"><use href="#i-trash"/></svg>Очистить всё медиа
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="log-toolbar">
+          <button class="filter-btn active" type="button" data-post-filter="all" onclick="setPostFilter('all')">Все</button>
+          <button class="filter-btn" type="button" data-post-filter="draft" onclick="setPostFilter('draft')">Черновики</button>
+          <button class="filter-btn" type="button" data-post-filter="scheduled" onclick="setPostFilter('scheduled')">Отложенные</button>
+          <button class="filter-btn" type="button" data-post-filter="published" onclick="setPostFilter('published')">Опубликованные</button>
+          <button class="filter-btn" type="button" data-post-filter="cancelled" onclick="setPostFilter('cancelled')">Отменённые</button>
+          <span class="hint" id="posts-count"></span>
+        </div>
+        <div class="posts-list" id="posts-list"></div>
+      </div>
+    </section>
+
+    <!-- ==========================================================
+         РАЗДЕЛ: СПРАВКА
+         ========================================================== -->
+    <section class="panel" id="acc-faq" data-panel="faq">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Справка</h1>
+          <p class="page-desc">Расшифровка кодов журнала: что означает запись и что делать, если она появилась.</p>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="log-toolbar">
+          <input type="text" id="faq-search" class="faq-search" placeholder="Поиск по коду или по тексту…" autocomplete="off">
+          <button class="filter-btn active" type="button" data-faq-filter="all">Все</button>
+          <button class="filter-btn" type="button" data-faq-filter="error">Ошибки</button>
+          <button class="filter-btn" type="button" data-faq-filter="warn">Предупреждения</button>
+          <button class="filter-btn" type="button" data-faq-filter="ok">Успех</button>
+          <span class="hint" id="faq-count"></span>
+        </div>
+        <div class="faq-list" id="faq-list"></div>
+      </div>
+    </section>
+
+    <!-- ==========================================================
+         РАЗДЕЛ: ЖУРНАЛ
+         ========================================================== -->
+    <section class="panel" id="acc-logs" data-panel="logs">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Журнал событий</h1>
+          <p class="page-desc">Хронология работы парсера: публикации, предупреждения и ошибки. Записи хранятся в базе приложения.</p>
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="log-toolbar">
+          <button class="btn btn-secondary btn-sm" onclick="loadLogs()">
+            <svg class="icon icon-sm"><use href="#i-refresh"/></svg>Обновить
+          </button>
+          <button class="btn btn-danger-ghost btn-sm" id="clear-logs-btn" onclick="requestClearLogs()">
+            <svg class="icon icon-sm"><use href="#i-trash"/></svg>Удалить записи
+          </button>
+          <span class="field-hint" id="log-hint">Последние 30 событий</span>
+        </div>
+        <div class="log" id="log-view"></div>
+        <div class="confirm-box" id="clear-logs-confirm" hidden>
+          <svg class="icon icon-sm" style="color:var(--danger)"><use href="#i-alert"/></svg>
+          <span>Удалить все записи журнала из базы? Действие необратимо.</span>
+          <button class="btn btn-danger btn-sm" onclick="confirmClearLogs()">Да, удалить</button>
+          <button class="btn btn-secondary btn-sm" onclick="cancelClearLogs()">Отмена</button>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<!-- ============================================================
+     ПАНЕЛЬ ДЕЙСТВИЙ
+     ============================================================ -->
+<div class="action-bar">
+  <div class="action-bar-inner">
+    <span class="save-state" id="save-state">
+      <svg class="icon icon-sm"><use href="#i-check"/></svg><span id="save-state-text">Все изменения сохранены</span>
+    </span>
+    <button class="btn btn-primary" id="btn-save" onclick="saveQuick()">
+      <svg class="icon icon-sm"><use href="#i-check"/></svg>Сохранить настройки
+    </button>
+  </div>
 </div>
 
-<div id="toast-container"></div>
+<div class="toast-container" id="toast-container"></div>
 
-<script src="/admin.js" defer></script>
+<script>
+const API = '';
 
+// ---------- Утилиты ----------
+function $id(id){ return document.getElementById(id); }
+function escapeHtml(s){
+  if (s === null || s === undefined) return '';
+  return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+}
+function toast(msg, type='info'){
+  const icons = {
+    success: '<svg class="icon icon-sm"><use href="#i-check-circle"/></svg>',
+    warn:    '<svg class="icon icon-sm"><use href="#i-alert"/></svg>',
+    err:     '<svg class="icon icon-sm"><use href="#i-error"/></svg>',
+    info:    '<svg class="icon icon-sm"><use href="#i-info"/></svg>',
+  };
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type==='success'?'success': type==='warn'?'warn': type==='err'?'err':'');
+  t.innerHTML = '<span class="toast-icon">' + (icons[type] || icons.info) + '</span>' +
+                '<span class="toast-text">' + escapeHtml(msg) + '</span>';
+  document.getElementById('toast-container').appendChild(t);
+  setTimeout(()=>{ t.style.transition = 'opacity .18s ease, transform .18s ease';
+                   t.style.opacity = '0'; t.style.transform = 'translateY(4px)';
+                   setTimeout(()=>t.remove(), 200); }, 4000);
+}
+
+// ---------- Тема оформления ----------
+const THEME_KEY = 'content-factory-theme';
+function applyTheme(theme){
+  const dark = theme === 'dark';
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  const icon = $id('theme-icon');
+  if (icon) icon.innerHTML = '<use href="' + (dark ? '#i-sun' : '#i-moon') + '"/>';
+  const btn = $id('btn-theme');
+  if (btn){
+    btn.title = dark ? 'Включить светлую тему' : 'Включить тёмную тему';
+    btn.setAttribute('aria-label', dark ? 'Включить светлую тему' : 'Включить тёмную тему');
+  }
+}
+function toggleTheme(){
+  const current = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  const next = current === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* хранилище может быть недоступно */ }
+}
+function setupTheme(){
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch (e) { /* игнорируем */ }
+  if (saved !== 'dark' && saved !== 'light') {
+    const prefersDark = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    saved = prefersDark ? 'dark' : 'light';
+  }
+  applyTheme(saved);
+}
+
+// ---------- Навигация по разделам ----------
+let currentPanel = 'quick';
+
+function selectPanel(name){
+  const panel = document.querySelector('.panel[data-panel="' + name + '"]');
+  if (!panel) return;
+  currentPanel = name;
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p === panel));
+  document.querySelectorAll('.nav-tab[data-panel]').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
+  if (name === 'posts'){ loadPosts(); loadMediaStats(); }
+  syncSectionsButton(name);
+  closeSectionsMenu();
+  if (window.history && window.history.replaceState) {
+    window.history.replaceState(null, '', '#' + name);
+  }
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+// Заголовок текущего раздела в мобильном выпадающем списке.
+function syncSectionsButton(name){
+  const active = document.querySelector('.nav-tab[data-panel="' + name + '"]');
+  const label = $id('sections-current-label');
+  const icon = $id('sections-current-icon');
+  if (label && active) label.textContent = active.textContent.trim();
+  if (icon && active){
+    const use = active.querySelector('use');
+    const target = use ? use.getAttribute('href') : null;
+    if (target) icon.innerHTML = '<use href="' + target + '"/>';
+  }
+}
+
+function toggleSectionsMenu(){
+  const menu = $id('sections-menu');
+  const btn = $id('btn-sections');
+  if (!menu) return;
+  const open = menu.classList.toggle('open');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeSectionsMenu(){
+  const menu = $id('sections-menu');
+  const btn = $id('btn-sections');
+  if (menu) menu.classList.remove('open');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+function initTabs(){
+  document.querySelectorAll('.nav-tab[data-panel]').forEach(tab => {
+    tab.addEventListener('click', () => selectPanel(tab.dataset.panel));
+  });
+  // Клик вне выпадающего списка закрывает его.
+  document.addEventListener('click', (event) => {
+    const menu = $id('sections-menu');
+    if (!menu || !menu.classList.contains('open')) return;
+    if (menu.contains(event.target)) return;
+    if (event.target.closest('#btn-sections')) return;
+    closeSectionsMenu();
+  });
+  // Escape закрывает список.
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeSectionsMenu();
+  });
+  const initial = (window.location.hash || '').replace('#', '');
+  selectPanel(initial || 'quick');
+}
+
+// ---------- Индикатор несохранённых изменений ----------
+const editedFields = new Set();
+let forceSecretRefresh = false;
+
+function updateSaveState(){
+  const el = $id('save-state');
+  const text = $id('save-state-text');
+  if (!el || !text) return;
+  const dirty = editedFields.size > 0;
+  el.classList.toggle('dirty', dirty);
+  text.textContent = dirty ? 'Изменения не сохранены' : 'Все изменения сохранены';
+}
+document.addEventListener('input', (event) => {
+  const target = event.target;
+  if (target && target.id) { editedFields.add(target.id); updateSaveState(); }
+});
+document.addEventListener('change', (event) => {
+  const target = event.target;
+  if (target && target.id) { editedFields.add(target.id); updateSaveState(); }
+});
+
+function shouldSkipField(el){
+  if (forceSecretRefresh) return false;
+  if (document.activeElement === el) return true;
+  return editedFields.has(el.id);
+}
+
+// ---------- Секреты ----------
+const SECRET_MASK = '••••••••';
+const SECRET_CLEAR_SIGNAL = '__clear__';
+const SECRET_FIELDS = ['f-tg_api_hash', 'f-bot_token', 'f-remote_api_key', 'f-proxy_pass', 'f-mtproto_key'];
+const pendingSecretClear = new Set();
+
+function applySecretState(fieldId, savedValue){
+  const input = $id(fieldId);
+  if (!input) return;
+  const clearBtn = document.querySelector('[data-secret-clear="' + fieldId + '"]');
+  const hint = document.querySelector('[data-secret-hint="' + fieldId + '"]');
+
+  if (pendingSecretClear.has(fieldId)){
+    input.value = '';
+    input.placeholder = 'будет удалено при сохранении';
+    input.classList.add('pending-clear');
+    if (clearBtn) clearBtn.hidden = true;
+    if (hint) hint.textContent = 'Сохранённый секрет будет удалён при сохранении настроек.';
+    return;
+  }
+  if (shouldSkipField(input)) return;
+
+  const isSaved = String(savedValue || '') === SECRET_MASK;
+  input.value = '';
+  input.classList.remove('pending-clear');
+  input.placeholder = isSaved ? SECRET_MASK + ' (сохранено)' : (input.dataset.emptyPlaceholder || input.placeholder);
+  if (clearBtn) clearBtn.hidden = !isSaved;
+  if (hint && isSaved){
+    hint.textContent = 'Сохранено в зашифрованном виде. Введите новое значение, чтобы заменить.';
+  }
+}
+
+function setupSecretControls(){
+  document.querySelectorAll('[data-secret-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const input = $id(btn.dataset.secretToggle);
+      if (!input) return;
+      const isHidden = input.type === 'password';
+      input.type = isHidden ? 'text' : 'password';
+      const use = btn.querySelector('use');
+      if (use) use.setAttribute('href', isHidden ? '#i-eye-off' : '#i-eye');
+    });
+  });
+  document.querySelectorAll('[data-secret-clear]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const fieldId = btn.dataset.secretClear;
+      pendingSecretClear.add(fieldId);
+      const input = $id(fieldId);
+      if (input){
+        input.value = '';
+        input.placeholder = 'будет удалено при сохранении';
+        input.classList.add('pending-clear');
+      }
+      btn.hidden = true;
+      const hint = document.querySelector('[data-secret-hint="' + fieldId + '"]');
+      if (hint) hint.textContent = 'Сохранённый секрет будет удалён при сохранении настроек.';
+      editedFields.add(fieldId);
+      updateSaveState();
+    });
+  });
+}
+
+// ---------- Состояние ----------
+function setCard(id, state, val, sub){
+  const c = $id(id);
+  c.className = 'card ' + (state || '');
+  $id('val-' + id.replace('card-', '')).textContent = val;
+  $id('sub-' + id.replace('card-', '')).textContent = sub;
+}
+
+// ---------- Загрузка состояния ----------
+async function refreshAll(){
+  const refreshBtn = $id('btn-refresh');
+  const use = refreshBtn ? refreshBtn.querySelector('use') : null;
+  if (use) use.setAttribute('href', '#i-refresh');
+  if (refreshBtn) refreshBtn.disabled = true;
+
+  try {
+    const [modRes, statRes, setRes, proxRes] = await Promise.all([
+      fetch(API + '/api/modules/status'),
+      fetch(API + '/api/stats/posts'),
+      fetch(API + '/api/settings'),
+      fetch(API + '/api/proxy/status')
+    ]);
+
+    if (modRes.ok){
+      const mod = await modRes.json();
+      const m = mod.modules && mod.modules.posts ? mod.modules.posts : (mod.modules && mod.modules[0] || {});
+      const running = m.running || m.status === 'running';
+      setCard('card-bot', running ? 'ok' : '', running ? 'Работает' : 'Остановлен',
+              running ? 'Парсер активен' : 'Не запущен');
+      const stateEl = $id('runtime-state');
+      const stateLabel = $id('runtime-label');
+      if (stateEl) stateEl.dataset.state = running ? 'running' : 'stopped';
+      if (stateLabel) stateLabel.textContent = running ? 'Работает' : 'Остановлен';
+      const btn = $id('btn-bot-toggle');
+      const icon = $id('btn-bot-icon');
+      const label = $id('btn-bot-text');
+      if (btn) btn.className = running ? 'btn btn-danger' : 'btn btn-primary';
+      if (icon) icon.innerHTML = '<use href="' + (running ? '#i-stop' : '#i-play') + '"/>';
+      if (label) label.textContent = running ? 'Остановить парсер' : 'Запустить парсер';
+    }
+
+    if (statRes.ok){
+      const st = await statRes.json();
+      const v = st.published_24h !== undefined ? st.published_24h
+              : (st.published_total !== undefined ? st.published_total : '—');
+      setCard('card-stats', '', v, st.errors_24h !== undefined ? 'Ошибок за 24 ч.: ' + st.errors_24h : '');
+      if (st.ai_mode !== undefined){
+        const mode = String(st.ai_mode).toUpperCase() === 'REMOTE' ? 'Облако' : 'Локально';
+        const model = st.ai_model ? String(st.ai_model) : 'модель не выбрана';
+        setCard('card-ai', st.ai_status === 'ok' ? 'ok' : 'warn', mode, model);
+      }
+    }
+
+    if (setRes.ok){
+      fillSettings(await setRes.json());
+    }
+
+    if (proxRes.ok){
+      const p = await proxRes.json();
+      const ok = p.reachable === true;
+      setCard('card-proxy', ok ? 'ok' : (p.state === 'disabled' ? '' : 'err'),
+              ok ? 'Доступен' : (p.state === 'disabled' ? 'Выключен' : 'Недоступен'),
+              p.message || '');
+    }
+  } catch (e){
+    toast('Не удалось получить состояние приложения. Проверьте, что Content Factory запущен.', 'err');
+  } finally {
+    if (refreshBtn) refreshBtn.disabled = false;
+  }
+}
+
+// ---------- Маршруты «тема → канал» ----------
+function addTopicRow(topic = '', chat = ''){
+  const list = $id('topics-list');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'route-row';
+  row.innerHTML =
+    '<div><div class="route-label">Категория</div>' +
+      '<input type="text" class="topic-name" placeholder="например: технологии" value="' + escapeHtml(topic) + '"></div>' +
+    '<div><div class="route-label">Канал</div>' +
+      '<input type="text" class="topic-chat" placeholder="@mychannel или -100123456789" value="' + escapeHtml(chat) + '"></div>' +
+    '<button type="button" class="route-remove" title="Удалить маршрут" aria-label="Удалить маршрут">' +
+      '<svg class="icon icon-sm"><use href="#i-x"/></svg></button>';
+  row.querySelector('.route-remove').addEventListener('click', () => {
+    row.remove();
+    editedFields.add('topics-list');
+    updateSaveState();
+  });
+  row.querySelectorAll('input').forEach(input => {
+    input.addEventListener('input', () => { editedFields.add('topics-list'); updateSaveState(); });
+  });
+  list.appendChild(row);
+}
+
+function loadTopics(obj){
+  const list = $id('topics-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const entries = Object.entries(obj || {});
+  if (!entries.length){
+    addTopicRow('общее', '');
+    return;
+  }
+  entries.forEach(([k, v]) => addTopicRow(k, v));
+}
+
+function collectTopics(){
+  const out = {};
+  document.querySelectorAll('#topics-list .route-row').forEach(row => {
+    const name = row.querySelector('.topic-name').value.trim();
+    const chat = row.querySelector('.topic-chat').value.trim();
+    if (name && chat) out[name.toLowerCase()] = chat;
+  });
+  return out;
+}
+
+// ---------- Настройки ----------
+function fillSettings(s){
+  const map = {
+    'tg_api_id':'f-tg_api_id','tg_api_hash':'f-tg_api_hash','bot_token':'f-bot_token',
+    'sources':'f-sources','poll_delay':'f-poll_delay',
+    'ai_mode':'f-ai_mode','remote_url':'f-remote_url','remote_api_key':'f-remote_api_key','remote_model':'f-remote_model',
+    'local_ai_provider':'f-local_ai_provider','local_host':'f-local_host','local_port':'f-local_port','local_model':'f-local_model',
+    'system_prompt':'f-system_prompt','use_proxy':'f-use_proxy','proxy_type':'f-proxy_type',
+    'proxy_host':'f-proxy_host','proxy_port':'f-proxy_port','proxy_user':'f-proxy_user','proxy_pass':'f-proxy_pass',
+    'mtproto_key':'f-mtproto_key','ads_words':'f-ads_words','watermark_text':'f-watermark_text',
+    'publish_mode':'publish_mode_auto','media_retention_days':'f-media_retention_days'
+  };
+  for (const [key, elId] of Object.entries(map)){
+    const el = $id(elId);
+    if (!el) continue;
+    const val = s[key];
+    if (val === undefined) continue;
+    if (SECRET_FIELDS.includes(elId)){
+      applySecretState(elId, val);
+      continue;
+    }
+    if (shouldSkipField(el)) continue;
+    if (key === 'ai_mode'){
+      el.checked = String(val).trim().toUpperCase() === 'REMOTE';
+      syncAiMode(el.checked, true);
+      continue;
+    }
+    if (key === 'publish_mode'){
+      const mode = String(val).trim().toLowerCase() === 'manual' ? 'manual' : 'auto';
+      const radio = $id('publish_mode_' + mode);
+      if (radio) radio.checked = true;
+      const hint = $id('publish-mode-hint');
+      if (hint){
+        hint.textContent = mode === 'manual'
+          ? 'Новые посты попадают в очередь и ждут подтверждения в разделе «Посты».'
+          : 'Посты публикуются сразу после сбора из каналов-доноров.';
+      }
+      continue;
+    }
+    if (key === 'local_ai_provider'){      const provider = String(val).trim().toLowerCase();
+      if (provider && Array.from(el.options).some(o => o.value === provider)){
+        el.value = provider;
+      }
+      // Дефолтные адрес и порт провайдера. Сохранённые значения хоста и
+      // порта перезапишут их следующими шагами цикла.
+      applyAiProviderDefaults();
+      continue;
+    }
+    if (el.type === 'checkbox'){
+      el.checked = String(val) === '1' || val === true || String(val) === 'true';
+      toggleProxyFields();
+      continue;
+    }
+    if (key === 'proxy_type'){
+      const norm = String(val).trim().toLowerCase();
+      const has = Array.from(el.options).some(o => o.value === norm);
+      el.value = has ? norm : 'http';
+      onProxyTypeChange();
+      continue;
+    }
+    el.value = val || '';
+  }
+
+  const topicsList = $id('topics-list');
+  const topicsEdited = topicsList && topicsList.querySelector('.route-row');
+  if (!topicsEdited || forceSecretRefresh){
+    loadTopics(parseTopics(String(s['topic_channels'] || '{}')));
+  }
+}
+
+function parseTopics(raw){
+  try {
+    const obj = JSON.parse(raw || '{}');
+    return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+  } catch (e) { return {}; }
+}
+
+// ---------- Провайдеры локального AI ----------
+let AI_PROVIDERS = {};
+let AI_MODELS_LOADED = false;
+
+async function loadAiProviders(){
+  try {
+    const res = await fetch(API + '/api/ai/providers');
+    if (!res.ok) return;
+    const data = await res.json();
+    AI_PROVIDERS = {};
+    (data.providers || []).forEach(p => { AI_PROVIDERS[p.id] = p; });
+    applyAiProviderDefaults();
+  } catch (e) { /* список провайдеров недоступен — работаем вручную */ }
+}
+
+// Подставляет адрес и порт провайдера по умолчанию.
+function applyAiProviderDefaults(){
+  const select = $id('f-local_ai_provider');
+  if (!select) return;
+  const spec = AI_PROVIDERS[select.value];
+  const hint = $id('f-local_ai_provider_hint');
+  if (!spec){
+    if (hint) hint.textContent = '';
+    return;
+  }
+  const host = $id('f-local_host');
+  const port = $id('f-local_port');
+  if (host) host.value = spec.host;
+  if (port) port.value = spec.port;
+  if (hint) hint.textContent = spec.hint + '.';
+  AI_MODELS_LOADED = false;
+  const list = $id('model-list');
+  if (list) list.hidden = true;
+}
+
+// ---------- Список моделей ----------
+async function toggleModelList(){
+  const list = $id('model-list');
+  if (!list) return;
+  if (!list.hidden){ list.hidden = true; return; }
+  list.hidden = false;
+  if (AI_MODELS_LOADED){ return; }
+  await loadModelList();
+}
+
+async function loadModelList(){
+  const list = $id('model-list');
+  const status = $id('model-status');
+  const provider = $id('f-local_ai_provider');
+  const host = $id('f-local_host');
+  const port = $id('f-local_port');
+  if (!list || !provider) return;
+
+  list.innerHTML = '<div class="model-list-empty"><span class="spinner"></span> Загружаем список моделей…</div>';
+  if (status) status.textContent = 'Опрашиваем локальный сервер…';
+
+  const query = new URLSearchParams({
+    provider: provider.value,
+    host: (host && host.value) || '127.0.0.1',
+    port: (port && port.value) || '',
+  });
+  try {
+    const res = await fetch(API + '/api/ai/models?' + query.toString());
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok){
+      list.innerHTML = '<div class="model-list-empty">' + escapeHtml(data.detail || 'Не удалось получить список моделей.') + '</div>';
+      if (status) status.textContent = 'Сервер не ответил. Укажите модель вручную.';
+      AI_MODELS_LOADED = false;
+      return;
+    }
+    const models = Array.isArray(data.models) ? data.models : [];
+    AI_MODELS_LOADED = true;
+    if (!models.length){
+      list.innerHTML = '<div class="model-list-empty">На сервере нет загруженных моделей. Укажите имя вручную.</div>';
+      if (status) status.textContent = 'Подключение установлено, но моделей на сервере нет.';
+      return;
+    }
+    list.innerHTML = '';
+    models.forEach(name => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'model-list-item';
+      item.innerHTML = '<span>' + escapeHtml(name) + '</span><span class="model-tag">выбрать</span>';
+      item.addEventListener('click', () => {
+        const input = $id('f-local_model');
+        if (input) input.value = name;
+        list.querySelectorAll('.model-list-item').forEach(el => el.classList.remove('is-active'));
+        item.classList.add('is-active');
+        if (status) status.textContent = 'Выбрана модель: ' + name;
+        editedFields.add('f-local_model');
+        updateSaveState();
+      });
+      list.appendChild(item);
+    });
+    if (status) status.textContent = 'Найдено моделей: ' + models.length + '. Нажмите на модель, чтобы выбрать.';
+  } catch (e){
+    list.innerHTML = '<div class="model-list-empty">Локальный сервер недоступен. Укажите модель вручную.</div>';
+    if (status) status.textContent = 'Не удалось связаться с локальным AI-сервером.';
+    AI_MODELS_LOADED = false;
+  }
+}
+
+// ---------- Справка: коды журнала ----------
+const FAQ_CODES = [
+  { code: 'ERR-100', level: 'error', title: 'Критический сбой цикла парсера',
+    meaning: 'Непредвиденная ошибка прервала круг обхода источников: не удалось подготовить окружение, прочитать настройки или разорвалось соединение.',
+    solution: 'Откройте «Журнал» и посмотрите текст следом за кодом. Чаще всего это временный сбой сети — парсер повторит попытку на следующем круге.' },
+  { code: 'ERR-200', level: 'error', title: 'Ошибка отправки или доступа к каналу',
+    meaning: 'Telegram отклонил действие: канал-донор не найден, приватный, бот не подписан, либо не сработала отправка сообщения.',
+    solution: 'Проверьте, что бот-отправитель добавлен в целевой канал как администратор с правом публикации, а доноры указаны верно. Исходный пост остаётся на повтор.' },
+  { code: 'ERR-201', level: 'error', title: 'Неверные Telegram API ID или API Hash',
+    meaning: 'Telegram отверг ключи клиента: они не совпадают с приложением, созданным на my.telegram.org.',
+    solution: 'Откройте my.telegram.org → API development tools, скопируйте API ID и API Hash в раздел «Подключение» и сохраните настройки.' },
+  { code: 'ERR-202', level: 'error', title: 'Неверный формат Bot Token',
+    meaning: 'Токен бота не проходит проверку формата или отклонён Telegram как недействительный.',
+    solution: 'Получите новый токен у @BotFather (/token) и вставьте его в раздел «Подключение».' },
+  { code: 'ERR-203', level: 'error', title: 'Нет сессии Telegram или она недействительна',
+    meaning: 'Нет файла сессии, сессия отозвана, либо требуется ввод пароля двухфакторной аутентификации.',
+    solution: 'Запустите парсер из обычного окна терминала — приложение запросит код подтверждения. Если сессия была отозвана, удалите файл session_name.session и авторизуйтесь заново.' },
+  { code: 'ERR-204', level: 'error', title: 'Telegram выдал FloodWait',
+    meaning: 'Telegram временно ограничил частоту запросов. Парсер сам ждёт указанное время и продолжает работу.',
+    solution: 'Ничего делать не нужно. Если ограничения повторяются, увеличьте «Задержка опроса» в разделе «Подключение».' },
+  { code: 'ERR-207', level: 'error', title: 'Повреждён курсор источника',
+    meaning: 'Служебная отметка о последнем прочитанном сообщении для канала-донора повреждена, поэтому источник пропущен целиком.',
+    solution: 'Источник пропущен без сброса, чтобы не потерять историю. Удалите запись курсора этого источника в базе, чтобы начать сканирование заново.' },
+  { code: 'ERR-301', level: 'error', title: 'Сеть или прокси недоступны',
+    meaning: 'Не удалось установить соединение: прокси не отвечает, неверные реквизиты или сеть пропала.',
+    solution: 'Проверьте прокси кнопкой «Проверить прокси» в разделе «Прокси». Если прокси не используется, выключите переключатель.' },
+  { code: 'ERR-302', level: 'error', title: 'Некорректные настройки прокси',
+    meaning: 'Прокси включён, но параметры неполные или неверные: нет хоста, недопустимый порт, битый секрет MTProto.',
+    solution: 'Заполните тип, хост, порт и при необходимости учётные данные. Прямое подклюление намеренно не используется, пока прокси настроен неверно.' },
+  { code: 'ERR-400', level: 'error', title: 'Ответ AI не соответствует формату',
+    meaning: 'Модель ответила, но не вернула обязательный раздел «ТЕКСТ:». Такой ответ нельзя публиковать.',
+    solution: 'Пост остаётся на повтор. Проверьте системный промпт в разделе «AI» — добавьте требование формата «ТЕМА / ТЕКСТ / ХЭШТЕГИ».' },
+  { code: 'ERR-401', level: 'error', title: 'Локальный AI не отвечает вовремя',
+    meaning: 'Запрос к локальному серверу модели не уложился в таймаут.',
+    solution: 'Проверьте, что приложение модели запущено и модель загружена. Кнопка «Показать модели» в разделе «AI» покажет список доступных.' },
+  { code: 'ERR-402', level: 'error', title: 'Локальный AI вернул HTTP-ошибку',
+    meaning: 'Сервер модели ответил кодом ошибки: модель не загружена, неверный путь или нет доступа.',
+    solution: 'Проверьте имя модели и порт в разделе «AI». Для Ollama: 11434, для LM Studio: 1234, для AnythingLLM: 3001.' },
+  { code: 'ERR-403', level: 'error', title: 'Облачный AI недоступен',
+    meaning: 'Запрос к облачному API не прошёл: нет сети, неверный ключ, отказ сервиса или истёк лимит.',
+    solution: 'Проверьте URL (обязательно https://), API Key и лимиты у провайдера. Пост остаётся на повтор.' },
+  { code: 'ERR-408', level: 'error', title: 'Постоянная ошибка отправки — парсер остановлен',
+    meaning: 'Telegram отклонил отправку по причине, которая не пройдёт при повторе: бот не в канале, нет прав, неверный чат.',
+    solution: 'Парсер остановлен намеренно, чтобы не слать неуспешные запросы. Исправьте доступы и запустите парсер заново.' },
+  { code: 'ERR-510', level: 'error', title: 'Пост не попал в очередь',
+    meaning: 'В ручном режиме не удалось сохранить пост в очередь: нет прав на запись в каталог с медиа.',
+    solution: 'Проверьте права на папку приложения. Пост будет собран заново на следующем круге.' },
+  { code: 'ERR-511', level: 'error', title: 'Не удалось опубликовать отложенный пост',
+    meaning: 'Автоматическая публикация по расписанию завершилась ошибкой отправки.',
+    solution: 'Откройте раздел «Посты», найдите пост с пометкой об ошибке и опубликуйте его вручную после исправления причины.' },
+  { code: 'ERR-512', level: 'error', title: 'Сбой при публикации отложенных постов',
+    meaning: 'Пакетная проверка отложенных постов завершилась исключением.',
+    solution: 'Проверьте журнал и состояние бота. Отложенные посты останутся в очереди и будут повторены.' },
+  { code: 'ERR-502', level: 'error', title: 'Секрет не удалось расшифровать',
+    meaning: 'Сохранённый токен или ключ зашифрован Windows DPAPI, но расшифровать его не удалось: база перенесена на другой компьютер или другой пользователь Windows.',
+    solution: 'Введите значение заново в разделе «Подключение» или «AI». Старое значение восстановить нельзя — это защита DPAPI.' },
+  { code: 'ERR-503', level: 'error', title: 'Секрет не удалось зашифровать',
+    meaning: 'Windows DPAPI отказал при сохранении секрета. Значение осталось в базе как есть.',
+    solution: 'Проверьте, что система не вводит доменные ограничения на профиль пользователя. После устранения причины сохраните настройки заново.' },
+  { code: 'ERR-999', level: 'error', title: 'Неперехваченная ошибка запуска',
+    meaning: 'Исключение произошло до основного цикла: приложение не смогло поднять панель или бота.',
+    solution: 'Посмотрите текст ошибки в консоли, где запущено приложение, и проверьте занятость порта 8000.' },
+  { code: 'WARN-300', level: 'warn', title: 'MTProto-прокси работает только на чтение',
+    meaning: 'Прокси применён к Telegram-клиенту, который читает каналы-доноры. Бот-отправитель публикует напрямую.',
+    solution: 'Это ограничение Bot API: он не поддерживает прокси. Если публикация тоже должна идти через прокси, выберите SOCKS5 или HTTP.' },
+  { code: 'WARN-400', level: 'warn', title: 'Нет канала для категории',
+    meaning: 'ИИ выбрал категорию, для которой не задан целевой канал. Пост не опубликован.',
+    solution: 'Добавьте маршрут в разделе «Маршруты». Заведите категорию «общее» — тогда ни один пост не потеряется.' },
+  { code: 'WARN-404', level: 'warn', title: 'AI вернул неверный формат ответа',
+    meaning: 'Ответ модели нельзя разобрать: нет обязательного раздела «ТЕКСТ:». Публикация не выполнялась.',
+    solution: 'Пост остаётся на повтор. Уточните системный промпт или попробуйте другую модель.' },
+  { code: 'WARN-405', level: 'warn', title: 'AI недоступен',
+    meaning: 'Запрос к модели завершился сетевой ошибкой или таймаутом.',
+    solution: 'Проверьте, запущено ли локальное приложение модели, либо доступность облачного API. Пост будет повторён.' },
+  { code: 'WARN-406', level: 'warn', title: 'Временная ошибка отправки',
+    meaning: 'Сеть или сервер Telegram ответили временной ошибкой: таймаут, сбой 5xx или лимит запросов.',
+    solution: 'Публикация будет повторена автоматически. Если повторяется — увеличьте «Задержка опроса».' },
+  { code: 'WARN-407', level: 'warn', title: 'Не доставлен хвост подписи',
+    meaning: 'Медиа отправлено, а длинный текст сверх лимита подписи — нет. Текст сохранён в базе и будет дослан.',
+    solution: 'Ничего делать не нужно: остаток текста уйдёт следующим сообщением. Повторная отправка медиа при этом не произойдёт.' },
+  { code: 'WARN-500', level: 'warn', title: 'Текст поста обрезан',
+    meaning: 'Ответ модели длиннее лимита Telegram (4096 символов) и был укорочен.',
+    solution: 'При желании сократите длину ответов в системном промпте.' },
+  { code: 'WARN-501', level: 'warn', title: 'Не удалось скачать вложение',
+    meaning: 'Медиафайл не скачался: обрыв связи или файл удалён у источника.',
+    solution: 'Пост остаётся на повтор и будет скачан при следующей попытке.' },
+  { code: 'WARN-511', level: 'warn', title: 'Медиафайл не сохранён в очереди',
+    meaning: 'Файл вложения не удалось скопировать в каталог очереди, поэтому пост попадёт без медиа.',
+    solution: 'Проверьте свободное место и права на папку приложения, затем соберите пост заново.' },
+  { code: 'OK-501', level: 'ok', title: 'Пост опубликован',
+    meaning: 'Пост успешно переписан моделью, отправлен в целевой канал и зафиксирован в базе.',
+    solution: 'Действий не требуется.' },
+  { code: 'OK-502', level: 'ok', title: 'Хвост подписи доставлен',
+    meaning: 'Оставшаяся часть длинного текста отправлена отдельным сообщением после медиа.',
+    solution: 'Действий не требуется.' },
+  { code: 'OK-510', level: 'ok', title: 'Пост добавлен в очередь',
+    meaning: 'В ручном режиме пост сохранён в разделе «Посты» и ждёт подтверждения.',
+    solution: 'Откройте раздел «Посты»: там его можно править, отложить, отправить или отменить.' },
+  { code: 'OK-511', level: 'ok', title: 'Отложенный пост опубликован',
+    meaning: 'Пост из очереди опубликован автоматически, когда наступило указанное время.',
+    solution: 'Действий не требуется.' },
+  { code: 'OK-512', level: 'ok', title: 'Пост опубликован из очереди',
+    meaning: 'Пост отправлен из раздела «Посты» по кнопке «Опубликовать».',
+    solution: 'Действий не требуется.' },
+  { code: 'SYS-000', level: 'ok', title: 'Служебное событие',
+    meaning: 'Информационная запись: запуск или остановка парсера, подстановка настроек из .env.',
+    solution: 'Действий не требуется.' },
+];
+
+let FAQ_FILTER = 'all';
+
+function renderFaq(){
+  const list = $id('faq-list');
+  if (!list) return;
+  const query = ($id('faq-search') && $id('faq-search').value || '').trim().toLowerCase();
+  const items = FAQ_CODES.filter(item => {
+    if (FAQ_FILTER !== 'all' && item.level !== FAQ_FILTER) return false;
+    if (!query) return true;
+    return (item.code + ' ' + item.title + ' ' + item.meaning + ' ' + item.solution)
+      .toLowerCase().includes(query);
+  });
+  const counter = $id('faq-count');
+  if (counter) counter.textContent = 'Показано: ' + items.length + ' из ' + FAQ_CODES.length;
+  if (!items.length){
+    list.innerHTML = '<div class="faq-empty">Ничего не найдено. Измените запрос или фильтр.</div>';
+    return;
+  }
+  list.innerHTML = items.map(item =>
+    '<div class="faq-item">' +
+      '<div class="faq-head">' +
+        '<span class="faq-code ' + item.level + '">' + escapeHtml(item.code) + '</span>' +
+        '<span class="faq-title">' + escapeHtml(item.title) + '</span>' +
+      '</div>' +
+      '<div class="faq-meaning">' + escapeHtml(item.meaning) + '</div>' +
+      '<div class="faq-solution">' + escapeHtml(item.solution) + '</div>' +
+    '</div>'
+  ).join('');
+}
+
+function initFaq(){
+  const search = $id('faq-search');
+  if (search) search.addEventListener('input', renderFaq);
+  document.querySelectorAll('[data-faq-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      FAQ_FILTER = btn.dataset.faqFilter;
+      document.querySelectorAll('[data-faq-filter]').forEach(b => {
+        b.classList.toggle('active', b === btn);
+      });
+      renderFaq();
+    });
+  });
+  renderFaq();
+}
+
+async function loadMediaStats(){
+  const box = $id('media-usage');
+  if (!box) return;
+  try {
+    const res = await fetch(API + '/api/posts/media-stats');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const select = $id('f-media_retention_days');
+    if (select && data.retention_days !== undefined){
+      const value = String(data.retention_days);
+      if (Array.from(select.options).some(o => o.value === value)) select.value = value;
+    }
+    box.textContent = data.files
+      ? (data.files + ' файл(ов), ' + data.megabytes + ' МБ · постов с медиа: ' + data.posts_with_media)
+      : 'Медиафайлов пока нет';
+  } catch (e){
+    box.textContent = 'Не удалось получить сведения о медиа';
+  }
+}
+
+async function cleanupMedia(scope){
+  if (scope === 'all'){
+    const ok = window.confirm('Удалить все медиафайлы очереди? Тексты постов останутся, медиа восстановить будет нельзя.');
+    if (!ok) return;
+  }
+  try {
+    const res = await fetch(API + '/api/posts/cleanup', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({scope: scope}),
+    });
+    const j = await res.json().catch(()=>({}));
+    if (!res.ok){
+      toast(j.msg || j.detail || 'Не удалось очистить медиа', 'err');
+      return;
+    }
+    if (j.status === 'skipped'){
+      toast(j.message || 'Очистка пропущена', 'warn');
+    } else {
+      toast('Удалено файлов: ' + (j.removed || 0) + ' (освобождено ' + Math.round((j.freed || 0) / 1024) + ' КБ)', 'success');
+    }
+    await loadMediaStats();
+    await loadPosts();
+  } catch (e){
+    toast('Ошибка сети при очистке медиа', 'err');
+  }
+}
+
+// ---------- Очередь постов ----------
+let POST_FILTER = 'all';
+let POSTS_CACHE = [];
+
+const POST_STATUS_LABELS = {
+  draft: 'Черновик',
+  scheduled: 'Отложен',
+  published: 'Опубликован',
+  cancelled: 'Отменён',
+  failed: 'Ошибка',
+};
+
+function setPublishMode(mode){
+  const el = $id('publish_mode_' + (mode === 'manual' ? 'manual' : 'auto'));
+  if (el) el.checked = true;
+  const hint = $id('publish-mode-hint');
+  if (hint){
+    hint.textContent = mode === 'manual'
+      ? 'Новые посты попадают в очередь и ждут подтверждения в этом разделе.'
+      : 'Посты публикуются сразу после сбора из каналов-доноров.';
+  }
+  editedFields.add('publish_mode');
+  editedFields.add('publish_mode_auto');
+  editedFields.add('publish_mode_manual');
+  updateSaveState();
+}
+
+function setPostFilter(filter){
+  POST_FILTER = filter;
+  document.querySelectorAll('[data-post-filter]').forEach(b => {
+    b.classList.toggle('active', b.dataset.postFilter === filter);
+  });
+  loadPosts();
+}
+async function loadPosts(){
+  const list = $id('posts-list');
+  if (!list) return;
+  list.innerHTML = '<div class="posts-empty">Загружаем очередь постов…</div>';
+  try {
+    const query = new URLSearchParams();
+    if (POST_FILTER && POST_FILTER !== 'all') query.set('status', POST_FILTER);
+    const res = await fetch(API + '/api/posts?' + query.toString());
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    POSTS_CACHE = Array.isArray(data.posts) ? data.posts : [];
+    renderPosts(data);
+  } catch (e){
+    list.innerHTML = '<div class="posts-empty">Не удалось загрузить очередь постов. Проверьте, запущено ли приложение.</div>';
+  }
+}
+
+function renderPosts(data){
+  const list = $id('posts-list');
+  const counter = $id('posts-count');
+  const posts = Array.isArray(data.posts) ? data.posts : [];
+  const counts = data.counts || {};
+  if (counter){
+    counter.textContent = 'Всего: ' + (data.total || 0)
+      + ' · черновиков: ' + (counts.draft || 0)
+      + ' · отложенных: ' + (counts.scheduled || 0)
+      + ' · опубликовано: ' + (counts.published || 0);
+  }
+  if (!posts.length){
+    list.innerHTML = '<div class="posts-empty">Постов в очереди нет. Переключите режим публикации на «Через очередь», чтобы посты попадали сюда.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  posts.forEach(post => list.appendChild(buildPostItem(post)));
+}
+
+function buildPostItem(post){
+  const item = document.createElement('div');
+  item.className = 'post-item';
+  item.dataset.postId = post.id;
+
+  const status = POST_STATUS_LABELS[post.status] || post.status;
+  const head = document.createElement('div');
+  head.className = 'post-head';
+  head.innerHTML =
+    '<div class="post-meta">' +
+      '<span class="post-status ' + post.status + '">' + escapeHtml(status) + '</span>' +
+      '<span>' + escapeHtml(post.source_name || '') + ' · пост ' + escapeHtml(post.post_id || '') + '</span>' +
+      (post.category ? '<span>· ' + escapeHtml(post.category) + '</span>' : '') +
+      (post.target_chat ? '<span>· ' + escapeHtml(post.target_chat) + '</span>' : '') +
+      (post.scheduled_at ? '<span>· ' + escapeHtml(post.scheduled_at) + '</span>' : '') +
+    '</div>' +
+    '<div class="post-meta"><span>' + escapeHtml(post.created_at || '') + '</span></div>';
+  item.appendChild(head);
+
+  if (post.publish_text){
+    const text = document.createElement('div');
+    text.className = 'post-text';
+    text.textContent = post.publish_text;
+    item.appendChild(text);
+  }
+  if (post.original_text && post.original_text !== post.publish_text){
+    const orig = document.createElement('div');
+    orig.className = 'post-text is-original';
+    orig.textContent = 'Исходник: ' + post.original_text;
+    item.appendChild(orig);
+  }
+  if (post.last_error){
+    const err = document.createElement('div');
+    err.className = 'post-text';
+    err.style.color = 'var(--danger)';
+    err.textContent = 'Ошибка: ' + post.last_error;
+    item.appendChild(err);
+  }
+
+  if (post.media_count > 0){
+    const media = document.createElement('div');
+    media.className = 'post-media';
+    for (let i = 0; i < post.media_count; i++){
+      const link = document.createElement('a');
+      link.href = API + '/api/posts/' + post.id + '/media/' + i;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.innerHTML = '<svg class="icon icon-sm"><use href="#i-file-text"/></svg>Медиа ' + (i + 1);
+      media.appendChild(link);
+    }
+    item.appendChild(media);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'post-actions';
+  const editable = post.status !== 'published' && post.status !== 'cancelled';
+
+  if (editable){
+    actions.appendChild(makePostButton('Править', 'btn-secondary', () => togglePostEditor(item, post)));
+    actions.appendChild(makePostButton('Опубликовать', 'btn-success', () => publishPost(post.id)));
+    actions.appendChild(makePostButton('Отложить', 'btn-secondary', () => togglePostEditor(item, post, 'scheduled')));
+    actions.appendChild(makePostButton('Отменить', 'btn-danger-ghost', () => cancelPost(post.id)));
+  }
+  if (post.status === 'published'){
+    actions.appendChild(makePostButton('Удалить из очереди', 'btn-danger-ghost', () => deletePost(post.id)));
+  }
+  item.appendChild(actions);
+  return item;
+}
+
+function makePostButton(label, cls, handler){
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-sm ' + cls;
+  btn.textContent = label;
+  btn.addEventListener('click', handler);
+  return btn;
+}
+
+function togglePostEditor(item, post, focusField){
+  const existing = item.querySelector('.post-edit');
+  if (existing){ existing.remove(); return; }
+
+  const editor = document.createElement('div');
+  editor.className = 'post-edit';
+  editor.innerHTML =
+    '<div class="grid">' +
+      '<div class="field field-full"><label class="field-label">Текст поста</label>' +
+        '<textarea id="pe-text-' + post.id + '" rows="6"></textarea></div>' +
+      '<div class="field"><label class="field-label">Категория</label>' +
+        '<input id="pe-cat-' + post.id + '" type="text" placeholder="общее"></div>' +
+      '<div class="field"><label class="field-label">Канал</label>' +
+        '<input id="pe-chat-' + post.id + '" type="text" placeholder="@mychannel"></div>' +
+      '<div class="field"><label class="field-label">Отложить на (необязательно)</label>' +
+        '<input id="pe-when-' + post.id + '" type="datetime-local"></div>' +
+    '</div>' +
+    '<div class="post-actions">' +
+      '<button class="btn btn-primary btn-sm" data-action="save">Сохранить</button>' +
+      '<button class="btn btn-secondary btn-sm" data-action="cancel">Отмена</button>' +
+    '</div>';
+  item.appendChild(editor);
+
+  const text = $id('pe-text-' + post.id);
+  const cat = $id('pe-cat-' + post.id);
+  const chat = $id('pe-chat-' + post.id);
+  const when = $id('pe-when-' + post.id);
+  if (text) text.value = post.publish_text || '';
+  if (cat) cat.value = post.category || '';
+  if (chat) chat.value = post.target_chat || '';
+  if (when && post.scheduled_at) when.value = post.scheduled_at.replace(' ', 'T').slice(0, 16);
+
+  editor.querySelector('[data-action="cancel"]').addEventListener('click', () => editor.remove());
+  editor.querySelector('[data-action="save"]').addEventListener('click', async () => {
+    const body = {
+      publish_text: text ? text.value : '',
+      category: cat ? cat.value : '',
+      target_chat: chat ? chat.value : '',
+    };
+    if (when && when.value){
+      body.scheduled_at = when.value.replace('T', ' ') + ':00';
+    }
+    await savePost(post.id, body);
+  });
+  if (focusField === 'scheduled' && when) when.focus();
+  else if (text) text.focus();
+}
+
+async function savePost(postId, body){
+  try {
+    const res = await fetch(API + '/api/posts/' + postId, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok){
+      toast(j.msg || j.detail || 'Не удалось сохранить пост', 'err');
+      return;
+    }
+    toast('Пост сохранён', 'success');
+    await loadPosts();
+  } catch (e){
+    toast('Ошибка сети при сохранении поста', 'err');
+  }
+}
+
+async function publishPost(postId){
+  try {
+    const res = await fetch(API + '/api/posts/' + postId + '/publish', { method: 'POST' });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok){
+      toast(j.msg || j.detail || 'Не удалось опубликовать пост', 'err');
+      await loadPosts();
+      return;
+    }
+    toast('Пост опубликован', 'success');
+    await loadPosts();
+  } catch (e){
+    toast('Ошибка сети при публикации поста', 'err');
+  }
+}
+
+async function cancelPost(postId){
+  try {
+    const res = await fetch(API + '/api/posts/' + postId + '/cancel', { method: 'POST' });
+    if (!res.ok){
+      const j = await res.json().catch(() => ({}));
+      toast(j.msg || j.detail || 'Не удалось отменить пост', 'err');
+      return;
+    }
+    toast('Публикация отменена', 'success');
+    await loadPosts();
+  } catch (e){
+    toast('Ошибка сети при отмене поста', 'err');
+  }
+}
+
+async function deletePost(postId){
+  try {
+    const res = await fetch(API + '/api/posts/' + postId + '/delete', { method: 'POST' });
+    if (!res.ok){
+      toast('Не удалось удалить пост', 'err');
+      return;
+    }
+    toast('Пост удалён из очереди', 'success');
+    await loadPosts();
+  } catch (e){
+    toast('Ошибка сети при удалении поста', 'err');
+  }
+}
+
+// ---------- Сохранение ----------
+async function saveQuick(){
+  const payload = {};
+  const fields = [
+    'tg_api_id','tg_api_hash','bot_token','sources','poll_delay',
+    'ai_mode','remote_url','remote_api_key','remote_model','local_ai_provider','local_host','local_port','local_model',
+    'system_prompt','use_proxy','proxy_type','proxy_host','proxy_port','proxy_user','proxy_pass',
+    'mtproto_key','ads_words','watermark_text','media_retention_days'
+  ];
+  for (const k of fields){
+    const el = $id('f-' + k);
+    if (!el) continue;
+    if (k === 'ai_mode'){
+      payload[k] = el.checked ? 'REMOTE' : 'LOCAL';
+    } else if (el.type === 'checkbox'){
+      payload[k] = el.checked ? '1' : '0';
+    } else if (SECRET_FIELDS.includes(el.id)){
+      payload[k] = pendingSecretClear.has(el.id) ? SECRET_CLEAR_SIGNAL : el.value.trim();
+    } else {
+      payload[k] = el.value.trim();
+    }
+  }
+  payload['topic_channels'] = JSON.stringify(collectTopics());
+  const modeRadio = $id('publish_mode_manual');
+  payload['publish_mode'] = (modeRadio && modeRadio.checked) ? 'manual' : 'auto';
+
+  const btn = $id('btn-save');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(API + '/api/settings', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    if (res.ok){
+      const cleared = pendingSecretClear.size;
+      pendingSecretClear.clear();
+      editedFields.clear();
+      updateSaveState();
+      forceSecretRefresh = true;
+      try { await refreshAll(); } finally { forceSecretRefresh = false; }
+      toast(cleared > 0
+        ? (cleared === 1 ? 'Настройки сохранены, секрет удалён' : 'Настройки сохранены, секретов удалено: ' + cleared)
+        : 'Настройки сохранены', 'success');
+    } else {
+      const j = await res.json().catch(()=>({}));
+      toast(j.msg || 'Ошибка сохранения', 'err');
+    }
+  } catch (e){
+    toast('Ошибка сети при сохранении', 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ---------- Запуск и остановка парсера ----------
+async function toggleBot(){
+  const btn = $id('btn-bot-toggle');
+  const running = btn && btn.classList.contains('btn-danger');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(API + '/api/modules/posts/' + (running ? 'stop' : 'start'), { method: 'POST' });
+    if (res.ok){
+      toast(running ? 'Парсер остановлен' : 'Парсер запущен', 'success');
+      await refreshAll();
+    } else {
+      const j = await res.json().catch(()=>({}));
+      toast(j.detail || j.msg || 'Не удалось изменить состояние парсера', 'err');
+    }
+  } catch (e){
+    toast('Ошибка сети', 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ---------- Проверка AI ----------
+async function testAI(){
+  if ($id('f-ai_mode').checked){
+    const url = $id('f-remote_url').value.trim();
+    const key = $id('f-remote_api_key').value.trim();
+    if (!url){ toast('Укажите URL облачного API.', 'warn'); return; }
+    if (!/^https:\/\//i.test(url)){ toast('URL облачного API должен начинаться с https://', 'warn'); return; }
+    if (!key){ toast('Укажите API Key для облачного режима.', 'warn'); return; }
+    toast('Настройки облачного AI заполнены. Проверка подключения — после сохранения.', 'success');
+    return;
+  }
+  const providerSelect = $id('f-local_ai_provider');
+  const provider = providerSelect ? providerSelect.value : 'ollama';
+  const host = ($id('f-local_host') && $id('f-local_host').value) || '127.0.0.1';
+  const port = $id('f-local_port').value || (AI_PROVIDERS[provider] ? AI_PROVIDERS[provider].port : 11434);
+  try {
+    const query = new URLSearchParams({ provider: provider, host: host, port: String(port) });
+    const res = await fetch(API + '/api/ai/models?' + query.toString());
+    const j = await res.json().catch(()=>({}));
+    if (res.ok){
+      const n = Array.isArray(j.models) ? j.models.length : 0;
+      toast(n ? 'AI отвечает. Найдено моделей: ' + n
+              : 'AI отвечает, но список моделей пуст.', n ? 'success' : 'warn');
+    } else {
+      const label = AI_PROVIDERS[provider] ? AI_PROVIDERS[provider].label : provider;
+      toast(j.detail || ('AI не отвечает. Проверьте, запущен ли ' + label + ' и верный ли порт.'), 'warn');
+    }
+  } catch (e){
+    toast('Не удалось связаться с AI-сервером', 'err');
+  }
+}
+
+// ---------- Проверка прокси ----------
+async function testProxy(){
+  const cfg = {
+    use_proxy: $id('f-use_proxy').checked ? '1' : '0',
+    proxy_type: $id('f-proxy_type').value,
+    proxy_host: $id('f-proxy_host').value,
+    proxy_port: $id('f-proxy_port').value,
+    proxy_user: $id('f-proxy_user').value,
+    proxy_pass: $id('f-proxy_pass').value,
+    mtproto_key: $id('f-mtproto_key').value
+  };
+  const box = $id('proxy-result');
+  try {
+    const res = await fetch(API + '/api/proxy/test', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)
+    });
+    const j = await res.json().catch(()=>({}));
+    if (j.ok || j.reachable){
+      box.className = 'inline-result ok';
+      box.innerHTML = '<svg class="icon icon-sm"><use href="#i-check-circle"/></svg>Прокси доступен';
+    } else {
+      box.className = 'inline-result err';
+      box.innerHTML = '<svg class="icon icon-sm"><use href="#i-error"/></svg>' + escapeHtml(j.message || j.detail || 'Ошибка проверки');
+    }
+  } catch (e){
+    box.className = 'inline-result err';
+    box.innerHTML = '<svg class="icon icon-sm"><use href="#i-error"/></svg>Не удалось проверить соединение с прокси. Проверьте, запущено ли приложение.';
+  }
+}
+
+// ---------- Журнал ----------
+async function loadLogs(){
+  const view = $id('log-view');
+  try {
+    const res = await fetch(API + '/api/logs?limit=30');
+    if (!res.ok) return;
+    const logs = await res.json();
+    if (!view) return;
+    if (!logs || !logs.length){
+      view.innerHTML = '<div class="log-empty">Записей пока нет</div>';
+      return;
+    }
+    view.innerHTML = logs.map(l => {
+      const t = l.type || 'info';
+      const cls = t.startsWith('ERR') ? 'err' : (t.startsWith('WARN') ? 'warn' : 'ok');
+      return '<div class="log-row">' +
+               '<span class="log-time">' + escapeHtml(l.timestamp_display || l.timestamp || '') + '</span>' +
+               '<span class="log-type ' + cls + '">' + escapeHtml(t) + '</span>' +
+               '<span class="log-msg">' + escapeHtml(l.message || '') + '</span>' +
+             '</div>';
+    }).join('');
+  } catch (e){ /* журнал недоступен — оставляем предыдущее содержимое */ }
+}
+
+function requestClearLogs(){
+  const box = $id('clear-logs-confirm');
+  const btn = $id('clear-logs-btn');
+  if (box) box.hidden = false;
+  if (btn) btn.disabled = true;
+}
+function cancelClearLogs(){
+  const box = $id('clear-logs-confirm');
+  const btn = $id('clear-logs-btn');
+  if (box) box.hidden = true;
+  if (btn) btn.disabled = false;
+}
+async function confirmClearLogs(){
+  const btn = $id('clear-logs-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(API + '/api/logs/clear', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true})
+    });
+    const j = await res.json().catch(()=>({}));
+    if (res.ok){
+      const n = Number(j.removed || 0);
+      toast(n ? ('Удалено записей журнала: ' + n) : 'Журнал уже пуст', 'success');
+      await loadLogs();
+    } else {
+      toast(j.msg || 'Не удалось очистить журнал', 'err');
+    }
+  } catch (e){
+    toast('Ошибка сети при очистке журнала', 'err');
+  } finally {
+    cancelClearLogs();
+  }
+}
+
+// ---------- Переключатели ----------
+function onProxyTypeChange(){
+  const type = ($id('f-proxy_type') && $id('f-proxy_type').value) || 'socks5';
+  const typeHint = $id('f-proxy_type_hint');
+  const hostHint = $id('f-proxy_host_hint');
+  const mtproto = $id('f-mtproto_key');
+  const user = $id('f-proxy_user');
+  const pass = $id('f-proxy_pass');
+
+  if (typeHint){
+    typeHint.textContent = type === 'mtproto'
+      ? 'MTProto — только чтение каналов. Публикация идёт напрямую: Bot API не поддерживает MTProto.'
+      : (type === 'http'
+        ? 'HTTP-прокси применяется и к чтению каналов, и к публикации.'
+        : 'SOCKS-прокси применяется и к чтению каналов, и к публикации.');
+  }
+  if (hostHint){
+    hostHint.textContent = type === 'mtproto'
+      ? 'Можно вставить готовую ссылку t.me/proxy — она будет разобрана автоматически.'
+      : 'Адрес прокси-сервера.';
+  }
+  // Для MTProto основные параметры — ссылка и ключ; логин/пароль не нужны.
+  if (mtproto) mtproto.disabled = (type !== 'mtproto');
+  if (user) user.disabled = (type === 'mtproto');
+  if (pass) pass.disabled = (type === 'mtproto');
+}
+
+function toggleAIFields(){
+  const local = $id('ai-local-fields');
+  const rem = $id('ai-remote-fields');
+  const isRemote = $id('f-ai_mode').checked;
+  if (local) local.style.display = isRemote ? 'none' : '';
+  if (rem) rem.style.display = isRemote ? '' : 'none';
+}
+function syncAiMode(remote, fromSettings){
+  const checkbox = $id('f-ai_mode');
+  if (checkbox && checkbox.checked !== remote){
+    checkbox.checked = remote;
+    if (!fromSettings) editedFields.add('f-ai_mode');
+  }
+  const localRadio = $id('ai_source_local');
+  const remoteRadio = $id('ai_source_remote');
+  if (localRadio) localRadio.checked = !remote;
+  if (remoteRadio) remoteRadio.checked = remote;
+  toggleAIFields();
+  updateSaveState();
+}
+function toggleProxyFields(){
+  const f = $id('proxy-fields');
+  const enabled = $id('f-use_proxy').checked;
+  if (f) f.style.display = enabled ? '' : 'none';
+  const hint = $id('proxy-disabled-hint');
+  if (hint) hint.style.display = enabled ? 'none' : '';
+}
+
+// ---------- Инициализация ----------
+initTabs();
+setupTheme();
+setupSecretControls();
+loadAiProviders();
+onProxyTypeChange();
+initFaq();
+const addTopicBtn = $id('add-topic');
+if (addTopicBtn) addTopicBtn.addEventListener('click', () => {
+  addTopicRow('', '');
+  editedFields.add('topics-list');
+  updateSaveState();
+});
+updateSaveState();
+refreshAll();
+setInterval(refreshAll, 15000);
+loadLogs();
+setInterval(loadLogs, 20000);
+</script>
 </body>
 </html>
