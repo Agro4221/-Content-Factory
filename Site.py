@@ -81,6 +81,59 @@ def _unauthorized_response() -> JSONResponse:
     )
 
 
+def _basic_auth_matches(header: str | None, username: str, password: str) -> bool:
+    """Проверяет заголовок Authorization против ожидаемых учётных данных.
+
+    Сравнение постоянного времени, чтобы по времени ответа нельзя было
+    подобрать пароль по частям.
+    """
+    if not header:
+        return False
+    scheme, _, encoded = header.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return False
+    try:
+        raw_credentials = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    supplied_username, separator, supplied_password = raw_credentials.partition(":")
+    if not separator:
+        return False
+    username_matches = hmac.compare_digest(
+        supplied_username.encode("utf-8"), username.encode("utf-8")
+    )
+    password_matches = hmac.compare_digest(
+        supplied_password.encode("utf-8"), password.encode("utf-8")
+    )
+    return username_matches and password_matches
+
+
+def validate_api_auth_configuration(host: str, username: str, password: str) -> None:
+    """Проверяет конфигурацию доступа к панели до запуска сервера.
+
+    Ошибки выбрасываются как RuntimeError с понятным текстом: пользователь
+    видит причину прямо в терминале, а не получает страницу с ошибкой 503
+    в браузере и гадает, что не так.
+    """
+    if bool(username) != bool(password):
+        raise RuntimeError(
+            "Укажите одновременно ADMIN_USERNAME и ADMIN_PASSWORD — "
+            "сейчас задано только одно из них."
+        )
+    if ":" in username:
+        raise RuntimeError(
+            "ADMIN_USERNAME не может содержать символ ':' — базовый протокол "
+            "аутентификации разделяет имя и пароль по первому двоеточию, "
+            "такое имя невозможно сопоставить."
+        )
+    if not (username and password) and not _is_loopback_host(host):
+        raise RuntimeError(
+            f"API_HOST={host} — это не loopback-адрес, но ADMIN_USERNAME и "
+            "ADMIN_PASSWORD не заданы. Панель была бы доступна из сети без "
+            "защиты. Задайте учётные данные или верните API_HOST к 127.0.0.1."
+        )
+
+
 @app.middleware("http")
 async def protect_admin_panel(request: Request, call_next):
     """Protect every panel/API/static route when credentials are configured.
@@ -125,25 +178,9 @@ async def protect_admin_panel(request: Request, call_next):
         )
 
     if auth_enabled:
-        header = request.headers.get("authorization", "")
-        scheme, _, encoded = header.partition(" ")
-        supplied_username = supplied_password = ""
-        if scheme.lower() == "basic" and encoded:
-            try:
-                raw_credentials = base64.b64decode(encoded, validate=True).decode("utf-8")
-                supplied_username, separator, supplied_password = raw_credentials.partition(":")
-                if not separator:
-                    supplied_username = supplied_password = ""
-            except (ValueError, UnicodeDecodeError):
-                supplied_username = supplied_password = ""
-
-        username_matches = hmac.compare_digest(
-            supplied_username.encode("utf-8"), ADMIN_USERNAME.encode("utf-8")
-        )
-        password_matches = hmac.compare_digest(
-            supplied_password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")
-        )
-        if not (username_matches and password_matches):
+        if not _basic_auth_matches(
+            request.headers.get("authorization", ""), ADMIN_USERNAME, ADMIN_PASSWORD
+        ):
             return _unauthorized_response()
 
     return await call_next(request)
@@ -1481,9 +1518,11 @@ async def api_stats_posts() -> dict:
 async def _api_startup_tasks() -> None:
     from startup import prepare_runtime_directories
     prepare_runtime_directories()
+    validate_api_auth_configuration(API_HOST, ADMIN_USERNAME, ADMIN_PASSWORD)
 
 
 if __name__ == "__main__":
     import uvicorn
     from config import API_HOST, API_PORT
+    validate_api_auth_configuration(API_HOST, ADMIN_USERNAME, ADMIN_PASSWORD)
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level=API_LOG_LEVEL)
