@@ -44,7 +44,7 @@ def load_environment() -> str:
         try:
             shutil.copyfile(example_path, env_path)
             print("--> [СИСТЕМА] Создан файл .env из .env.example")
-            print("--> [СИСТЕМА] Заполните ключи в .env (лицензия, API) при необходимости.")
+            print("--> [СИСТЕМА] Заполните ключи в .env (Telegram, AI, прокси) при необходимости.")
         except OSError as exc:
             print(f"!!! [СИСТЕМА] Не удалось создать .env: {exc}")
 

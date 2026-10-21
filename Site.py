@@ -1,4 +1,4 @@
-# REFACTORED: Only Core Bot (Posts) module left. License, PF, and Reviews completely removed.
+# Веб-панель и API для сборки контента.
 """
 FastAPI-приложение: HTML-админка, JSON API для управления основным ботом публикаций.
 """
