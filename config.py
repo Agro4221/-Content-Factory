@@ -1,10 +1,9 @@
-"""Конфигурация приложения Content Factory."""
+"""Конфигурация приложения Project MaryJane / Parser v1.28.3.6."""
 from __future__ import annotations
 
 import math
 import os
 import re
-import sys
 from urllib.parse import urlsplit
 
 from env_loader import load_environment
@@ -316,10 +315,7 @@ def normalize_target_chat(value: str | int | None) -> str:
 
 
 def runtime_label() -> str:
-    """Короткая метка того, как запущено приложение (для баннера в терминале)."""
-    if not is_frozen():
-        return "python"
-    return "app" if sys.platform == "darwin" else "exe"
+    return "exe" if is_frozen() else "python"
 
 
 def is_truthy(value: str | int | bool | None) -> bool:
