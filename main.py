@@ -1910,19 +1910,6 @@ if __name__ == "__main__":
     print("--> [СИСТЕМА] Инициализация графического интерфейса и API...")
     run_startup_bootstrap()
 
-    # Проверяем доступ к панели до старта серверных потоков: если панель
-    # была бы выставлена в сеть без пароля или имя пользователя содержит
-    # ':', приложение должно сказать об этом в терминале и не запуститься,
-    # а не молча отдавать браузеру страницу с ошибкой.
-    from config import ADMIN_PASSWORD, ADMIN_USERNAME, API_HOST
-    from Site import validate_api_auth_configuration
-
-    try:
-        validate_api_auth_configuration(API_HOST, ADMIN_USERNAME, ADMIN_PASSWORD)
-    except RuntimeError as config_error:
-        print(f"!!! [ERR-901] Некорректная конфигурация панели: {config_error}")
-        sys.exit(1)
-
     threading.Thread(target=start_api_server, daemon=True).start()
     if BROWSER_OPEN_ON_START:
         threading.Thread(target=open_browser_delayed, daemon=True).start()

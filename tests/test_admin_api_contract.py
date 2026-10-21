@@ -62,9 +62,6 @@ class FakeDB:
 def client(monkeypatch):
     fake_db = FakeDB()
     monkeypatch.setattr(Site, "db", fake_db)
-    monkeypatch.setattr(Site, "API_HOST", "127.0.0.1")
-    monkeypatch.setattr(Site, "ADMIN_USERNAME", "")
-    monkeypatch.setattr(Site, "ADMIN_PASSWORD", "")
     with TestClient(
         Site.app,
         client=("127.0.0.1", 12345),
