@@ -25,6 +25,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import console_setup  # noqa: E402  (импорт сам настраивает вывод в UTF-8)
+
 OK = "[ OK ]"
 BAD = "[FAIL]"
 WARN = "[WARN]"

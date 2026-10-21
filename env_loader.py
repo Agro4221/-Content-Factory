@@ -5,18 +5,16 @@ import os
 import shutil
 import sys
 
+import console_setup
+
 
 def _configure_stdio_errors() -> None:
-    """Prevent non-ASCII log messages from crashing Windows builds on legacy code pages."""
-    for stream in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if not callable(reconfigure):
-            continue
-        try:
-            reconfigure(errors="backslashreplace")
-        except (OSError, RuntimeError, ValueError):
-            # Some embedded terminals and test capture streams cannot be reconfigured.
-            pass
+    """Prevent non-ASCII log messages from crashing Windows builds on legacy code pages.
+
+    Вывод переводится в UTF-8 с заменой непечатных символов: кириллица
+    выводится как есть, а не как \\uXXXX-escape-последовательности.
+    """
+    console_setup.setup_console()
 
 
 _configure_stdio_errors()

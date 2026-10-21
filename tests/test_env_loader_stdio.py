@@ -18,8 +18,25 @@ def test_legacy_windows_code_page_cannot_crash_russian_startup_logs(monkeypatch)
     print("--> [СИСТЕМА] Создан файл .env", file=stdout)
     stdout.flush()
 
-    assert stdout.errors == "backslashreplace"
-    assert b"\\u0421" in stdout_bytes.getvalue()
+    # Поток переведён в UTF-8, поэтому кириллица пишется как есть,
+    # а не как \uXXXX-escape-последовательности.
+    assert stdout.errors == "replace"
+    written = stdout_bytes.getvalue()
+    assert written.decode("utf-8").strip() == "--> [СИСТЕМА] Создан файл .env"
+
+
+def test_symbols_outside_target_encoding_do_not_crash(monkeypatch) -> None:
+    """Символ, которого нет в целевой кодировке, не должен ронять вывод."""
+    stdout_bytes = io.BytesIO()
+    stdout = io.TextIOWrapper(stdout_bytes, encoding="ascii", errors="strict")
+    monkeypatch.setattr(env_loader.sys, "stdout", stdout)
+    monkeypatch.setattr(env_loader.sys, "stderr", stdout)
+
+    env_loader._configure_stdio_errors()
+    print("--> [СИСТЕМА] Проверка", file=stdout)
+    stdout.flush()
+
+    assert stdout_bytes.getvalue()  # вывод не пустой и исключения не было
 
 
 def test_streams_without_reconfigure_are_safe(monkeypatch) -> None:
