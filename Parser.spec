@@ -21,10 +21,10 @@ ENTRY = str(PROJECT_DIR / "main.py")
 # === Дополнительные исходники проекта (для явного включения в сборку) ===
 PROJECT_MODULES = [
     "config",
-    "Auth",
     "Site",
     "database",
     "state",
+    "secrets_store",
 ]
 
 # === Runtime resources bundled into the one-file executable ===
@@ -33,9 +33,6 @@ PROJECT_MODULES = [
 # Keep resources at the bundle root to match config.py and Site.py paths.
 BUNDLE_ASSETS = (
     "admin.html",
-    "admin.css",
-    "admin.js",
-    "activate.html",
     ".env.example",
     "favicon.png",
     "brand-logo.webp",

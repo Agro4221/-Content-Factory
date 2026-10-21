@@ -9,9 +9,6 @@ SPEC_PATH = ROOT / "Parser.spec"
 
 REQUIRED_ASSETS = {
     "admin.html",
-    "admin.css",
-    "admin.js",
-    "activate.html",
     ".env.example",
     "favicon.png",
     "brand-logo.webp",
@@ -19,6 +16,9 @@ REQUIRED_ASSETS = {
     "brand-logo@2x.webp",
     "brand-logo@2x.png",
 }
+
+#: Отдельные файлы панели удалены: admin.html самодостаточен.
+REMOVED_ASSETS = {"admin.css", "admin.js", "activate.html", "script.js", "styles.css"}
 
 
 def _assignments(tree: ast.Module) -> dict[str, ast.expr]:
@@ -42,6 +42,17 @@ def test_parser_spec_bundles_all_runtime_assets() -> None:
 
     for filename in assets:
         assert (ROOT / filename).is_file(), f"Bundled file does not exist: {filename}"
+
+    # Устаревшие отдельные файлы панели не должны попадать в сборку.
+    assert not (REMOVED_ASSETS & assets), (
+        "admin.html is self-contained: legacy assets must not be bundled"
+    )
+
+
+def test_legacy_admin_assets_are_removed_from_the_project() -> None:
+    """Файлы admin.css и admin.js удалены из проекта."""
+    for filename in REMOVED_ASSETS:
+        assert not (ROOT / filename).exists(), f"{filename} must be removed from the project"
 
 
 def test_pyinstaller_datas_map_bundle_assets_to_bundle_root() -> None:

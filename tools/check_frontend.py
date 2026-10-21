@@ -1,4 +1,8 @@
-"""Проверяет CSS/JavaScript админ-панели, загружаемые как отдельные ресурсы."""
+"""Проверяет встроенные CSS/JavaScript админ-панели.
+
+Панель самодостаточна: стили и скрипт лежат внутри admin.html, поэтому
+проверка работает с ними как с единым файлом сборки.
+"""
 from __future__ import annotations
 
 import re
@@ -10,60 +14,88 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HTML_PATH = ROOT / "admin.html"
-CSS_PATH = ROOT / "admin.css"
-JS_PATH = ROOT / "admin.js"
+
+# Правила CSS, потеря которых может скрыть раздел или сломать раскладку.
+CRITICAL_CSS_RULES = (
+    (r"^\s*\.appbar\s*\{", ".appbar"),
+    (r"^\s*\.tabs\s*\{", ".tabs"),
+    (r"^\s*\.nav-tab\s*\{", ".nav-tab"),
+    (r"^\s*\.nav-tab\.active\s*\{", ".nav-tab.active"),
+    (r"^\s*\.panel\s*\{", ".panel"),
+    (r"^\s*\.panel\.active\s*\{", ".panel.active"),
+    (r"^\s*\.status-strip\s*\{", ".status-strip"),
+    (r"^\s*\.card\s*\{", ".card"),
+    (r"^\s*\.block\s*\{", ".block"),
+    (r"^\s*\.block-head\s*\{", ".block-head"),
+    (r"^\s*\.grid\s*\{", ".grid"),
+    (r"^\s*\.field\s*\{", ".field"),
+    (r"^\s*\.secret-row\s*\{", ".secret-row"),
+    (r"^\s*\.confirm-box\s*\{", ".confirm-box"),
+    (r"^\s*\.action-bar\s*\{", ".action-bar"),
+    (r"^\s*@media\s*\(max-width:\s*620px\)\s*\{", "@media max-width 620px"),
+)
+
+# Вызовы модулей, удалённых из проекта. Их присутствие означает, что панель
+# зовёт несуществующий код.
+STALE_CALLS = (
+    "refreshBehaviorStatus()",
+    "refreshReviewsStatus()",
+    "syncBehaviorFormFromSettings(",
+    "syncReviewsFormFromSettings(",
+)
+
+
+def extract_block(html: str, tag: str) -> str:
+    """Достаёт содержимое встроенного <style> или <script> из HTML."""
+    match = re.search(
+        rf"<{tag}\b[^>]*>(.*?)</{tag}>", html, re.IGNORECASE | re.DOTALL
+    )
+    return match.group(1) if match else ""
+
+
+def depth_before(css_text: str, limit: int) -> int:
+    """Глубина вложенности блоков перед указанной позицией."""
+    depth = 0
+    in_comment = False
+    quote = ""
+    index = 0
+    while index < limit:
+        char = css_text[index]
+        next_char = css_text[index + 1] if index + 1 < limit else ""
+        if in_comment:
+            if char == "*" and next_char == "/":
+                in_comment = False
+                index += 2
+                continue
+            index += 1
+            continue
+        if quote:
+            if char == "\\":
+                index += 1
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char == "/" and next_char == "*":
+            in_comment = True
+            index += 2
+            continue
+        if char in ("'", '"'):
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+        index += 1
+    return depth
 
 
 def check_admin_css(css: str) -> list[str]:
-    """Catch structural CSS regressions that can hide routes or break layouts."""
+    """Ловит структурные регрессии CSS, скрывающие разделы или ломающие раскладку."""
     errors: list[str] = []
-    critical_rules = (
-        (r"^\s*\.split-menu-status\s*\{", ".split-menu-status"),
-        (r"^\s*\.split-menu-status\.ready\s*\{", ".split-menu-status.ready"),
-        (r"^\s*\.route\s*\{", ".route"),
-        (r"^\s*\.route\.active\s*\{", ".route.active"),
-        (r"^\s*@media\s*\(max-width:\s*1100px\)\s*\{", "@media max-width 1100px"),
-        (r"^\s*@media\s*\(max-width:\s*860px\)\s*\{", "@media max-width 860px"),
-        (r"^\s*@media\s*\(max-width:\s*540px\)\s*\{", "@media max-width 540px"),
-    )
 
-    def depth_before(css_text: str, limit: int) -> int:
-        depth = 0
-        in_comment = False
-        quote = ""
-        index = 0
-        while index < limit:
-            char = css_text[index]
-            next_char = css_text[index + 1] if index + 1 < limit else ""
-            if in_comment:
-                if char == "*" and next_char == "/":
-                    in_comment = False
-                    index += 2
-                    continue
-                index += 1
-                continue
-            if quote:
-                if char == "\\":
-                    index += 2
-                    continue
-                if char == quote:
-                    quote = ""
-                index += 1
-                continue
-            if char == "/" and next_char == "*":
-                in_comment = True
-                index += 2
-                continue
-            if char in ("'", '"'):
-                quote = char
-            elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-            index += 1
-        return depth
-
-    for pattern, label in critical_rules:
+    for pattern, label in CRITICAL_CSS_RULES:
         match = re.search(pattern, css, re.MULTILINE)
         if match is None:
             errors.append(f"Не найден CSS-блок {label}.")
@@ -72,19 +104,6 @@ def check_admin_css(css: str) -> list[str]:
         nesting = depth_before(css, opening_brace)
         if nesting != 0:
             errors.append(f"CSS-блок {label} неожиданно вложен на уровне {nesting}.")
-
-    # At tablet widths the source/type grid collapses, while horizontal page
-    # padding belongs on the scroll container (.content), not its nested
-    # .content-inner. Padding the inner wrapper here caused double gutters.
-    responsive_block = re.search(
-        r"@media\s*\(max-width:\s*1100px\)\s*\{\s*"
-        r"\.type-grid\s*\{[^{}]*\}\s*"
-        r"\.content\s*\{[^{}]*\}\s*\}",
-        css,
-        re.DOTALL,
-    )
-    if responsive_block is None:
-        errors.append("Блок адаптивной вёрстки для ширины до 1100px повреждён.")
 
     defined_vars = set(re.findall(r"(--[\w-]+)\s*:", css))
     used_vars = set(re.findall(r"var\(\s*(--[\w-]+)", css))
@@ -95,31 +114,95 @@ def check_admin_css(css: str) -> list[str]:
     final_depth = depth_before(css, len(css))
     if final_depth != 0:
         errors.append(f"CSS-блоки не сбалансированы (итоговая глубина {final_depth}).")
+
+    return errors
+
+
+def check_admin_html(html: str) -> list[str]:
+    """Проверяет разметку панели."""
+    errors: list[str] = []
+
+    if 'href="/admin.css"' in html or 'src="/admin.js"' in html:
+        errors.append(
+            "Панель самодостаточна: внешние /admin.css и /admin.js не подключаются."
+        )
+
+    # Каждый id, к которому обращается скрипт, должен существовать в разметке.
+    script = extract_block(html, "script")
+    referenced = set(re.findall(r"getElementById\(['\"]([^'\"]+)['\"]\)", script))
+    referenced |= set(re.findall(r"\$\w*\(['\"]#?([A-Za-z_][\w-]*)['\"]\)", script))
+    present = set(re.findall(r"id=\"([^\"]+)\"", html))
+    missing = sorted(referenced - present)
+    if missing:
+        errors.append("Скрипт обращается к отсутствующим элементам: " + ", ".join(missing) + ".")
+
+    # Секреты не должны попадать в разметку или в код панели.
+    for pattern in (r"\bbot_token\s*=\s*['\"][^'\"]+['\"]",):
+        if re.search(pattern, script):
+            errors.append("В коде панели найдено значение секрета.")
+
+    # Основные элементы управления должны присутствовать.
+    for element_id in (
+        "btn-bot-toggle",
+        "btn-refresh",
+        "btn-save",
+        "runtime-state",
+        "topics-list",
+        "log-view",
+        "toast-container",
+        "f-bot_token",
+        "f-remote_api_key",
+        "f-proxy_pass",
+        "f-mtproto_key",
+    ):
+        if element_id not in present:
+            errors.append(f"В разметке нет элемента #{element_id}.")
+
+    # Полоса статуса и панель действий заданы классами.
+    for class_name in ("status-strip", "action-bar"):
+        if not re.search(r'class="[^"]*\b' + class_name + r'\b[^"]*"', html):
+            errors.append(f"В разметке нет блока .{class_name}.")
+
+    # Каждая вкладка навигации должна вести в свою панель.
+    tabs = re.findall(r'class="nav-tab"[^>]*data-panel="([^"]+)"', html)
+    panels = re.findall(r'class="panel"[^>]*data-panel="([^"]+)"', html)
+    if not tabs:
+        errors.append("В разметке нет навигации по разделам.")
+    for tab in tabs:
+        if tab not in panels:
+            errors.append(f"Вкладка «{tab}» не имеет соответствующей панели.")
+    for panel in panels:
+        if panel not in tabs:
+            errors.append(f"Панель «{panel}» недоступна из навигации.")
+
     return errors
 
 
 def main() -> int:
     if shutil.which("node") is None:
-        print("Node.js не найден. Установите Node.js 20+ для проверки admin.js.", file=sys.stderr)
+        print("Node.js не найден. Установите Node.js 20+ для проверки скрипта панели.", file=sys.stderr)
         return 2
 
-    if not HTML_PATH.is_file() or not CSS_PATH.is_file() or not JS_PATH.is_file():
-        missing = [path.name for path in (HTML_PATH, CSS_PATH, JS_PATH) if not path.is_file()]
-        print("Не найдены ресурсы админки: " + ", ".join(missing), file=sys.stderr)
+    if not HTML_PATH.is_file():
+        print("Не найден admin.html.", file=sys.stderr)
         return 1
 
     html = HTML_PATH.read_text(encoding="utf-8")
-    css = CSS_PATH.read_text(encoding="utf-8")
-    javascript = JS_PATH.read_text(encoding="utf-8")
+    css = extract_block(html, "style")
+    javascript = extract_block(html, "script")
 
-    if 'href="/admin.css"' not in html:
-        print("admin.html должен подключать /admin.css.", file=sys.stderr)
+    if not css.strip():
+        print("admin.html не содержит встроенного <style> с стилями панели.", file=sys.stderr)
         return 1
-    if 'src="/admin.js"' not in html:
-        print("admin.html должен подключать /admin.js.", file=sys.stderr)
+    if not javascript.strip():
+        print("admin.html не содержит встроенного <script> с логикой панели.", file=sys.stderr)
         return 1
-    if re.search(r"<style\b", html, re.IGNORECASE):
-        print("CSS должен храниться в admin.css, а не во встроенном style-блоке.", file=sys.stderr)
+
+    html_errors = check_admin_html(html)
+    if html_errors:
+        print("Ошибки разметки админ-панели:", file=sys.stderr)
+        for error in html_errors:
+            print(f"  - {error}", file=sys.stderr)
         return 1
 
     css_errors = check_admin_css(css)
@@ -129,13 +212,7 @@ def main() -> int:
             print(f"  - {error}", file=sys.stderr)
         return 1
 
-    stale_calls = (
-        "refreshBehaviorStatus()",
-        "refreshReviewsStatus()",
-        "syncBehaviorFormFromSettings(",
-        "syncReviewsFormFromSettings(",
-    )
-    found_stale_calls = [call for call in stale_calls if call in javascript]
+    found_stale_calls = [call for call in STALE_CALLS if call in javascript]
     if found_stale_calls:
         print("Найдены вызовы удалённых модулей: " + ", ".join(found_stale_calls), file=sys.stderr)
         return 1
@@ -153,11 +230,11 @@ def main() -> int:
     finally:
         temp_path.unlink(missing_ok=True)
     if result.returncode:
-        print("admin.js не прошёл синтаксическую проверку:", file=sys.stderr)
+        print("Скрипт панели не прошёл синтаксическую проверку:", file=sys.stderr)
         print(result.stderr or result.stdout, file=sys.stderr)
         return result.returncode
 
-    print("OK: admin.css валиден по структурным проверкам, admin.js разбирается без ошибок.")
+    print("OK: встроенные CSS и JS админ-панели проходят структурные и синтаксические проверки.")
     return 0
 
 
