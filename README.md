@@ -175,7 +175,19 @@ python tools/check_frontend.py     # проверка панели
 python tools/smoke_test.py         # проверка ресурсов и импортов
 ```
 
-Полный журнал работ и решений — в [docs/PROJECT_AUDIT_AND_WORKLOG.md](docs/PROJECT_AUDIT_AND_WORKLOG.md).
+Полный журнал работ и решений — в [docs/PROJECT_AUDIT_AND_WORKLOG.md](docs/PROJECT_AUDIT_AND_WORKLOG.md),
+карта функций панели — в [docs/ADMIN_FUNCTION_MAP.md](docs/ADMIN_FUNCTION_MAP.md).
+
+## Участие в проекте
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — правила Pull Request и стиль кода
+- [SECURITY.md](SECURITY.md) — как сообщить об уязвимости и что нельзя
+  коммитить в репозиторий
+- [BUILD.md](BUILD.md) — сборка `.exe`
+- [LICENSE](LICENSE) — MIT
+
+Прямой пуш в `main` запрещён правилом репозитория: изменения идут
+только через Pull Request, CI должен быть зелёным.
 
 ## Структура проекта
 
