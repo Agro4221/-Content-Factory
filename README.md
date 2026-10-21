@@ -160,8 +160,7 @@ python tools/check_frontend.py     # проверка панели
 python tools/smoke_test.py         # проверка ресурсов и импортов
 ```
 
-Полный журнал работ и решений — в [docs/PROJECT_AUDIT_AND_WORKLOG.md](docs/PROJECT_AUDIT_AND_WORKLOG.md),
-карта функций панели — в [docs/ADMIN_FUNCTION_MAP.md](docs/ADMIN_FUNCTION_MAP.md).
+Карта функций панели — в [docs/ADMIN_FUNCTION_MAP.md](docs/ADMIN_FUNCTION_MAP.md).
 
 ## Участие в проекте
 
