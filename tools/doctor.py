@@ -90,17 +90,28 @@ def check_dependencies(install: bool) -> None:
 # ---------- База данных ----------
 
 def check_database() -> None:
+    """Проверяет базу и, если её нет, создаёт её штатным механизмом проекта.
+
+    Используется класс DB из database.py, а не голый sqlite3, — так проверка
+    идёт по тому же пути, что и при обычном запуске приложения: файл базы
+    создаётся, схема поднимается до актуальной версии миграциями.
+    """
     from config import DB_PATH
 
+    created = not os.path.isfile(DB_PATH)
     try:
-        conn = sqlite3.connect(DB_PATH)
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        from database import DB
+
+        db = DB(DB_PATH)
+        version = db._get_schema_version()
         tables = {
             row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            for row in db.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
         }
-        conn.close()
-    except sqlite3.Error as exc:
+        db.conn.close()
+    except Exception as exc:
         report(BAD, "База данных недоступна", f"{type(exc).__name__}: {exc}")
         return
 
@@ -109,7 +120,11 @@ def check_database() -> None:
     if missing:
         report(BAD, "В базе нет обязательных таблиц", ", ".join(sorted(missing)))
     else:
-        report(OK, f"База данных готова (схема v{version}, путь: {DB_PATH})")
+        report(
+            OK,
+            f"База данных готова (схема v{version}, путь: {DB_PATH})",
+            "создана автоматически" if created else "",
+        )
 
     try:
         conn = sqlite3.connect(DB_PATH)

@@ -4,14 +4,15 @@
 имитирует состояние «секреты сохранены открытым текстом» и проверяет,
 что после запуска приложения секреты зашифрованы и всё ещё читаются.
 """
+from pathlib import Path
 import os
 import shutil
 import sqlite3
 import sys
 import tempfile
 
-SRC_DB = r"D:\ContentFactory-updated\bot_storage.db"
-PROJECT = r"D:\ContentFactory-updated"
+SRC_DB = str(Path(__file__).resolve().parents[1] / "bot_storage.db")
+PROJECT = str(Path(__file__).resolve().parents[1])
 
 sys.path.insert(0, PROJECT)
 

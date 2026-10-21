@@ -8,6 +8,7 @@
 Запуск (при запущенном приложении):
     python tests/check_final.py
 """
+from pathlib import Path
 import asyncio
 import os
 import re
@@ -15,7 +16,7 @@ import builtins
 from playwright.async_api import async_playwright
 
 BASE_URL = "http://127.0.0.1:8000"
-OUT = r"D:\ContentFactory-updated\_test_screenshots"
+OUT = str(Path(__file__).resolve().parents[1] / "_test_screenshots")
 
 def _safe(s):
     if s is None:

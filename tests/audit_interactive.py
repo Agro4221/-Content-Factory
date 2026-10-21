@@ -4,9 +4,10 @@
 обработчиками (inline-атрибутами, addEventListener или функциями раздела)
 и сообщает о неподключённых элементах.
 """
+from pathlib import Path
 import re
 
-PATH = r"D:\ContentFactory-updated\admin.html"
+PATH = str(Path(__file__).resolve().parents[1] / "admin.html")
 html = open(PATH, encoding="utf-8").read()
 # В документе несколько блоков <script>: основной логики — самый крупный.
 script_blocks = re.findall(r"<script>(.*?)</script>", html, re.S)

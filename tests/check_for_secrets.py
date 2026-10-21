@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 
-ROOT = Path(r"D:\ContentFactory-updated")
+ROOT = Path(__file__).resolve().parents[1]
 SKIP_DIRS = {".git", "build", "dist", "release", "__pycache__", ".pytest_cache",
               "_test_screenshots", "temp_media", "queue_media", ".venv", "node_modules"}
 SKIP_FILES = {".pyc"}
