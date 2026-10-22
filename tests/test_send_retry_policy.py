@@ -114,15 +114,15 @@ def test_permanent_forbidden_send_failure_stays_retryable_and_stops_parser(monke
     assert stopped is True
     assert any(entry[0] == "ERR-408" for entry in logs)
 
-def test_caption_tail_failure_does_not_retry_already_sent_media(monkeypatch) -> None:
-    """A failed second message must not cause the successfully sent media to be duplicated."""
+def test_text_message_failure_does_not_retry_already_sent_media(monkeypatch) -> None:
+    """A failed text message must not cause the already sent media to be duplicated."""
     logs: list[tuple[str, str]] = []
     published: list[tuple[str, int]] = []
     queued_followups: list[tuple[str, list[int], str, str]] = []
     skipped: list[tuple[str, int, str]] = []
     photos: list[dict] = []
     messages_sent: list[dict] = []
-    long_text = "x" * 1100
+    long_text = ("source text " * 200).strip()
 
     class FakeInputMediaPhoto:
         def __init__(self, *, media, caption=None) -> None:
@@ -188,6 +188,6 @@ def test_caption_tail_failure_does_not_retry_already_sent_media(monkeypatch) -> 
     assert len(messages_sent) == 1
     assert published == [("@source", 72)]
     assert skipped == []
-    assert queued_followups == [("@source", [72], "@target", "x" * 80)]
+    assert queued_followups == [("@source", [72], "@target", long_text)]
     assert any(entry[0] == "WARN-407" and "сохранён в SQLite" in entry[1] for entry in logs)
 
