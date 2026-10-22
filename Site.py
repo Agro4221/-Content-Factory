@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from deps import check_and_install_dependencies
 
+import api_security
 from config import (
     ADMIN_HTML_PATH,
     API_LOG_LEVEL,
@@ -54,7 +55,20 @@ from state import bot_running
 import contextlib
 
 db = get_db()
-app = FastAPI(title="API Panel Marej")
+# Документация API отключена: локальный сервер не должен отдавать схему
+# всех эндпоинтов любому процессу и любому сайту из браузера.
+app = FastAPI(
+    title="Content Factory",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+
+
+@app.middleware("http")
+async def _local_api_guard(request: Request, call_next):
+    """Защита локального API: чужой Host, CSRF, размер тела, заголовки."""
+    return await api_security.local_api_guard(request, call_next)
 
 
 def _is_loopback_host(host: str | None) -> bool:

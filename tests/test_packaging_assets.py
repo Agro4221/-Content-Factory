@@ -85,3 +85,26 @@ def test_pyinstaller_hidden_imports_use_real_installed_module_names() -> None:
     assert "python_dotenv" not in hiddenimports
     # This project does not declare or import pydantic-settings.
     assert "pydantic_settings" not in hiddenimports
+
+
+def test_every_project_module_is_bundled_explicitly() -> None:
+    """Каждый модуль проекта должен быть назван в hiddenimports.
+
+    Явный список надёжнее статического анализа PyInstaller: новый модуль
+    нельзя забыть добавить, а тест падает сразу.
+    """
+    tree = ast.parse(SPEC_PATH.read_text(encoding="utf-8"), filename=str(SPEC_PATH))
+    assignments = _assignments(tree)
+
+    hiddenimports = set(ast.literal_eval(assignments["hiddenimports"]))
+
+    # Модули верхнего уровня, лежащие рядом со spec-файлом.
+    on_disk = {
+        path.stem
+        for path in ROOT.glob("*.py")
+        if path.stem not in {"Parser"}
+    }
+    assert on_disk <= hiddenimports, (
+        "Модули проекта не перечислены в hiddenimports: "
+        + ", ".join(sorted(on_disk - hiddenimports))
+    )

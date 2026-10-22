@@ -1353,6 +1353,20 @@
 <script>
 const API = '';
 
+// ---------- Защита локального API ----------
+// Сервер отклоняет запросы, пришедшие не от панели: иначе любой сайт,
+// открытый в браузере, мог бы остановить бота или подменить настройки.
+// Служебный заголовок нельзя отправить с чужого источника без
+// CORS-preflight, на который сервер не отвечает.
+const CLIENT_HEADER = 'X-Content-Factory';
+const nativeFetch = window.fetch.bind(window);
+window.fetch = function(input, init){
+  const options = init || {};
+  const headers = new Headers(options.headers || {});
+  if (!headers.has(CLIENT_HEADER)) headers.set(CLIENT_HEADER, '1');
+  return nativeFetch(input, Object.assign({}, options, {headers: headers}));
+};
+
 // ---------- Утилиты ----------
 function $id(id){ return document.getElementById(id); }
 function escapeHtml(s){

@@ -76,3 +76,8 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["main", "Site", "database", "config", "state", "paths"]
+
+[tool.pytest.ini_options]
+markers = [
+    "real_security: тест проверяет саму защиту API — служебные послабления для тестов не применяются",
+]
