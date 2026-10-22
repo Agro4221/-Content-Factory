@@ -33,27 +33,32 @@
 ### Фильтры (2)
 `f-ads_words` `f-watermark_text`
 
+### Очередь постов (3)
+`posts-list` `posts-count` `btn-publish-all`
+
 ### Журнал (4)
 `log-view` `clear-logs-btn` `log-hint` `clear-logs-confirm`
 
 ### Служебные (4)
 `toast-container` + `data-secret-toggle` / `data-secret-clear` / `data-secret-hint`
 
-## Функции JS (24)
+## Функции JS (28)
 `$id` `toast` `setCard` `refreshAll` `addTopicRow` `loadTopics` `collectTopics`
 `shouldSkipField` `applySecretState` `setupSecretControls` `fillSettings`
 `parseTopics` `saveQuick` `toggleBot` `testAI` `testProxy` `loadLogs`
 `requestClearLogs` `cancelClearLogs` `confirmClearLogs` `toggleAIFields`
-`toggleProxyFields` `escapeHtml`
+`toggleProxyFields` `escapeHtml` `restoreDefaultPrompt` `loadDefaults`
+`removePostMedia` `pickPostMedia` `uploadPostMedia` `saveLocalAiConnection`
 
-## API-вызовы (9)
+## API-вызовы (12)
 `/api/ai/models?provider=` · `/api/logs/clear` · `/api/logs?limit=30`
 `/api/modules/posts/` · `/api/modules/status` · `/api/proxy/status`
 `/api/proxy/test` · `/api/settings` · `/api/stats/posts`
+`/api/settings/defaults` · `/api/posts/{id}/media` · `/api/posts/{id}/media/{i}`
 
-## Inline-обработчики (10)
+## Inline-обработчики (11)
 `cancelClearLogs()` `confirmClearLogs()` `loadLogs()` `refreshAll()`
-`requestClearLogs()` `saveQuick()` `testAI()` `testProxy()`
+`requestClearLogs()` `saveQuick()` `testAI()` `testProxy()` `restoreDefaultPrompt()`
 `toggleAIFields()` `toggleBot()`
 
 ## Состояние JS
@@ -67,3 +72,19 @@
 - `tests/test_topic_channels_ui.cjs` — `parseTopics` / `collectTopics`
 - `tests/test_proxy_connection_rejection.cjs` — `testProxy`
 - `tests/test_admin_assets.py` — ключевые ID в разметке
+
+## Маршруты по тегам
+
+В редакторе маршрутов строка — это канал и его теги:
+
+- `.topic-chat` — канал-получатель (`@mychannel` или `-100123456789`);
+- `.topic-name` — теги через запятую (`политика, срочное`).
+
+Теги из ответа модели определяют, в какие каналы уйдёт пост. Тег `общее` —
+запасной: туда уходят посты, чьи теги не подошли ни к одному каналу.
+
+## Медиа в очереди
+
+У каждого медиафайла поста есть кнопка удаления, у поста — кнопка
+«Прикрепить медиа». Файл помечен меткой своего поста (внутри приложения),
+но имя, которое видит пользователь в Telegram, очищается от метки.
