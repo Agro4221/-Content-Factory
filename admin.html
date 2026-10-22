@@ -877,6 +877,11 @@
                 <input id="f-poll_delay" type="number" value="60" min="10" max="3600" step="1">
                 <div class="field-hint">Как часто бот проверяет новые посты. 60 сек — безопасное значение по умолчанию.</div>
               </div>
+              <div class="field">
+                <label class="field-label" for="f-ai_timeout">Таймаут ИИ, сек</label>
+                <input id="f-ai_timeout" type="number" value="300" min="10" max="3600" step="1">
+                <div class="field-hint">Сколько ждать ответа модели. Слабые и локальные модели думают долго — для 9B поставьте 300–420.</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1035,6 +1040,8 @@
           <div class="field">
             <label class="field-label" for="f-system_prompt">Системный промпт</label>
             <textarea id="f-system_prompt" rows="4" placeholder="Например: ты — редактор канала про технологии. Перепиши текст кратко, в стиле casual, без эмодзи."></textarea>
+            <div class="field-hint">Правила разметки в тексте игнорировать нельзя — если модель их не выполняет, фабрика оформит цитаты и ссылки сама.</div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-default-prompt" onclick="restoreDefaultPrompt()">Вернуть рекомендуемый промпт</button>
             <div class="field-hint">Необязательно. Если оставить пустым, используется встроенный промпт по умолчанию.</div>
           </div>
         </div>
@@ -1681,7 +1688,8 @@ function fillSettings(s){
     'system_prompt':'f-system_prompt','use_proxy':'f-use_proxy','proxy_type':'f-proxy_type',
     'proxy_host':'f-proxy_host','proxy_port':'f-proxy_port','proxy_user':'f-proxy_user','proxy_pass':'f-proxy_pass',
     'mtproto_key':'f-mtproto_key','ads_words':'f-ads_words','watermark_text':'f-watermark_text',
-    'publish_mode':'publish_mode_auto','media_retention_days':'f-media_retention_days'
+    'publish_mode':'publish_mode_auto','media_retention_days':'f-media_retention_days',
+      'ai_timeout':'f-ai_timeout'
   };
   for (const [key, elId] of Object.entries(map)){
     const el = $id(elId);
@@ -2333,7 +2341,7 @@ async function saveQuick(){
     'tg_api_id','tg_api_hash','bot_token','sources','poll_delay',
     'ai_mode','remote_url','remote_api_key','remote_model','local_ai_provider','local_host','local_port','local_model',
     'system_prompt','use_proxy','proxy_type','proxy_host','proxy_port','proxy_user','proxy_pass',
-    'mtproto_key','ads_words','watermark_text','media_retention_days'
+    'mtproto_key','ads_words','watermark_text','media_retention_days','ai_timeout'
   ];
   for (const k of fields){
     const el = $id('f-' + k);
@@ -2596,3 +2604,27 @@ setInterval(loadLogs, 20000);
 </script>
 </body>
 </html>
+
+async function restoreDefaultPrompt(){
+  const btn = $id('btn-default-prompt');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(API + '/api/settings/defaults');
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.system_prompt){
+      toast(j.msg || 'Не удалось получить рекомендуемый промпт', 'err');
+      return;
+    }
+    const field = $id('f-system_prompt');
+    if (!field) return;
+    if (!window.confirm('Заменить текущий промпт на рекомендуемый?')) return;
+    field.value = j.system_prompt;
+    editedFields.add('f-system_prompt');
+    updateSaveState();
+    toast('Промпт заменён. Не забудьте нажать «Сохранить».', 'success');
+  } catch (e){
+    toast('Не удалось получить рекомендуемый промпт', 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}

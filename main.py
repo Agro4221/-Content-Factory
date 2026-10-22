@@ -40,10 +40,9 @@ check_and_install_dependencies()
 # ОСНОВНОЙ КОД БОТА
 # ==========================================
 import asyncio
-import json
 import html
 import ipaddress
-from html.parser import HTMLParser
+import json
 import os
 import re
 import shutil
@@ -51,36 +50,43 @@ import sys
 import threading
 import time
 import webbrowser
+from html.parser import HTMLParser
+from typing import ClassVar
 from urllib.parse import quote, urlsplit
-from typing import Optional
 
 import aiohttp
 import uvicorn
 from aiogram import Bot
-from aiogram.utils.token import TokenValidationError, validate_token
+from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
     TelegramServerError,
 )
-from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.types import FSInputFile, InputMediaDocument, InputMediaPhoto, InputMediaVideo
+from aiogram.types import (
+    FSInputFile,
+    InputMediaDocument,
+    InputMediaPhoto,
+    InputMediaVideo,
+)
+from aiogram.utils.token import TokenValidationError, validate_token
 from telethon import TelegramClient
 from telethon.errors import (
     ApiIdInvalidError,
-    FloodWaitError,
     AuthKeyUnregisteredError,
-    SessionPasswordNeededError,
     ChannelInvalidError,
     ChannelPrivateError,
     ChatForbiddenError,
+    FloodWaitError,
+    SessionPasswordNeededError,
     UsernameInvalidError,
     UsernameNotOccupiedError,
 )
 from telethon.tl.custom.message import Message
 
 import media_convert
+import text_format
 from config import (
     AI_REQUEST_TIMEOUT_S,
     AI_TEMPERATURE,
@@ -89,38 +95,43 @@ from config import (
     BASE_DIR,
     BROWSER_OPEN_DELAY_S,
     BROWSER_OPEN_ON_START,
+    DEFAULT_SYSTEM_PROMPT,
     MAX_PROXY_PORT,
     MEDIA_CLEANUP_INTERVAL_HOURS,
     MIN_AD_WORD_LEN,
     MIN_PROXY_PORT,
-    REWRITE_INVENTION_LENGTH_RATIO,
-    REWRITE_MIN_SHARED_WORDS,
-    SIGNIFICANT_WORD_MIN_LEN,
-    TG_CAPTION_LIMIT,
     POLL_DELAY_DEFAULT,
     POLL_DELAY_MAX,
     POLL_DELAY_MIN,
     POLL_PAUSE_S,
+    REWRITE_INVENTION_LENGTH_RATIO,
+    REWRITE_MIN_SHARED_WORDS,
     SESSION_PATH,
+    SIGNIFICANT_WORD_MIN_LEN,
     SLEEP_API_ERROR_S,
     SLEEP_BETWEEN_POSTS_S,
     SLEEP_DB_ERROR_S,
     SLEEP_FLOOD_POLL_S,
     SLEEP_NO_CONFIG_S,
+    TELEGRAM_FORMATTING_RULES,
     TEMP_DIR,
-    MODULE_POSTS,
+    TG_CAPTION_LIMIT,
     is_truthy,
-    make_post_key,
     normalize_target_chat,
     warn_if_defaults,
 )
 from database import DatabaseWriteError, get_db
+from proxy_check import (
+    build_mtproto_client_kwargs,
+    format_proxy_host,
+    normalize_mtproto_proxy_link,
+)
 from Site import app
 from state import bot_running
-from proxy_check import build_mtproto_client_kwargs, format_proxy_host, normalize_mtproto_proxy_link
+import contextlib
 
 try:
-    from aiohttp_socks import ProxyConnector as SocksConnector
+    from aiohttp_socks import ProxyConnector as SocksConnector  # noqa: F401
     _HAS_SOCKS = True
 except ImportError:
     _HAS_SOCKS = False
@@ -321,6 +332,66 @@ def _meaningful_text_length(text: str) -> int:
     return sum(1 for ch in text if ch.isalnum())
 
 
+#: Сколько раз повторять отправку, если не удалось подключиться к Telegram.
+SEND_CONNECT_RETRIES = 3
+
+#: Пауза перед первой повторной попыткой отправки, секунды.
+SEND_RETRY_DELAY_S = 5
+
+
+def _is_connect_failure(exc: BaseException) -> bool:
+    """Не удалось подключиться — отправку можно повторить безопасно.
+
+    Повторяем только ошибки соединения: запрос в этом случае точно не
+    дошёл до Telegram. Ошибки по таймауту не повторяем — там запрос
+    мог дойти, и повтор продублировал бы сообщение.
+    """
+    if isinstance(exc, (aiohttp.ClientConnectorError, aiohttp.ClientProxyConnectionError)):
+        return True
+    if isinstance(exc, TelegramNetworkError):
+        inner = getattr(exc, "__cause__", None) or getattr(exc, "original", None)
+        if inner is not None:
+            return _is_connect_failure(inner)
+    return False
+
+
+async def _send_with_retry(bot, method: str, **kwargs) -> None:
+    """Отправляет сообщение, повторяя при обрыве соединения.
+
+    Прямое подключение к Bot API у провайдеров часто обрывается, и без
+    повтора пост ждал бы следующего прохода цикла — минуты. Повторяем
+    только неудачные подключения, они безопасны.
+    """
+    delay = SEND_RETRY_DELAY_S
+    for attempt in range(1, SEND_CONNECT_RETRIES + 1):
+        try:
+            await getattr(bot, method)(**kwargs)
+            return
+        except Exception as exc:
+            if attempt >= SEND_CONNECT_RETRIES or not _is_connect_failure(exc):
+                raise
+            print(
+                f"!!! Отправка не прошла ({type(exc).__name__}), "
+                f"повтор {attempt}/{SEND_CONNECT_RETRIES - 1} через {delay} с"
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 20)
+
+
+def _ai_timeout_seconds(raw: object = None) -> int:
+    """Таймаут запроса к ИИ в секундах (настройка панели или .env)."""
+    if raw is None:
+        raw = db.get_setting("ai_timeout", "")
+    if raw in (None, ""):
+        return AI_REQUEST_TIMEOUT_S
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return AI_REQUEST_TIMEOUT_S
+    if value < 10:
+        return AI_REQUEST_TIMEOUT_S
+    return min(value, 3600)
+
 def _significant_words(text: str) -> set[str]:
     """Значимые слова текста: буквы длиной от 4 символов.
 
@@ -397,7 +468,7 @@ def _make_socks_session(cfg: dict) -> AiohttpSession:
         ) from exc
 
 
-def _validate_port(port_str: str) -> Optional[int]:
+def _validate_port(port_str: str) -> int | None:
     if (
         not port_str
         or not port_str.isascii()
@@ -620,10 +691,11 @@ def _load_config() -> dict:
         "mtproto_key": get_setting("mtproto_key", ""),
         "publish_mode": (get_setting("publish_mode", "auto") or "auto").strip().lower(),
         "watermark": get_setting("watermark_text", ""),
+        "ai_timeout": _ai_timeout_seconds(get_setting("ai_timeout", "")),
     }
 
 
-def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[AiohttpSession]]:
+def _setup_proxy(cfg: dict) -> tuple[dict | None, dict | None, AiohttpSession | None]:
     if not cfg["use_proxy"]:
         return None, None, None
 
@@ -705,7 +777,7 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
 class _TelegramHTMLSanitizer(HTMLParser):
     """Keep only Telegram-supported HTML and always emit balanced, escaped markup."""
 
-    _ALLOWED_TAGS = {
+    _ALLOWED_TAGS: ClassVar[set[str]] = {
         "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
         "code", "pre", "a", "blockquote", "tg-spoiler", "tg-emoji",
     }
@@ -849,7 +921,7 @@ def _save_post_to_queue(
             continue
         try:
             # Уникальное имя не даёт разным постам перезаписать один файл.
-            stem, ext = os.path.splitext(os.path.basename(path))
+            ext = os.path.splitext(os.path.basename(path))[1]
             name = f"{int(time.time() * 1000)}_{len(media_files)}{ext}"
             target_path = os.path.join(_queue_media_dir(), name)
             shutil.copy2(path, target_path)
@@ -917,7 +989,9 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
     try:
         if not paths:
             if text:
-                await bot.send_message(chat_id=target_chat, text=text)
+                await _send_with_retry(
+                    bot, "send_message", chat_id=target_chat, text=text
+                )
             else:
                 return False, "В посте нет ни текста, ни медиа."
         elif len(paths) == 1:
@@ -927,17 +1001,39 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
             fits_caption = len(text) <= TG_CAPTION_LIMIT
             caption = text if fits_caption else None
             if kind == "photo":
-                await bot.send_photo(chat_id=target_chat, photo=FSInputFile(paths[0]), caption=caption or None)
+                await _send_with_retry(
+                    bot,
+                    "send_photo",
+                    chat_id=target_chat,
+                    photo=FSInputFile(paths[0]),
+                    caption=caption or None,
+                )
             elif kind == "video":
-                await bot.send_video(chat_id=target_chat, video=FSInputFile(paths[0]), caption=caption or None)
+                await _send_with_retry(
+                    bot,
+                    "send_video",
+                    chat_id=target_chat,
+                    video=FSInputFile(paths[0]),
+                    caption=caption or None,
+                )
             else:
-                await bot.send_document(chat_id=target_chat, document=FSInputFile(paths[0]), caption=caption or None)
+                await _send_with_retry(
+                    bot,
+                    "send_document",
+                    chat_id=target_chat,
+                    document=FSInputFile(paths[0]),
+                    caption=caption or None,
+                )
             if text and not fits_caption:
-                await bot.send_message(chat_id=target_chat, text=text)
+                await _send_with_retry(
+                    bot, "send_message", chat_id=target_chat, text=text
+                )
         else:
             media = _build_album_media(paths, text)
             try:
-                await bot.send_media_group(chat_id=target_chat, media=media)
+                await _send_with_retry(
+                    bot, "send_media_group", chat_id=target_chat, media=media
+                )
             except Exception:
                 # Альбом из файлов одного вида Telegram принимает не всегда.
                 # Откатываемся к документам — они принимаются всегда.
@@ -945,7 +1041,9 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
                     InputMediaDocument(media=FSInputFile(path), caption=text or None)
                     for path in paths
                 ]
-                await bot.send_media_group(chat_id=target_chat, media=media)
+                await _send_with_retry(
+                    bot, "send_media_group", chat_id=target_chat, media=media
+                )
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
     return True, "Опубликовано."
@@ -1091,10 +1189,8 @@ async def _queue_source_draft_after_ai_failure(
         return False
     finally:
         for path in temp_paths:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(path)
-            except OSError:
-                pass
 
 
 async def _process_message_group(
@@ -1128,23 +1224,16 @@ async def _process_message_group(
         _save_skipped_group(source, messages, "ads_word")
         return
 
-    if raw_text and not _significant_words(raw_text):
-        # Подпись без единого значимого слова — обычно только эмодзи. ИИ на
-        # таком материале не пересказывает, а выдумывает новость, и она уходит
-        # в канал вместе с картинкой исходного поста. Такой пост пропускаем.
-        _save_skipped_group(source, messages, "short_text")
-        db.add_log(
-            "WARN-408",
-            f"Пост {source}/{messages[0].id} пропущен: в подписи нет ни одного "
-            "содержательного слова, переписывать нечего.",
-        )
-        return
-
     if not bot_running.is_set():
         return
 
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
-    if raw_text:
+    if raw_text and not _significant_words(raw_text):
+        # Подпись без единого значимого слова — обычно одни эмодзи или тег.
+        # Переписывать нечего, а ИИ на таком материале выдумывает новость.
+        # Публикуем исходный текст: он точно соответствует картинке.
+        topic, final_text = "общее", raw_text
+    elif raw_text:
         try:
             topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
         except AIResponseFormatError as exc:
@@ -1176,18 +1265,24 @@ async def _process_message_group(
     if raw_text and not _rewrite_is_about_original(raw_text, final_text):
         # Пересказ не связан с исходным постом — ИИ выдумал новость. Такая
         # «новость» уехала бы в канал вместе с картинкой исходного поста.
-        _save_skipped_group(source, messages, "rewrite_unrelated")
+        # Публикуем исходный текст: он точно соответствует картинке.
         db.add_log(
             "WARN-410",
-            f"Пост {source}/{messages[0].id} пропущен: пересказ не связан с "
-            "исходным текстом (ни одного общего значимого слова).",
+            f"Пост {source}/{messages[0].id}: пересказ не связан с исходным "
+            "текстом, опубликован исходный текст поста.",
         )
-        print(f"!!! Перескав не связан с оригиналом для {source}/{messages[0].id}; пост пропущен.")
-        return
+        print(f"!!! Перескав не связан с оригиналом для {source}/{messages[0].id}; публикуем исходный текст.")
+        topic, final_text = "общее", raw_text
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
-    final_text = _sanitize_telegram_html(final_text)
+    # Локальные модели часто игнорируют инструкцию по разметке и
+    # возвращают Markdown. Переводим его в HTML Telegram сами, чтобы пост
+    # выглядел одинаково независимо от послушности модели.
+    final_text = _sanitize_telegram_html(
+        text_format.markdown_to_telegram_html(final_text)
+    )
+
 
     topic_key = (topic or "").strip().lower()
     target_chat = (
@@ -1269,19 +1364,25 @@ async def _process_message_group(
             if len(media_list) == 1:
                 single = media_list[0]
                 if isinstance(single, InputMediaPhoto):
-                    await bot.send_photo(
+                    await _send_with_retry(
+                        bot,
+                        "send_photo",
                         chat_id=target_chat,
                         photo=single.media,
                         caption=media_caption or None,
                     )
                 elif isinstance(single, InputMediaVideo):
-                    await bot.send_video(
+                    await _send_with_retry(
+                        bot,
+                        "send_video",
                         chat_id=target_chat,
                         video=single.media,
                         caption=media_caption or None,
                     )
                 else:
-                    await bot.send_document(
+                    await _send_with_retry(
+                        bot,
+                        "send_document",
                         chat_id=target_chat,
                         document=single.media,
                         caption=media_caption or None,
@@ -1291,7 +1392,13 @@ async def _process_message_group(
                 if not text_fits_caption:
                     for item in safe_media_group:
                         item.caption = None
-                await bot.send_media_group(chat_id=target_chat, media=safe_media_group)
+                await _send_with_retry(
+                    bot,
+                    "send_media_group",
+                    chat_id=target_chat,
+                    media=safe_media_group,
+                )
+
 
             # Текст, который не влез в подпись, уходит отдельным
             # сообщением. Он не делится надвое: подпись в подписи не
@@ -1299,11 +1406,19 @@ async def _process_message_group(
             if final_text and not text_fits_caption:
                 secondary_text_to_send = final_text
                 try:
-                    await bot.send_message(chat_id=target_chat, text=secondary_text_to_send)
+                    await _send_with_retry(
+                        bot,
+                        "send_message",
+                        chat_id=target_chat,
+                        text=secondary_text_to_send,
+                    )
+
                 except Exception as exc:
                     secondary_send_error = exc
         else:
-            await bot.send_message(chat_id=target_chat, text=final_text)
+            await _send_with_retry(
+                bot, "send_message", chat_id=target_chat, text=final_text
+            )
 
     except Exception as send_error:
         _log_send_error(send_error, target_chat)
@@ -1399,10 +1514,8 @@ async def _process_message_group(
             print(f"УСПЕХ: → [{topic}] -> {target_chat}")
     finally:
         for p in temp_paths:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(p)
-            except OSError:
-                pass
     await asyncio.sleep(max(SLEEP_BETWEEN_POSTS_S, retry_delay_s))
 
 
@@ -1426,10 +1539,8 @@ def _convert_media_for_telegram(path: str) -> str:
         )
         print(f"!!! [WARN-409] Не удалось конвертировать {os.path.basename(path)} в MP4")
         return path
-    try:
+    with contextlib.suppress(OSError):
         os.remove(path)
-    except OSError:
-        pass
     print(f"--> [МЕДИА] {os.path.basename(path)} переведён в MP4")
     return converted
 
@@ -1463,10 +1574,8 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
     except BaseException:
         # Вызывающий код не сможет убрать эти файлы, если функция не вернулась.
         for path in temp_paths:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(path)
-            except OSError:
-                pass
         raise
     print()
     return media_list, temp_paths
@@ -1501,22 +1610,14 @@ class AIResponseFormatError(AIRewriteError):
 
 async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[str, str]:
     topics = ", ".join(cfg["topic_channels"].keys()) or "общее"
-    db_prompt = db.get_setting("system_prompt", "")
-    if db_prompt:
-        s_prompt = f"{db_prompt}\n\nДоступные темы: [{topics}]"
-    else:
-        s_prompt = (
-            "Ты — опытный SMM-редактор. Твоя задача: сделать увлекательный ПЕРЕСКАЗ новости.\n"
-            "ПРАВИЛА:\n"
-            "1. Выбери ОДНУ тему из списка: [{topics}]\n"
-            "2. Если в тексте есть прямая речь или важная фраза — ОБЯЗАТЕЛЬНО оформи "
-            "ёё тегом <blockquote>текст</blockquote>.\n"
-            "3. Придумай 2-3 релевантных хэштега.\n"
-            "ОТВЕТЬ СТРОГО ПО ШАБЛОНУ:\n"
-            "ТЕМА: [название]\n"
-            "ТЕКСТ: [твой пересказ]\n"
-            "ХЭШТЕГИ: [теги]"
-        ).format(topics=topics)
+    db_prompt = (db.get_setting("system_prompt", "") or "").strip()
+    # За основу берём промпт пользователя, а если его нет — рекомендуемый.
+    base_prompt = db_prompt or DEFAULT_SYSTEM_PROMPT
+    # Правила разметки Telegram добавляем всегда: без них пересказ приходит
+    # голым текстом, без цитат, ссылок и акцентов.
+    if "<blockquote>" not in base_prompt:
+        base_prompt = f"{base_prompt}\n\n{TELEGRAM_FORMATTING_RULES}"
+    s_prompt = f"{base_prompt}\n\nДоступные темы: [{topics}]"
 
     if cfg["ai_mode"] == "LOCAL":
         url, model = cfg["local_url"], cfg["local_model"]
@@ -1537,15 +1638,10 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
     failure_reason = "неизвестная ошибка AI"
     try:
         async with session_ai.post(url, json=payload, headers=headers,
-                                   timeout=AI_REQUEST_TIMEOUT_S) as r:
+                                   timeout=cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S) as r:
             if r.status == 200:
                 data = await r.json()
-                res = ""
-                for item in data.get("choices", []):
-                    candidate = item.get("message", {}).get("content", "")
-                    if isinstance(candidate, str) and candidate.strip():
-                        res = candidate
-                        break
+                res = _strip_reasoning_blocks(_extract_ai_content(data))
                 if not res:
                     failure_reason = "AI вернул пустой ответ"
                     db.add_log("ERR-400", failure_reason)
@@ -1567,6 +1663,19 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
     except aiohttp.ClientConnectorError as e:
         _log_ai_network_error(e, cfg)
         failure_reason = "AI endpoint недоступен"
+    except TimeoutError:
+
+        timeout_value = cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
+
+        failure_reason = (
+            f"модель не ответила за {timeout_value} сек (TimeoutError) — "
+            "увеличьте «Таймаут ИИ» в панели"
+        )
+
+        db.add_log("ERR-400", failure_reason)
+
+        print(f"!!! [AI ERROR] {failure_reason}")
+
     except Exception as e:
         db.add_log("ERR-400", f"Неизвестный сбой AI: {e}")
         print(f"!!! [AI ERROR] {e}")
@@ -1576,18 +1685,100 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
     raise AIRewriteError(failure_reason)
 
 
+def _ai_content_to_text(candidate: object) -> str:
+    """Приводит содержимое ответа модели к обычному тексту."""
+    if isinstance(candidate, str):
+        return candidate
+    if isinstance(candidate, list):
+        parts: list[str] = []
+        for item in candidate:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                chunk = item.get("text") or item.get("content") or ""
+                if isinstance(chunk, str):
+                    parts.append(chunk)
+                elif isinstance(chunk, list):
+                    parts.append(_ai_content_to_text(chunk))
+        return "".join(part for part in parts if part)
+    if isinstance(candidate, dict):
+        chunk = candidate.get("text") or candidate.get("content") or ""
+        return _ai_content_to_text(chunk)
+    return ""
+
+
+def _extract_ai_content(data: object) -> str:
+    """Достаёт текст ответа ИИ из разных форматов API.
+
+    Поддерживаются OpenAI-совместимый (``choices``), Ollama/LM Studio
+    (``message``, ``response``), Anthropic (``content``) и Responses API
+    (``output_text``, ``output``).
+    """
+    if not isinstance(data, dict):
+        return ""
+
+    choices = data.get("choices")
+    if isinstance(choices, list):
+        for item in choices:
+            if not isinstance(item, dict):
+                continue
+            message = item.get("message")
+            if isinstance(message, dict):
+                for key in ("content", "text", "output_text"):
+                    text_value = _ai_content_to_text(message.get(key))
+                    if text_value.strip():
+                        return text_value
+            for key in ("text", "content", "output_text"):
+                text_value = _ai_content_to_text(item.get(key))
+                if text_value.strip():
+                    return text_value
+
+    for key in ("output_text", "response", "text", "content"):
+        text_value = _ai_content_to_text(data.get(key))
+        if text_value.strip():
+            return text_value
+
+    message = data.get("message")
+    if isinstance(message, dict):
+        for key in ("content", "text", "output_text"):
+            text_value = _ai_content_to_text(message.get(key))
+            if text_value.strip():
+                return text_value
+
+    output = data.get("output")
+    if isinstance(output, list):
+        for item in output:
+            text_value = _ai_content_to_text(item)
+            if text_value.strip():
+                return text_value
+
+    return ""
+
+
+def _strip_reasoning_blocks(text: str) -> str:
+    """Убирает служебные блоки размышления моделей (<think>...</think>)."""
+    if not text:
+        return ""
+    cleaned = re.sub(
+        r"<(think|thinking|reasoning)>.*?</\1>",
+        "",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return cleaned.strip()
+
 def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
     if not isinstance(res, str) or not res.strip():
         raise AIResponseFormatError("пустой ответ")
-    t_m = re.search(r"ТЕМА:\s*(.*)", res, re.I)
-    c_m = re.search(r"ТЕКСТ:\s*(.*)", res, re.S | re.I)
-    h_m = re.search(r"ХЭШТЕГИ:\s*(.*)", res, re.I)
+    t_m = re.search(r"ТЕМА:\s*(.*)", res, re.IGNORECASE)
+    c_m = re.search(r"ТЕКСТ:\s*(.*)", res, re.DOTALL | re.IGNORECASE)
+    h_m = re.search(r"ХЭШТЕГИ:\s*(.*)", res, re.IGNORECASE)
 
     if not c_m:
         raise AIResponseFormatError("отсутствует обязательный раздел ТЕКСТ:")
     topic = (t_m.group(1).strip().lower() if t_m else "общее").split("\n")[0].strip()
     full = c_m.group(1).strip()
-    clean = re.split(r"ХЭШТЕГИ\s*:", full, maxsplit=1, flags=re.I)[0].strip()
+    clean = re.split(r"ХЭШТЕГИ\s*:", full, maxsplit=1, flags=re.IGNORECASE)[0].strip()
     if not clean:
         raise AIResponseFormatError("раздел ТЕКСТ: пуст")
     tags = h_m.group(1).strip() if h_m else ""
@@ -1637,13 +1828,11 @@ async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
         pending = get_due(limit)
     except Exception as exc:
         bot_running.clear()
-        try:
+        with contextlib.suppress(Exception):
             db.add_log(
                 "ERR-DB-502",
                 f"Не удалось прочитать очередь остатков текста ({type(exc).__name__}: {exc}); парсер остановлен.",
             )
-        except Exception:
-            pass
         return
 
     for item in pending:
@@ -1665,14 +1854,12 @@ async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
                 )
             except Exception as db_error:
                 bot_running.clear()
-                try:
+                with contextlib.suppress(Exception):
                     db.add_log(
                         "ERR-DB-503",
                         f"Не удалось запланировать повтор остатка текста #{followup_id} "
                         f"({db_error}); парсер остановлен.",
                     )
-                except Exception:
-                    pass
                 return
 
             db.add_log(
@@ -1689,15 +1876,13 @@ async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
                 db.mark_pending_text_followup_sent(followup_id)
             except Exception as db_error:
                 bot_running.clear()
-                try:
+                with contextlib.suppress(Exception):
                     db.add_log(
                         "ERR-DB-504",
                         f"Telegram принял остаток текста #{followup_id}, но SQLite не смог "
                         f"удалить его из очереди ({db_error}). Парсер остановлен; "
                         "перед перезапуском проверьте канал, чтобы избежать возможного дубля.",
                     )
-                except Exception:
-                    pass
                 return
 
             db.add_log(
@@ -1998,7 +2183,7 @@ async def _process_one_source(
 
     def advance_cursor() -> None:
         nonlocal cursor, cursor_index
-        previous_cursor = cursor
+        previous_cursor = cursor if cursor is not None else 0
         while cursor_index < len(source_messages):
             message = source_messages[cursor_index]
             gid = message.grouped_id or f"single_{message.id}"
@@ -2006,7 +2191,7 @@ async def _process_one_source(
                 break
             cursor = message.id
             cursor_index += 1
-        if cursor > previous_cursor:
+        if cursor is not None and cursor > previous_cursor:
             _set_source_cursor(source, cursor)
 
     for gid, messages in grouped.items():
@@ -2057,10 +2242,8 @@ async def main() -> None:
         os.makedirs(TEMP_DIR, exist_ok=True)
         warn_if_defaults()
     except Exception as startup_error:
-        try:
+        with contextlib.suppress(Exception):
             db.add_log("ERR-100", f"Парсер не смог подготовить окружение: {startup_error}")
-        except Exception:
-            pass
         print(f"!!! [ERR-100] Не удалось подготовить окружение парсера: {startup_error}")
         bot_running.clear()
         return
@@ -2124,12 +2307,13 @@ async def main() -> None:
                     proxy=telethon_proxy,
                 )
             ai_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=AI_REQUEST_TIMEOUT_S)
+                timeout=aiohttp.ClientTimeout(total=cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S)
             )
 
             session_file = SESSION_PATH + ".session"
             allow_interactive_login = _stdin_is_interactive()
-            if not os.path.exists(session_file) and not allow_interactive_login:
+            session_exists = await asyncio.to_thread(os.path.exists, session_file)
+            if not session_exists and not allow_interactive_login:
                 db.add_log(
                     "ERR-203",
                     "Сессия Telegram не найдена и интерактивный терминал недоступен. "
@@ -2200,16 +2384,16 @@ async def main() -> None:
             closers = []
             if client is not None:
                 closers.append(
-                    lambda: client.disconnect()
-                    if getattr(client, "_connected", False)
+                    lambda current_client=client: current_client.disconnect()
+                    if getattr(current_client, "_connected", False)
                     else None
                 )
             if bot is not None and getattr(bot, "session", None):
-                closers.append(lambda: bot.session.close())
+                closers.append(lambda current_bot=bot: current_bot.session.close())
             elif bot_session is not None:
-                closers.append(lambda: bot_session.close())
+                closers.append(lambda current_session=bot_session: current_session.close())
             if ai_session is not None and not ai_session.closed:
-                closers.append(lambda: ai_session.close())
+                closers.append(lambda current_ai=ai_session: current_ai.close())
 
             for closer in closers:
                 try:
@@ -2231,7 +2415,7 @@ async def main() -> None:
 # ЗАПУСК
 # ==========================================
 def start_api_server() -> None:
-    from config import API_HOST, API_PORT, API_LOG_LEVEL
+    from config import API_HOST, API_LOG_LEVEL, API_PORT
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level=API_LOG_LEVEL)
 
 
@@ -2257,10 +2441,8 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except BaseException as top_error:
-        try:
+        with contextlib.suppress(Exception):
             db.add_log("ERR-999", f"Необработанное исключение верхнего уровня: {top_error}")
-        except Exception:
-            pass
         print(f"!!! [ERR-999] Критический сбой верхнего уровня: {top_error}")
         import traceback
         traceback.print_exc()

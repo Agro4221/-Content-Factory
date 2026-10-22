@@ -7,7 +7,6 @@ import main
 import proxy_check
 import Site
 
-
 SECRET = "00112233445566778899aabbccddeeff"
 
 

@@ -5,7 +5,12 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from aiogram.types import FSInputFile, InputMediaDocument, InputMediaPhoto, InputMediaVideo
+from aiogram.types import (
+    FSInputFile,
+    InputMediaDocument,
+    InputMediaPhoto,
+    InputMediaVideo,
+)
 
 import main
 

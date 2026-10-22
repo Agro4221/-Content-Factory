@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import console_setup  # noqa: E402  (импорт сам настраивает вывод в UTF-8)
+import console_setup  # noqa: E402,F401  (импорт сам настраивает вывод в UTF-8)
 
 OK = "[ OK ]"
 BAD = "[FAIL]"
@@ -178,7 +178,7 @@ def check_directories() -> None:
 def check_port() -> None:
     from config import API_HOST, API_PORT
 
-    host = API_HOST if API_HOST else "127.0.0.1"
+    host = API_HOST or "127.0.0.1"
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:

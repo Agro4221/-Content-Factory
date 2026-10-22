@@ -17,16 +17,12 @@ SQLite-обёртка для проекта Content Factory.
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import logging
-import os
-import re
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 
 def _local_now_str() -> str:
@@ -87,11 +83,20 @@ from config import DB_PATH, SECRET_MASK, SECRET_SETTING_KEYS, make_post_key
 from secrets_store import (
     SecretDecryptionError,
     SecretEncryptionError,
+)
+from secrets_store import (
     decrypt as _decrypt_secret,
+)
+from secrets_store import (
     encrypt as _encrypt_secret,
+)
+from secrets_store import (
     is_encrypted as _is_encrypted_secret,
+)
+from secrets_store import (
     supported as _secret_storage_supported,
 )
+import contextlib
 
 _logger = logging.getLogger("database")
 if not _logger.handlers:
@@ -111,16 +116,16 @@ if not _logger.handlers:
 # Миграция получает db и сама выполняет свои SQL/изменения. Должна быть
 # идемпотентной (повторный запуск не ломает БД) — на случай если процесс
 # упал посреди применения.
-MIGRATIONS: list[tuple[int, Callable[["DB"], None]]] = []
+MIGRATIONS: list[tuple[int, Callable[[DB], None]]] = []
 
 
-def _migration_v1(db: "DB") -> None:
+def _migration_v1(db: DB) -> None:
     """v1: начальная схема — все 4 таблицы, дефолтные настройки, составной ключ."""
     db._create_initial_tables()
     db._init_default_settings()
 
 
-def _migration_v2(db: "DB") -> None:
+def _migration_v2(db: DB) -> None:
     """v2: created_at + индексы для дашбордов.
 
     Добавляет в published_posts и skipped_posts колонку created_at
@@ -178,21 +183,21 @@ def _migration_v2(db: "DB") -> None:
         )
 
 
-def _migration_v3(db: "DB") -> None:
+def _migration_v3(db: DB) -> None:
     """v3: reserved for future modules.
 
     The modules were removed from the project, so the migration creates
     nothing. The version number is kept so existing databases stay valid.
     """
-    return None
+    return
 
 
-def _migration_v4(db: "DB") -> None:
+def _migration_v4(db: DB) -> None:
     """v4: reserved - the reviews module was removed, schema is unchanged."""
-    return None
+    return
 
 
-def _migration_v5(db: "DB") -> None:
+def _migration_v5(db: DB) -> None:
     """v5: старые system_logs были в UTC (CURRENT_TIMESTAMP) — переводим в локальное."""
     if db.get_setting("logs_utc_to_local_done") == "1":
         return
@@ -205,7 +210,7 @@ def _migration_v5(db: "DB") -> None:
     db.set_setting("logs_utc_to_local_done", "1")
 
 
-def _migration_v6(db: "DB") -> None:
+def _migration_v6(db: DB) -> None:
     """v6: normalize legacy UTC post timestamps to the local convention used by stats."""
     if db._get_schema_version() >= 6:
         return
@@ -235,7 +240,7 @@ def _migration_v6(db: "DB") -> None:
         raise
 
 
-def _migration_v7(db: "DB") -> None:
+def _migration_v7(db: DB) -> None:
     """v7: durable retry queue for caption text sent after media."""
     db.conn.execute(
         """
@@ -259,7 +264,7 @@ def _migration_v7(db: "DB") -> None:
     )
 
 
-def _migration_v8(db: "DB") -> None:
+def _migration_v8(db: DB) -> None:
     """v8: очередь постов для ручного контроля, отложенной публикации и правок."""
     db.conn.execute(
         """
@@ -680,14 +685,12 @@ class DB:
         """Сообщает, если секреты не удаётся шифровать на этой платформе."""
         if _secret_storage_supported():
             return
-        try:
+        with contextlib.suppress(Exception):
             self.add_log(
                 "WARN-503",
                 "Шифрование секретов недоступно на этой платформе (DPAPI — только Windows). "
                 "Токены и ключи хранятся в базе открытым текстом — защищайте папку приложения.",
             )
-        except Exception:
-            pass
 
     # ---------- settings ----------
     def _decode_setting(self, key: str, value: Any) -> Any:
@@ -729,14 +732,12 @@ class DB:
 
     def _log_secret_failure(self, log_type: str, key: str, exc: Exception) -> None:
         """Пишет в журнал факт проблемы с секретом, не раскрывая его значение."""
-        try:
+        with contextlib.suppress(Exception):
             self.add_log(
                 log_type,
                 f"Настройка «{key}»: не удалось обработать сохранённый секрет "
                 f"({type(exc).__name__}). Введите значение заново в панели управления.",
             )
-        except Exception:
-            pass
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self._lock:
@@ -748,12 +749,11 @@ class DB:
 
     def set_setting(self, key: str, value: Any) -> None:
         stored = self._encode_setting(key, value)
-        with self._lock:
-            with self.conn:
-                self.conn.execute(
-                    "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
-                    (key, stored),
-                )
+        with self._lock, self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+                (key, stored),
+            )
 
     def get_all_settings(self) -> dict[str, str]:
         with self._lock:
@@ -823,12 +823,11 @@ class DB:
             except SecretEncryptionError as exc:
                 self._log_secret_failure("ERR-503", key, exc)
                 continue
-            with self._lock:
-                with self.conn:
-                    self.conn.execute(
-                        "UPDATE bot_settings SET value = ? WHERE key = ?",
-                        (encrypted, key),
-                    )
+            with self._lock, self.conn:
+                self.conn.execute(
+                    "UPDATE bot_settings SET value = ? WHERE key = ?",
+                    (encrypted, key),
+                )
             migrated += 1
         if migrated:
             _logger.info("[DB] Encrypted %d stored secret(s) with Windows DPAPI", migrated)
@@ -1198,12 +1197,11 @@ class DB:
 
     # ---------- logs ----------
     def add_log(self, log_type: str, message: str) -> None:
-        with self._lock:
-            with self.conn:
-                self.conn.execute(
-                    "INSERT INTO system_logs (timestamp, type, message) VALUES (?, ?, ?)",
-                    (_local_now_str(), log_type, message),
-                )
+        with self._lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO system_logs (timestamp, type, message) VALUES (?, ?, ?)",
+                (_local_now_str(), log_type, message),
+            )
 
     def get_logs(self, limit: int = 30, offset: int = 0) -> list[tuple[str, str, str]]:
         with self._lock:
@@ -1346,13 +1344,12 @@ class DB:
             return False
         assignments = ", ".join(f"{name} = ?" for name in fields)
         params = list(fields.values()) + [_local_now_str(), int(post_id)]
-        with self._lock:
-            with self.conn:
-                cur = self.conn.execute(
-                    f"UPDATE post_queue SET {assignments}, updated_at = ? WHERE id = ?",
-                    params,
-                )
-                return cur.rowcount > 0
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                f"UPDATE post_queue SET {assignments}, updated_at = ? WHERE id = ?",
+                params,
+            )
+            return cur.rowcount > 0
 
     def delete_queued_post(self, post_id: int) -> bool:
         with self._lock:
@@ -1434,7 +1431,7 @@ class DB:
         self.update_queued_post(post_id, {"media_files": "[]", "media_kind": ""})
         return names
 
-    def total_media_size(self) -> tuple[int, int]:
+    def total_media_size(self) -> tuple[int, list]:
         """Суммарный размер и количество медиафайлов очереди (для оценки места)."""
         with self._lock:
             cur = self.conn.cursor()
@@ -1488,13 +1485,13 @@ class DB:
             cur = self.conn.cursor()
             if since_iso is None:
                 cur.execute(
-                    f"SELECT COUNT(*) FROM system_logs WHERE "
+                    "SELECT COUNT(*) FROM system_logs WHERE "
                     + " OR ".join(["type LIKE ?"] * len(types)),
                     tuple(f"{t}%" for t in types),
                 )
             else:
                 cur.execute(
-                    f"SELECT COUNT(*) FROM system_logs WHERE "
+                    "SELECT COUNT(*) FROM system_logs WHERE "
                     + " AND ".join(
                         ["(" + " OR ".join(["type LIKE ?"] * len(types)) + ")"]
                     )
@@ -1672,10 +1669,8 @@ class DB:
 
     # ---------- lifecycle ----------
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.conn.close()
-        except Exception:
-            pass
 
 
 # === Singleton ===

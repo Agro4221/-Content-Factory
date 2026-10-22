@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from database import CURRENT_SCHEMA_VERSION, DB
 
@@ -98,10 +98,10 @@ def test_legacy_utc_timestamps_are_converted_and_new_rows_get_local_timestamps(t
         ).fetchone()
         expected_published = datetime.fromisoformat(
             "2024-03-04 05:06:07"
-        ).replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        ).replace(tzinfo=UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
         expected_skipped = datetime.fromisoformat(
             "2024-03-05 06:07:08"
-        ).replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        ).replace(tzinfo=UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
         assert published == ("@news:17", expected_published)
         assert skipped == ("@news:18", expected_skipped)
 

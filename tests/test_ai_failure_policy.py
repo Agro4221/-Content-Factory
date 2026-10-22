@@ -15,7 +15,7 @@ class FakeResponse:
         self.payload = payload or {}
         self.body = body
 
-    async def __aenter__(self) -> "FakeResponse":
+    async def __aenter__(self) -> FakeResponse:
         return self
 
     async def __aexit__(self, *_args) -> None:
@@ -78,7 +78,7 @@ def test_empty_ai_response_is_not_treated_as_a_rewrite(monkeypatch) -> None:
 
 def test_timeout_raises_instead_of_returning_source_text(monkeypatch) -> None:
     patch_ai_logging(monkeypatch)
-    session = FakeSession(asyncio.TimeoutError())
+    session = FakeSession(TimeoutError())
 
     with pytest.raises(main.AIRewriteError, match="TimeoutError"):
         asyncio.run(main._ai_rewrite("original source text", ai_config(), session))

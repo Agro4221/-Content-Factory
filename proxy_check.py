@@ -5,12 +5,13 @@ import asyncio
 import base64
 import ipaddress
 import re
-from typing import Any, Optional, Type
+from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
 import aiohttp
 
 from config import MAX_PROXY_PORT, MIN_PROXY_PORT
+import contextlib
 
 try:
     from aiohttp_socks import ProxyConnector
@@ -32,7 +33,7 @@ def format_proxy_host(host: str) -> str:
     return f"[{normalized}]" if address.version == 6 else normalized
 
 
-def _validate_port(port_str: str) -> Optional[int]:
+def _validate_port(port_str: str) -> int | None:
     raw = str(port_str or "")
     if (
         not raw
@@ -66,7 +67,7 @@ def normalize_mtproto_proxy_link(cfg: dict) -> dict:
     configured_type = (normalized.get("proxy_type") or "").strip().lower()
     raw_host = (normalized.get("proxy_host") or "").strip()
     candidate = raw_host
-    if candidate.startswith("t.me/") or candidate.startswith("telegram.me/"):
+    if candidate.startswith(("t.me/", "telegram.me/")):
         candidate = "https://" + candidate
     try:
         parsed = urlsplit(candidate)
@@ -156,8 +157,8 @@ async def _test_http(
                 if resp.status < 500:
                     return True, "Соединение установлено"
                 return False, f"Прокси ответил с кодом {resp.status}"
-    except asyncio.TimeoutError as exc:
-        raise exc
+    except TimeoutError as exc:
+        raise
     except aiohttp.ClientHttpProxyError as exc:
         if getattr(exc, "status", None) == 407:
             return False, "Прокси требует авторизацию: проверьте логин и пароль."
@@ -251,7 +252,7 @@ def telethon_mtproto_secret(secret: str) -> str:
     return base64.b64encode(normalize_mtproto_secret(secret)).decode().rstrip("=")
 
 
-def mtproto_connection_classes(secret: str) -> list[Type]:
+def mtproto_connection_classes(secret: str) -> list[type]:
     """Подбирает классы MTProxy-соединения Telethon по типу секрета."""
     from telethon.network import (
         ConnectionTcpMTProxyAbridged,
@@ -279,7 +280,7 @@ def mtproto_connection_classes(secret: str) -> list[Type]:
             ConnectionTcpMTProxyAbridged,
         )
 
-    ordered: list[Type] = [primary]
+    ordered: list[type] = [primary]
     for cls in fallbacks:
         if cls not in ordered:
             ordered.append(cls)
@@ -302,7 +303,7 @@ def build_mtproto_client_kwargs(host: str, port: int, secret: str) -> dict[str, 
     }
 
 
-def _mtproto_connection_attempts(secret: str) -> list[tuple[Type, str]]:
+def _mtproto_connection_attempts(secret: str) -> list[tuple[type, str]]:
     """Пары (connection class, proxy secret) для проверки MTProto."""
     if is_faketls_mtproto_secret(secret):
         return [
@@ -318,12 +319,10 @@ async def _tcp_reachable(host: str, port: int, timeout: float) -> tuple[bool, st
     try:
         _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
         writer.close()
-        try:
+        with contextlib.suppress(Exception):
             await writer.wait_closed()
-        except Exception:
-            pass
         return True, ""
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return False, "Сервер прокси не отвечает (таймаут TCP)"
     except OSError as exc:
         return False, _friendly_error(exc)
@@ -361,7 +360,7 @@ async def _test_mtproto(host: str, port: int, secret: str, timeout: float) -> tu
             await asyncio.wait_for(client.connect(), timeout=timeout)
             if client.is_connected():
                 return True, "Соединение установлено"
-        except asyncio.TimeoutError:
+        except TimeoutError:
             last_message = "Таймаут: прокси не ответил вовремя (для Fake TLS может потребоваться до 20 с)"
         except Exception as exc:
             msg = str(exc)
@@ -375,10 +374,8 @@ async def _test_mtproto(host: str, port: int, secret: str, timeout: float) -> tu
             else:
                 last_message = _friendly_error(exc)
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 await client.disconnect()
-            except Exception:
-                pass
 
     return False, last_message
 
@@ -456,7 +453,7 @@ async def check_proxy(cfg: dict, timeout: float = 20.0) -> dict[str, Any]:
             )
         else:
             ok, message = False, f"Неподдерживаемый тип прокси: {proxy_type!r}"
-    except asyncio.TimeoutError:
+    except TimeoutError:
         ok, message = False, "Таймаут: сервер не отвечает"
     except Exception as exc:
         ok, message = False, _friendly_error(exc)

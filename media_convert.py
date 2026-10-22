@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import contextlib
 
 #: Расширения, которые нужно приводить к MP4 перед отправкой в Telegram.
 CONVERTIBLE_VIDEO_EXTENSIONS = {
@@ -132,10 +133,8 @@ def convert_to_mp4(source: str, ffmpeg: str | None = None) -> str | None:
 
 
 def _remove_quietly(path: str) -> None:
-    try:
+    with contextlib.suppress(OSError):
         os.remove(path)
-    except OSError:
-        pass
 
 
 def ffmpeg_version() -> str:

@@ -6,8 +6,8 @@ import threading
 
 import pytest
 
-from database import DB
 import Site
+from database import DB
 
 
 @pytest.fixture

@@ -8,9 +8,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import main  # noqa: E402
-import media_convert  # noqa: E402
-
+import main
+import media_convert
 
 # ---------- значимые слова ----------
 

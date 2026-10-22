@@ -38,7 +38,7 @@ def test_parser_spec_bundles_all_runtime_assets() -> None:
     assets_node = assignments.get("BUNDLE_ASSETS")
     assert assets_node is not None, "Parser.spec must declare BUNDLE_ASSETS"
     assets = set(ast.literal_eval(assets_node))
-    assert REQUIRED_ASSETS <= assets
+    assert assets >= REQUIRED_ASSETS
 
     for filename in assets:
         assert (ROOT / filename).is_file(), f"Bundled file does not exist: {filename}"

@@ -4,52 +4,53 @@ FastAPI-приложение: HTML-админка, JSON API для управл�
 """
 from __future__ import annotations
 
+import asyncio
+import ipaddress
+import json
 import os
 import re
 import time
-import asyncio
-import aiohttp
-import json
-import ipaddress
 from datetime import datetime
 from urllib.parse import urlsplit
-from typing import Optional
 
+import aiohttp
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from deps import check_and_install_dependencies
+
 check_and_install_dependencies()
 
+from config import (
+    ADMIN_HTML_PATH,
+    API_LOG_LEVEL,
+    BASE_DIR,
+    BUNDLE_DIR,
+    DEFAULT_LOCAL_AI_PROVIDER,
+    DEFAULT_SYSTEM_PROMPT,
+    LOCAL_AI_PROVIDERS,
+    LOGS_PAGE_SIZE,
+    MAX_PROXY_PORT,
+    MIN_PROXY_PORT,
+    MODULE_POSTS,
+    POLL_DELAY_MAX,
+    POLL_DELAY_MIN,
+    SECRET_CLEAR_SIGNAL,
+    SECRET_MASK,
+    SECRET_SETTING_KEYS,
+    SETTING_KEYS,
+    is_truthy,
+    normalize_target_chat,
+)
+from database import format_display_timestamp, get_db
 from proxy_check import (
     check_proxy,
     decode_mtproto_secret_full,
     normalize_mtproto_proxy_link,
     resolve_proxy_type,
 )
-from config import (
-    ADMIN_HTML_PATH,
-    APP_VERSION,
-    BASE_DIR,
-    BUNDLE_DIR,
-    API_LOG_LEVEL,
-    LOGS_PAGE_SIZE,
-    MAX_PROXY_PORT,
-    MIN_PROXY_PORT,
-    MODULE_POSTS,
-    POLL_DELAY_MAX,
-    normalize_target_chat,
-    POLL_DELAY_MIN,
-    DEFAULT_LOCAL_AI_PROVIDER,
-    LOCAL_AI_PROVIDERS,
-    SECRET_CLEAR_SIGNAL,
-    SECRET_MASK,
-    SECRET_SETTING_KEYS,
-    SETTING_KEYS,
-    is_truthy,
-)
-from database import format_display_timestamp, get_db
 from state import bot_running
+import contextlib
 
 db = get_db()
 app = FastAPI(title="API Panel Marej")
@@ -373,7 +374,7 @@ async def index() -> HTMLResponse:
             content="<h1>Ошибка: admin.html не найден рядом с исполняемым файлом</h1>",
             status_code=500,
         )
-    with open(ADMIN_HTML_PATH, "r", encoding="utf-8") as f:
+    with open(ADMIN_HTML_PATH, encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
 
@@ -528,8 +529,15 @@ async def api_bot_toggle() -> dict:
 
 
 # === Настройки ===
+@app.get("/api/settings/defaults")
+async def api_get_settings_defaults() -> dict:
+    """Рекомендуемые значения настроек, которые можно вернуть одним нажатием."""
+    return {
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+    }
+
 @app.get("/api/settings")
-async def api_get_settings(module: Optional[str] = Query(default=None)) -> dict:
+async def api_get_settings(module: str | None = Query(default=None)) -> dict:
     # Секреты не покидают бэкенд в открытом виде: панель получает маску и
     # может заменить значение или удалить его, но не прочитать текущее.
     masked_getter = getattr(db, "get_masked_settings", None)
@@ -557,7 +565,7 @@ _proxy_runtime_status: dict = {
 PROXY_STATUS_TTL = 30.0
 
 
-def _proxy_cfg_from_settings(settings: Optional[dict] = None) -> dict:
+def _proxy_cfg_from_settings(settings: dict | None = None) -> dict:
     src = settings if settings is not None else db.get_all_settings()
     return {
         "use_proxy": src.get("use_proxy", "0"),
@@ -574,7 +582,7 @@ def get_proxy_runtime_status() -> dict:
     return dict(_proxy_runtime_status)
 
 
-async def refresh_proxy_runtime_status(settings: Optional[dict] = None) -> dict:
+async def refresh_proxy_runtime_status(settings: dict | None = None) -> dict:
     cfg = _proxy_cfg_from_settings(settings)
     use_proxy = is_truthy(cfg.get("use_proxy", "0"))
     host = (cfg.get("proxy_host") or "").strip()
@@ -838,7 +846,7 @@ async def api_ai_models(
                         },
                     )
                 payload = await response.json(content_type=None)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return JSONResponse(
             status_code=503,
             content={
@@ -991,10 +999,8 @@ async def api_media_stats() -> dict:
             full = os.path.join(media_dir, name)
             if os.path.isfile(full):
                 file_count += 1
-                try:
+                with contextlib.suppress(OSError):
                     total_bytes += os.path.getsize(full)
-                except OSError:
-                    pass
     settings = db.get_all_settings()
     retention = str(settings.get("media_retention_days", "3") or "3")
     posts_with_media, _ = db.total_media_size()
@@ -1194,10 +1200,8 @@ async def api_publish_post(post_id: int) -> dict:
     try:
         ok, message = await parser_module.publish_queued_post(bot, row)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await bot.session.close()
-        except Exception:
-            pass
 
     if not ok:
         db.update_queued_post(post_id, {"status": "failed", "last_error": message})
@@ -1247,14 +1251,11 @@ MAX_LOGS_OFFSET = 1_000_000
 async def api_get_logs(
     limit: int = LOGS_PAGE_SIZE,
     page: int = 1,
-    module: Optional[str] = Query(default=None),
+    module: str | None = Query(default=None),
 ) -> list[dict]:
-    if limit < 1:
-        limit = 1
-    if limit > 200:
-        limit = 200
-    if page < 1:
-        page = 1
+    limit = max(limit, 1)
+    limit = min(limit, 200)
+    page = max(page, 1)
     offset = (page - 1) * limit
     if offset > MAX_LOGS_OFFSET:
         return []
@@ -1374,6 +1375,7 @@ def _build_posts_stats() -> dict:
         "published_24h": int(published_24h),
         "skipped_total": int(skipped_total),
         "skipped_today": int(skipped_today),
+        "skipped_24h": int(skipped_24h),
         "skipped_by_reason": skipped_by_reason,
         "successes_24h": int(successes_24h),
         "errors_24h": int(errors_24h),
@@ -1405,5 +1407,6 @@ async def _api_startup_tasks() -> None:
 
 if __name__ == "__main__":
     import uvicorn
+
     from config import API_HOST, API_PORT
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level=API_LOG_LEVEL)

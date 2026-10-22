@@ -69,6 +69,7 @@ def test_local_host_accepts_hosts_and_ipv6(host: str, expected: str) -> None:
 )
 def test_local_host_rejects_url_syntax_and_malformed_addresses(host: str) -> None:
     import pytest
+
     import Site
 
     with pytest.raises(Site.SettingsValidationError) as exc:

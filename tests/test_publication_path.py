@@ -9,13 +9,12 @@ OpenAI-совместимым контрактом. Проверяются на�
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 import aiohttp
 import pytest
-from aiohttp import web
 from aiogram.exceptions import TelegramRetryAfter
+from aiohttp import web
 
 import main
 from database import DB

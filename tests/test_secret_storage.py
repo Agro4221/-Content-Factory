@@ -3,8 +3,6 @@
 """
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 import secrets_store
@@ -13,8 +11,7 @@ from database import DB
 
 
 def make_db(tmp_path) -> DB:
-    db = DB(str(tmp_path / "test.db"))
-    return db
+    return DB(str(tmp_path / "test.db"))
 
 
 def raw_value(db: DB, key: str) -> str:

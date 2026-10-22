@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import main
 
-
 MARKER = "\n\n[…обрезано…]"
 
 
@@ -49,7 +48,7 @@ def test_truncates_long_html_without_breaking_tags_or_entities() -> None:
 
 
 def test_tiny_limits_never_exceed_requested_length() -> None:
-    for limit in range(0, 20):
+    for limit in range(20):
         result = main._truncate_telegram_text("x" * 50, limit)
         assert len(result) <= limit
 

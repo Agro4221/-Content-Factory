@@ -8,7 +8,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-import console_setup  # noqa: E402  (импорт сам настраивает вывод в UTF-8)
+import console_setup  # noqa: E402,F401  (импорт сам настраивает вывод в UTF-8)
 
 FAILURES: list[str] = []
 
@@ -53,7 +53,6 @@ def main() -> int:
         from config import (
             ADMIN_HTML_PATH,
             BUNDLE_DIR,
-            QUEUE_MEDIA_DIR,
             REQUIRED_PACKAGES,
         )
 
@@ -78,13 +77,13 @@ def main() -> int:
         fail("config paths", exc)
 
     try:
-        from Site import app, MODULE_RUNTIME_META
         from config import MODULE_POSTS  # Только основной модуль
-        
+        from Site import MODULE_RUNTIME_META, app
+
         assert MODULE_POSTS in MODULE_RUNTIME_META
         assert MODULE_RUNTIME_META[MODULE_POSTS].get("simulation_mode") is False
         ok("Site.MODULE_RUNTIME_META simulation flags")
-        
+
         assert app is not None
         ok("Site.app FastAPI")
     except Exception as exc:
@@ -92,7 +91,7 @@ def main() -> int:
 
     try:
         from startup import run_startup_bootstrap
-        
+
         run_startup_bootstrap()
         ok("startup.run_startup_bootstrap()")
     except Exception as exc:
