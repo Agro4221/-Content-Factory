@@ -464,6 +464,14 @@
     font-size: 12px; color: var(--text-2); background: var(--surface);
   }
   .post-media a:hover { border-color: var(--accent); color: var(--accent); }
+  .post-media-remove {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0;
+    border: 1px solid var(--border-strong); border-radius: var(--radius);
+    background: var(--surface); color: var(--text-2); cursor: pointer;
+  }
+  .post-media-remove:hover { border-color: var(--danger); color: var(--danger); }
+  .post-media-attach { align-self: center; }
   .post-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
   .post-edit { display: grid; gap: 10px; margin-top: 12px; padding: 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
   .post-edit .grid { gap: 12px; }
@@ -877,6 +885,11 @@
                 <input id="f-poll_delay" type="number" value="60" min="10" max="3600" step="1">
                 <div class="field-hint">Как часто бот проверяет новые посты. 60 сек — безопасное значение по умолчанию.</div>
               </div>
+              <div class="field">
+                <label class="field-label" for="f-ai_timeout">Таймаут ИИ, сек</label>
+                <input id="f-ai_timeout" type="number" value="300" min="10" max="3600" step="1">
+                <div class="field-hint">Сколько ждать ответа модели. Слабые и локальные модели думают долго — для 9B поставьте 300–420.</div>
+              </div>
             </div>
           </div>
         </div>
@@ -890,24 +903,24 @@
       <div class="page-head">
         <div>
           <h1 class="page-title">Маршруты публикации</h1>
-          <p class="page-desc">ИИ выбирает категорию для каждого поста, а категория определяет целевой канал. Нужна хотя бы одна пара «категория → канал», иначе посты не будут опубликованы.</p>
+          <p class="page-desc">ИИ определяет теги для каждого поста, а теги определяют, в какие каналы он уйдёт. Одному каналу можно задать несколько тегов. Нужен хотя бы один маршрут, иначе посты не будут опубликованы.</p>
         </div>
       </div>
 
       <div class="block">
         <div class="block-head">
-          <div class="block-title">Сопоставление категорий и каналов</div>
-          <div class="block-desc">Если категория не определена, пост уходит в категорию <code>общее</code>.</div>
+          <div class="block-title">Сопоставление тегов и каналов</div>
+          <div class="block-desc">Пост уходит во все каналы, у которых есть хотя бы один из его тегов. Если ни один тег не подошёл, пост уходит в канал с тегом <code>общее</code>.</div>
         </div>
         <div class="block-body">
           <div class="route-head">
-            <span>Категория</span>
             <span>Канал</span>
+            <span>Теги</span>
             <span></span>
           </div>
           <div class="route-list" id="topics-list"></div>
           <button type="button" class="btn btn-secondary btn-sm" id="add-topic" style="margin-top:12px;">
-            <svg class="icon icon-sm"><use href="#i-plus"/></svg>Добавить категорию
+            <svg class="icon icon-sm"><use href="#i-plus"/></svg>Добавить маршрут
           </button>
         </div>
       </div>
@@ -1035,6 +1048,8 @@
           <div class="field">
             <label class="field-label" for="f-system_prompt">Системный промпт</label>
             <textarea id="f-system_prompt" rows="4" placeholder="Например: ты — редактор канала про технологии. Перепиши текст кратко, в стиле casual, без эмодзи."></textarea>
+            <div class="field-hint">Правила разметки в тексте игнорировать нельзя — если модель их не выполняет, фабрика оформит цитаты и ссылки сама.</div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-default-prompt" onclick="restoreDefaultPrompt()">Вернуть рекомендуемый промпт</button>
             <div class="field-hint">Необязательно. Если оставить пустым, используется встроенный промпт по умолчанию.</div>
           </div>
         </div>
@@ -1067,11 +1082,16 @@
             <span class="switch-track"></span>
             <span class="switch-text">
               <span class="switch-title">Подключать через прокси</span>
-              <span class="switch-desc">Все запросы к Telegram и AI будут идти через указанный сервер.</span>
+              <span class="switch-desc">Нужно, если Telegram тормозит или обрывается. Без прокси бот работает напрямую.</span>
             </span>
           </label>
           <div class="field-hint" id="proxy-disabled-hint" style="margin-top:10px;">
             Параметры подключения появятся ниже после включения прокси.
+          </div>
+          <div class="field-hint" style="margin-top:6px;">
+            Что пойдёт через прокси, зависит от типа: HTTP и SOCKS закрывают весь внешний
+            трафик (чтение каналов, публикация, облачный ИИ), а MTProto — только чтение каналов.
+            Локальный ИИ на своём компьютере через прокси не ходит в любом случае.
           </div>
         </div>
       </div>
@@ -1341,6 +1361,20 @@
 <script>
 const API = '';
 
+// ---------- Защита локального API ----------
+// Сервер отклоняет запросы, пришедшие не от панели: иначе любой сайт,
+// открытый в браузере, мог бы остановить бота или подменить настройки.
+// Служебный заголовок нельзя отправить с чужого источника без
+// CORS-preflight, на который сервер не отвечает.
+const CLIENT_HEADER = 'X-Content-Factory';
+const nativeFetch = window.fetch.bind(window);
+window.fetch = function(input, init){
+  const options = init || {};
+  const headers = new Headers(options.headers || {});
+  if (!headers.has(CLIENT_HEADER)) headers.set(CLIENT_HEADER, '1');
+  return nativeFetch(input, Object.assign({}, options, {headers: headers}));
+};
+
 // ---------- Утилиты ----------
 function $id(id){ return document.getElementById(id); }
 function escapeHtml(s){
@@ -1498,6 +1532,25 @@ const SECRET_CLEAR_SIGNAL = '__clear__';
 const SECRET_FIELDS = ['f-tg_api_hash', 'f-bot_token', 'f-remote_api_key', 'f-proxy_pass', 'f-mtproto_key'];
 const pendingSecretClear = new Set();
 
+// ---------- Значения по умолчанию ----------
+// Приходят с сервера: применяются, если пользователь ещё не сохранил
+// соответствующую настройку. Держатся в одном месте, чтобы значения
+// в панели и в приложении не расходились.
+const DEFAULTS = { ai_timeout: '' };
+
+async function loadDefaults(){
+  try {
+    const res = await fetch(API + '/api/settings/defaults');
+    if (!res.ok) return;
+    const j = await res.json();
+    if (j && j.ai_timeout !== undefined && j.ai_timeout !== null){
+      DEFAULTS.ai_timeout = String(j.ai_timeout);
+    }
+  } catch (e){
+    // Дефолт необязателен: при недоступности сервера панель останется рабочей.
+  }
+}
+
 function applySecretState(fieldId, savedValue){
   const input = $id(fieldId);
   if (!input) return;
@@ -1625,17 +1678,19 @@ async function refreshAll(){
   }
 }
 
-// ---------- Маршруты «тема → канал» ----------
-function addTopicRow(topic = '', chat = ''){
+// ---------- Маршруты «канал → теги» ----------
+// Каждому каналу соответствует один или несколько тегов. Пост уходит
+// во все каналы, у которых есть хотя бы один из его тегов.
+function addTopicRow(chat = '', tags = ''){
   const list = $id('topics-list');
   if (!list) return;
   const row = document.createElement('div');
   row.className = 'route-row';
   row.innerHTML =
-    '<div><div class="route-label">Категория</div>' +
-      '<input type="text" class="topic-name" placeholder="например: технологии" value="' + escapeHtml(topic) + '"></div>' +
     '<div><div class="route-label">Канал</div>' +
       '<input type="text" class="topic-chat" placeholder="@mychannel или -100123456789" value="' + escapeHtml(chat) + '"></div>' +
+    '<div><div class="route-label">Теги</div>' +
+      '<input type="text" class="topic-name" placeholder="политика, срочное" value="' + escapeHtml(tags) + '"></div>' +
     '<button type="button" class="route-remove" title="Удалить маршрут" aria-label="Удалить маршрут">' +
       '<svg class="icon icon-sm"><use href="#i-x"/></svg></button>';
   row.querySelector('.route-remove').addEventListener('click', () => {
@@ -1655,18 +1710,24 @@ function loadTopics(obj){
   list.innerHTML = '';
   const entries = Object.entries(obj || {});
   if (!entries.length){
-    addTopicRow('общее', '');
+    addTopicRow('', 'общее');
     return;
   }
-  entries.forEach(([k, v]) => addTopicRow(k, v));
+  entries.forEach(([k, v]) => {
+    const tags = Array.isArray(v) ? v.join(', ') : String(v || '');
+    addTopicRow(k, tags);
+  });
 }
 
 function collectTopics(){
   const out = {};
   document.querySelectorAll('#topics-list .route-row').forEach(row => {
-    const name = row.querySelector('.topic-name').value.trim();
     const chat = row.querySelector('.topic-chat').value.trim();
-    if (name && chat) out[name.toLowerCase()] = chat;
+    const tags = row.querySelector('.topic-name').value.trim();
+    if (!chat || !tags) return;
+    const tagList = tags.split(/[,;]/).map(t => t.trim().toLowerCase()).filter(Boolean);
+    if (!tagList.length) return;
+    out[chat] = out[chat] ? out[chat].concat(tagList.filter(t => !out[chat].includes(t))) : tagList;
   });
   return out;
 }
@@ -1681,7 +1742,8 @@ function fillSettings(s){
     'system_prompt':'f-system_prompt','use_proxy':'f-use_proxy','proxy_type':'f-proxy_type',
     'proxy_host':'f-proxy_host','proxy_port':'f-proxy_port','proxy_user':'f-proxy_user','proxy_pass':'f-proxy_pass',
     'mtproto_key':'f-mtproto_key','ads_words':'f-ads_words','watermark_text':'f-watermark_text',
-    'publish_mode':'publish_mode_auto','media_retention_days':'f-media_retention_days'
+    'publish_mode':'publish_mode_auto','media_retention_days':'f-media_retention_days',
+    'ai_timeout':'f-ai_timeout'
   };
   for (const [key, elId] of Object.entries(map)){
     const el = $id(elId);
@@ -1731,13 +1793,41 @@ function fillSettings(s){
       onProxyTypeChange();
       continue;
     }
+    if (key === 'ai_timeout'){
+      // В базе значения может ещё не быть — показываем дефолт приложения,
+      // чтобы поле не выглядело пустым и не сбрасывалось на 0.
+      const raw = String(val == null ? '' : val).trim();
+      el.value = raw || DEFAULTS.ai_timeout || el.value || '';
+      continue;
+    }
     el.value = val || '';
   }
 
   const topicsList = $id('topics-list');
   const topicsEdited = topicsList && topicsList.querySelector('.route-row');
   if (!topicsEdited || forceSecretRefresh){
-    loadTopics(parseTopics(String(s['topic_channels'] || '{}')));
+    // Маршруты по тегам. Если их ещё нет, показываем старые настройки
+    // «категория → канал», чтобы переход не был резким.
+    const rawRoutes = String(s['tag_routes'] || '');
+    loadTopics(rawRoutes ? parseTopics(rawRoutes) : legacyRoutesToTags(s['topic_channels']));
+  }
+}
+
+/** Старые маршруты «категория → канал» в виде «канал → [категория]». */
+function legacyRoutesToTags(raw){
+  try {
+    const obj = JSON.parse(raw || '{}');
+    const out = {};
+    Object.entries(obj || {}).forEach(([topic, chat]) => {
+      const key = String(chat || '').trim();
+      if (!key) return;
+      const tag = String(topic || '').trim().toLowerCase();
+      if (!tag) return;
+      out[key] = out[key] ? out[key].concat([tag]) : [tag];
+    });
+    return out;
+  } catch (e){
+    return {};
   }
 }
 
@@ -2112,6 +2202,57 @@ async function loadPosts(){
   }
 }
 
+// ---------- Медиа поста: удаление и загрузка ----------
+async function removePostMedia(postId, index, item){
+  if (!window.confirm('Убрать этот файл из поста? Файл будет удалён с диска.')) return;
+  try {
+    const res = await fetch(API + '/api/posts/' + postId + '/media/' + index, {method: 'DELETE'});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok){
+      toast(j.msg || j.detail || 'Не удалось убрать медиа.', 'err');
+      return;
+    }
+    toast('Медиа убрано из поста.', 'success');
+    await loadPosts();
+  } catch (e){
+    toast('Не удалось убрать медиа: ' + e, 'err');
+  }
+}
+
+function pickPostMedia(postId, item){
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    await uploadPostMedia(postId, file);
+  });
+  input.click();
+}
+
+async function uploadPostMedia(postId, file){
+  const toastEl = toast('Загружаю файл…', 'info');
+  try {
+    const res = await fetch(
+      API + '/api/posts/' + postId + '/media?name=' + encodeURIComponent(file.name),
+      {
+        method: 'POST',
+        headers: {'Content-Type': file.type || 'application/octet-stream'},
+        body: file
+      }
+    );
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok){
+      toast(j.msg || j.detail || 'Не удалось загрузить файл.', 'err');
+      return;
+    }
+    toast('Файл прикреплён к посту.', 'success');
+    await loadPosts();
+  } catch (e){
+    toast('Не удалось загрузить файл: ' + e, 'err');
+  }
+}
+
 function renderPosts(data){
   const list = $id('posts-list');
   const counter = $id('posts-count');
@@ -2172,19 +2313,42 @@ function buildPostItem(post){
     item.appendChild(err);
   }
 
-  if (post.media_count > 0){
-    const media = document.createElement('div');
-    media.className = 'post-media';
-    for (let i = 0; i < post.media_count; i++){
-      const link = document.createElement('a');
-      link.href = API + '/api/posts/' + post.id + '/media/' + i;
-      link.target = '_blank';
-      link.rel = 'noopener';
-      link.innerHTML = '<svg class="icon icon-sm"><use href="#i-file-text"/></svg>Медиа ' + (i + 1);
-      media.appendChild(link);
+  const media = document.createElement('div');
+  media.className = 'post-media';
+  const marker = post.media_marker || '';
+  const editableMedia = post.status !== 'published' && post.status !== 'cancelled';
+  for (let i = 0; i < post.media_count; i++){
+    const link = document.createElement('a');
+    link.href = API + '/api/posts/' + post.id + '/media/' + i;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    // В подсказке — метка поста: видно, какому посту принадлежит файл.
+    link.title = marker
+      ? 'Медиа ' + (i + 1) + ' — пост ' + marker
+      : 'Медиа ' + (i + 1);
+    link.innerHTML = '<svg class="icon icon-sm"><use href="#i-file-text"/></svg>Медиа ' + (i + 1);
+    media.appendChild(link);
+
+    if (editableMedia){
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'post-media-remove';
+      remove.title = 'Убрать медиа из поста';
+      remove.setAttribute('aria-label', 'Убрать медиа ' + (i + 1));
+      remove.innerHTML = '<svg class="icon icon-sm"><use href="#i-x"/></svg>';
+      remove.addEventListener('click', () => removePostMedia(post.id, i, item));
+      media.appendChild(remove);
     }
-    item.appendChild(media);
   }
+  if (editableMedia){
+    const attach = document.createElement('button');
+    attach.type = 'button';
+    attach.className = 'btn btn-secondary btn-sm post-media-attach';
+    attach.innerHTML = '<svg class="icon icon-sm"><use href="#i-plus"/></svg>Прикрепить медиа';
+    attach.addEventListener('click', () => pickPostMedia(post.id, item));
+    media.appendChild(attach);
+  }
+  item.appendChild(media);
 
   const actions = document.createElement('div');
   actions.className = 'post-actions';
@@ -2333,7 +2497,7 @@ async function saveQuick(){
     'tg_api_id','tg_api_hash','bot_token','sources','poll_delay',
     'ai_mode','remote_url','remote_api_key','remote_model','local_ai_provider','local_host','local_port','local_model',
     'system_prompt','use_proxy','proxy_type','proxy_host','proxy_port','proxy_user','proxy_pass',
-    'mtproto_key','ads_words','watermark_text','media_retention_days'
+    'mtproto_key','ads_words','watermark_text','media_retention_days','ai_timeout'
   ];
   for (const k of fields){
     const el = $id('f-' + k);
@@ -2348,7 +2512,7 @@ async function saveQuick(){
       payload[k] = el.value.trim();
     }
   }
-  payload['topic_channels'] = JSON.stringify(collectTopics());
+  payload['tag_routes'] = JSON.stringify(collectTopics());
   const modeRadio = $id('publish_mode_manual');
   payload['publish_mode'] = (modeRadio && modeRadio.checked) ? 'manual' : 'auto';
 
@@ -2531,10 +2695,10 @@ function onProxyTypeChange(){
 
   if (typeHint){
     typeHint.textContent = type === 'mtproto'
-      ? 'MTProto — только чтение каналов. Публикация идёт напрямую: Bot API не поддерживает MTProto.'
+      ? 'MTProto — только чтение каналов. Публикация и запросы к облачному ИИ идут напрямую: MTProxy не пропускает обычный HTTPS.'
       : (type === 'http'
-        ? 'HTTP-прокси применяется и к чтению каналов, и к публикации.'
-        : 'SOCKS-прокси применяется и к чтению каналов, и к публикации.');
+        ? 'HTTP-прокси применяется ко всему внешнему трафику: чтение каналов, публикация и запросы к облачному ИИ.'
+        : 'SOCKS-прокси применяется ко всему внешнему трафику: чтение каналов, публикация и запросы к облачному ИИ.');
   }
   if (hostHint){
     hostHint.textContent = type === 'mtproto'
@@ -2589,10 +2753,36 @@ if (addTopicBtn) addTopicBtn.addEventListener('click', () => {
   updateSaveState();
 });
 updateSaveState();
-refreshAll();
+// Дефолты загружаем до первой отрисовки настроек, иначе поле таймаута
+// показало бы пустое значение.
+loadDefaults().then(refreshAll);
 setInterval(refreshAll, 15000);
 loadLogs();
 setInterval(loadLogs, 20000);
+
+async function restoreDefaultPrompt(){
+  const btn = $id('btn-default-prompt');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(API + '/api/settings/defaults');
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.system_prompt){
+      toast(j.msg || 'Не удалось получить рекомендуемый промпт', 'err');
+      return;
+    }
+    const field = $id('f-system_prompt');
+    if (!field) return;
+    if (!window.confirm('Заменить текущий промпт на рекомендуемый?')) return;
+    field.value = j.system_prompt;
+    editedFields.add('f-system_prompt');
+    updateSaveState();
+    toast('Промпт заменён. Не забудьте нажать «Сохранить».', 'success');
+  } catch (e){
+    toast('Не удалось получить рекомендуемый промпт', 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 </script>
 </body>
 </html>

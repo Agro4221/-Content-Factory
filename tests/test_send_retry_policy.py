@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from collections.abc import Callable
+from types import SimpleNamespace
 
 import aiohttp
 import pytest
@@ -87,7 +87,7 @@ async def _run_failed_send(monkeypatch, error: Exception):
 @pytest.mark.parametrize(
     "error_factory",
     [
-        lambda: asyncio.TimeoutError(),
+        lambda: TimeoutError(),
         lambda: aiohttp.ClientConnectionError("connection reset"),
         _network_error,
         _server_error,

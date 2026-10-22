@@ -19,13 +19,8 @@ PROJECT_DIR = Path(SPECPATH).resolve()
 ENTRY = str(PROJECT_DIR / "main.py")
 
 # === Дополнительные исходники проекта (для явного включения в сборку) ===
-PROJECT_MODULES = [
-    "config",
-    "Site",
-    "database",
-    "state",
-    "secrets_store",
-]
+# Перечисляются в hiddenimports ниже: тест tests/test_packaging_assets.py
+# проверяет, что список полон и новый модуль нельзя забыть добавить.
 
 # === Runtime resources bundled into the one-file executable ===
 # env_loader.py searches BASE_DIR first, then BUNDLE_DIR for .env.example.
@@ -123,9 +118,27 @@ hiddenimports = [
     "uvicorn.lifespan.on",
     "uvicorn.logging",
     "websockets",
-    # Внутренний модуль: настройка кодировки консоли (кириллица в Windows)
+    # Внутренние модули: настройка кодировки консоли (кириллица в Windows)
     "console_setup",
     "media_convert",
+    "media_marker",
+    # Модули самого проекта: перечислены явно, чтобы новый модуль нельзя
+    # было забыть добавить (проверяет tests/test_packaging_assets.py).
+    "api_security",
+    "config",
+    "database",
+    "deps",
+    "env_loader",
+    "main",
+    "paths",
+    "proxy_check",
+    "routing",
+    "secrets_store",
+    "Site",
+    "single_instance",
+    "startup",
+    "state",
+    "text_format",
 ]
 
 # === Исключения (то, что НЕ надо тащить) ===

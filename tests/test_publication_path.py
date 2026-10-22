@@ -9,13 +9,12 @@ OpenAI-совместимым контрактом. Проверяются на�
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 import aiohttp
 import pytest
-from aiohttp import web
 from aiogram.exceptions import TelegramRetryAfter
+from aiohttp import web
 
 import main
 from database import DB
@@ -165,12 +164,13 @@ def test_text_post_is_rewritten_routed_and_published(db: DB) -> None:
     assert request["messages"][-1]["content"] == "Исходный текст поста"
     assert request["temperature"] == main.AI_TEMPERATURE
 
-    # Тема из ответа AI определила канал получателя.
+    # Теги из ответа AI определили канал получателя.
     assert len(bot.sent) == 1
     assert bot.sent[0]["kind"] == "message"
     assert bot.sent[0]["chat_id"] == "@tech_channel"
     assert "Переписанный текст новости." in bot.sent[0]["text"]
-    assert "#tech" in bot.sent[0]["text"]
+    # Теги нужны только для маршрутизации — в самом посте их нет.
+    assert "#tech" not in bot.sent[0]["text"]
 
     # Публикация зафиксирована, повторная отправка невозможна.
     assert db.is_published("@donor_channel", 101)

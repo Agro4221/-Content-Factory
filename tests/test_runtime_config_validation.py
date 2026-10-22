@@ -69,6 +69,7 @@ def test_local_host_accepts_hosts_and_ipv6(host: str, expected: str) -> None:
 )
 def test_local_host_rejects_url_syntax_and_malformed_addresses(host: str) -> None:
     import pytest
+
     import Site
 
     with pytest.raises(Site.SettingsValidationError) as exc:
@@ -191,7 +192,11 @@ def test_empty_legacy_poll_delay_uses_default(monkeypatch) -> None:
 
     assert main._load_config()["poll_delay"] == main.POLL_DELAY_DEFAULT
 
-def test_ambiguous_legacy_topic_routes_fail_closed(monkeypatch) -> None:
+def test_same_tag_in_several_channels_is_allowed(monkeypatch) -> None:
+    """Один и тот же тег у нескольких каналов — это норма.
+
+    Такой пост уходит во все каналы с этим тегом.
+    """
     import json
 
     monkeypatch.setattr(
@@ -199,14 +204,32 @@ def test_ambiguous_legacy_topic_routes_fail_closed(monkeypatch) -> None:
         "db",
         FakeDB(
             topic_channels=json.dumps(
-                {"News": "@target_one", "news": "@target_two"},
+                {"news": "@target_one", "sport": "@target_two"},
                 ensure_ascii=False,
             )
         ),
     )
 
-    with pytest.raises(ValueError, match="topic_channels"):
-        main._load_config()
+    cfg = main._load_config()
+    assert cfg["tag_routes"]["@target_one"] == ["news"]
+    assert cfg["tag_routes"]["@target_two"] == ["sport"]
+
+
+def test_legacy_category_route_becomes_channel_with_tag(monkeypatch) -> None:
+    """Старые настройки «категория → канал» читаются как «канал → [категория]»."""
+    import json
+
+    monkeypatch.setattr(
+        main,
+        "db",
+        FakeDB(
+            topic_channels=json.dumps({"news": "@target"}, ensure_ascii=False),
+        ),
+    )
+
+    cfg = main._load_config()
+    assert cfg["tag_routes"] == {"@target": ["news"]}
+    assert "news" in cfg["tag_routes_tags"]
 
 @pytest.mark.parametrize(
     "host",

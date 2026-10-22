@@ -114,12 +114,12 @@ def test_http_sender_brackets_ipv6_and_keeps_telethon_host_unbracketed(monkeypat
         "mtproto_key": "",
     }
 
-    telethon_proxy, mtproto_kwargs, bot_session = main._setup_proxy(cfg)
+    setup = main._setup_proxy(cfg)
 
-    assert mtproto_kwargs is None
-    assert telethon_proxy["addr"] == "2001:db8::1"
-    assert bot_session is FakeSenderSession.instances[-1]
-    assert bot_session.proxy == (
+    assert setup.mtproto_kwargs is None
+    assert setup.telethon_proxy["addr"] == "2001:db8::1"
+    assert setup.bot_session is FakeSenderSession.instances[-1]
+    assert setup.bot_session.proxy == (
         "http://name%40domain:p%40ss%3A%2F%3F%23%25@[2001:db8::1]:8080"
     )
 

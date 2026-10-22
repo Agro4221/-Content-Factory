@@ -1,4 +1,4 @@
-"""Конфигурация приложения Project MaryJane / Parser v1.28.3.6."""
+"""Конфигурация приложения Content Factory."""
 from __future__ import annotations
 
 import math
@@ -42,7 +42,7 @@ def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> 
 
 load_environment()
 
-APP_VERSION = "1.29.0.0"
+APP_VERSION = "1.30.0.0"
 
 API_HOST = os.environ.get("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 API_PORT = _env_int("API_PORT", 8000, minimum=1, maximum=65535)
@@ -67,7 +67,17 @@ SLEEP_BETWEEN_POSTS_S = 5
 SLEEP_API_ERROR_S = 30
 SLEEP_FLOOD_POLL_S = 1
 
-AI_REQUEST_TIMEOUT_S = 90
+#: Границы таймаута ИИ. Один и тот же диапазон использует панель при
+#: сохранении настроек и загрузчик конфигурации из .env.
+AI_TIMEOUT_MIN_S = 10
+AI_TIMEOUT_MAX_S = 3600
+
+#: Таймаут запроса к ИИ, секунды. Локальные модели на процессоре и слабых
+#: видеокартах думают минутами, поэтому запас большой. Меняется в панели
+#: (поле «Таймаут ИИ, сек») или переменной AI_REQUEST_TIMEOUT_S в .env.
+AI_REQUEST_TIMEOUT_S = _env_int(
+    "AI_REQUEST_TIMEOUT_S", 300, minimum=AI_TIMEOUT_MIN_S, maximum=AI_TIMEOUT_MAX_S
+)
 AI_TEMPERATURE = 0.4
 AI_TRUNCATE_FALLBACK = 300
 
@@ -76,6 +86,41 @@ AI_TRUNCATE_FALLBACK = 300
 #: в посте не было, и такой пост публиковать нельзя: к выдуманному тексту
 #: приклеивается картинка исходного поста. Значение 0 отключает проверку.
 REWRITE_MIN_SHARED_WORDS = 1
+
+#: Рекомендуемый системный промпт. Используется, если поле «Системный
+#: промпт» в панели оставлено пустым, и подставляется кнопкой
+#: «Вернуть рекомендуемый» рядом с этим полем.
+#: Правила разметки Telegram. Добавляются к любому системному промпту,
+#: поэтому пересказ приходит с цитатами, ссылками и акцентами, а не
+#: голым текстом. Если промпт пользователя уже содержит эти правила,
+#: повторно не добавляются.
+TELEGRAM_FORMATTING_RULES = """РАЗРЕШЁННЫЕ ВАРИАНТЫ ОФОРМАТИРОВАНИЯ:
+- <b>жирный текст</b> — для ключевых акцентов;
+- <i>курсив</i> — для умеренного выделения;
+- <blockquote>важная цитата</blockquote> — для цитат;
+- <code>фрагмент кода</code> — для небольших технических фрагментов;
+- <pre>...</pre> — для отдельных блоков кода;
+- <a href="https://example.com">ссылка</a> — для ссылки с понятным описанием."""
+
+DEFAULT_SYSTEM_PROMPT = """Ты — профессиональный редактор новостей. Твоя задача — пересказать ТЕКСТ ПОСТА, сохранив его факты.
+
+ПРАВИЛА:
+1. Выбери от одного до трёх ТЕГОВ из списка доступных тегов. По тегам определяется, в какие каналы уйдёт новость. Если тег не подходит ни к одному каналу — выбери тег «общее».
+2. Не выдумывай фактов: в пересказе не должно быть того, чего нет в исходном тексте.
+3. Если в тексте есть прямая речь или важная фраза — обязательно оформи её тегом <blockquote>текст</blockquote>.
+4. Если в посте есть ссылка — оформи её тегом <a href="https://example.com">описание ссылки</a>.
+
+РАЗРЕШЁННЫЕ ВАРИАНТЫ ОФОРМАТИРОВАНИЯ:
+- <b>жирный текст</b> — для ключевых акцентов;
+- <i>курсив</i> — для умеренного выделения;
+- <blockquote>важная цитата</blockquote> — для цитат;
+- <code>фрагмент кода</code> — для небольших технических фрагментов;
+- <pre>...</pre> — для отдельных блоков кода;
+- <a href="https://example.com">ссылка</a> — для ссылки с понятным описанием.
+
+ОТВЕТЬ СТРОГО ПО ШАБЛОНУ:
+ТЕКСТ: [твой пересказ]
+ТЕГИ: [тег1, тег2]"""
 
 #: Во сколько раз пересказ должен быть длиннее оригинала, чтобы считать
 #: его выдумкой. Пересказ по-русски из короткой иноязычной подписи
@@ -87,6 +132,9 @@ SIGNIFICANT_WORD_MIN_LEN = 4
 
 #: Ограничение Telegram на длину подписи к медиа (у обычного сообщения — 4096).
 TG_CAPTION_LIMIT = 1024
+
+#: Ограничение Telegram на длину обычного сообщения.
+TG_MESSAGE_LIMIT = 4096
 
 MIN_AD_WORD_LEN = 3
 POLL_DELAY_DEFAULT = 60
@@ -109,10 +157,11 @@ SETTING_KEYS = frozenset({
     "tg_api_id", "tg_api_hash", "bot_token", "target_channel",
     "ai_mode", "local_ai_provider", "local_host", "local_port", "local_model",
     "remote_url", "remote_api_key", "remote_model", "system_prompt",
-    "sources", "topic_channels", "ads_words", "watermark_text",
+    "sources", "topic_channels", "tag_routes", "ads_words", "watermark_text",
     "poll_delay", "use_proxy", "proxy_type", "proxy_host", "proxy_port",
     "proxy_user", "proxy_pass", "mtproto_key",
     "publish_mode", "media_retention_days", "media_cleanup_enabled",
+    "ai_timeout",
 })
 
 # Настройки, которые хранятся в базе в зашифрованном виде (Windows DPAPI).

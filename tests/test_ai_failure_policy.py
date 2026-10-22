@@ -15,7 +15,7 @@ class FakeResponse:
         self.payload = payload or {}
         self.body = body
 
-    async def __aenter__(self) -> "FakeResponse":
+    async def __aenter__(self) -> FakeResponse:
         return self
 
     async def __aexit__(self, *_args) -> None:
@@ -78,7 +78,7 @@ def test_empty_ai_response_is_not_treated_as_a_rewrite(monkeypatch) -> None:
 
 def test_timeout_raises_instead_of_returning_source_text(monkeypatch) -> None:
     patch_ai_logging(monkeypatch)
-    session = FakeSession(asyncio.TimeoutError())
+    session = FakeSession(TimeoutError())
 
     with pytest.raises(main.AIRewriteError, match="TimeoutError"):
         asyncio.run(main._ai_rewrite("original source text", ai_config(), session))
@@ -171,9 +171,11 @@ def test_failed_rewrite_is_saved_as_manual_queue_draft(monkeypatch) -> None:
 
     assert len(queued) == 1
     source, message_id, publish_text, target, category, media_list, temp_paths = queued[0]
-    assert (source, message_id, publish_text, target, category) == (
-        "@source", 43, "Original text", "@target", "общее"
+    # target — список каналов: черновику нужен канал, куда его можно отправить.
+    assert (source, message_id, publish_text, category) == (
+        "@source", 43, "Original text", "общее"
     )
+    assert target == ["@target"]
     assert media_list == []
     assert temp_paths == []
     assert updates[0][0] == 17
@@ -196,8 +198,11 @@ def test_valid_ai_response_still_returns_rewritten_text(monkeypatch) -> None:
         )
     )
 
-    topic, rewritten = asyncio.run(main._ai_rewrite("original source text", ai_config(), session))
+    tags, rewritten = asyncio.run(main._ai_rewrite("original source text", ai_config(), session))
 
-    assert topic == "общее"
+    # Теги нужны для маршрутизации, в самом тексте их нет.
+    # Берутся из всех разделов: и из ХЭШТЕГИ, и из ТЕМА.
+    assert tags == ["новости", "общее"]
     assert "Переписанный текст" in rewritten
     assert "original source text" not in rewritten
+    assert "#новости" not in rewritten

@@ -3,8 +3,6 @@
 """
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 import secrets_store
@@ -13,8 +11,7 @@ from database import DB
 
 
 def make_db(tmp_path) -> DB:
-    db = DB(str(tmp_path / "test.db"))
-    return db
+    return DB(str(tmp_path / "test.db"))
 
 
 def raw_value(db: DB, key: str) -> str:
@@ -218,7 +215,7 @@ def test_decryption_failure_is_logged_without_value(tmp_path, monkeypatch) -> No
     try:
         db.set_setting("bot_token", "123456:AAExampleTokenValue")
 
-        def broken(_value: str) -> str:
+        def broken(_value: str, _account: str = "") -> str:
             raise secrets_store.SecretDecryptionError("CryptUnprotectData failed")
 
         monkeypatch.setattr("database._decrypt_secret", broken)

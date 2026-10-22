@@ -12,6 +12,7 @@ from config import (
 )
 from database import get_db
 from env_loader import load_environment
+from single_instance import enforce_single_instance
 
 
 def prepare_runtime_directories() -> None:
@@ -42,3 +43,12 @@ def run_startup_bootstrap() -> None:
     prepare_runtime_directories()
     seed_settings_from_env()
     print(f"--> [СИСТЕМА] Content Factory v{APP_VERSION} ({runtime_label()})")
+
+
+def ensure_single_instance() -> bool:
+    """Проверяет, что приложение не запущено второй раз.
+
+    Вторая копия закрывается: иначе две копии поделят файл сессии
+    Telegram, и Telegram признает ключ использованным с двух адресов.
+    """
+    return enforce_single_instance()

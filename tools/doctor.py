@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import console_setup  # noqa: E402  (импорт сам настраивает вывод в UTF-8)
+import console_setup  # noqa: E402,F401  (импорт сам настраивает вывод в UTF-8)
 
 OK = "[ OK ]"
 BAD = "[FAIL]"
@@ -178,7 +178,7 @@ def check_directories() -> None:
 def check_port() -> None:
     from config import API_HOST, API_PORT
 
-    host = API_HOST if API_HOST else "127.0.0.1"
+    host = API_HOST or "127.0.0.1"
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -204,19 +204,22 @@ def check_secret_storage() -> None:
         report(
             WARN,
             "Шифрование секретов недоступно на этой платформе",
-            "DPAPI работает только в Windows: секреты будут храниться открытым текстом.",
+            "Системное хранилище секретов на этой платформе недоступно: "
+            "секреты будут храниться открытым текстом.",
         )
         return
     try:
         sample = "doctor-check"
-        encrypted = secrets_store.encrypt(sample)
+        account = "doctor_check"
+        encrypted = secrets_store.encrypt(sample, account)
         if not secrets_store.is_encrypted(encrypted):
             report(BAD, "Секреты не шифруются", "неверный формат значения")
             return
-        if secrets_store.decrypt(encrypted) != sample:
+        if secrets_store.decrypt(encrypted, account) != sample:
             report(BAD, "Секреты не расшифровываются обратно")
             return
-        report(OK, "Шифрование секретов работает (Windows DPAPI)")
+        backend = "системное хранилище"
+        report(OK, f"Шифрование секретов работает ({backend})")
     except Exception as exc:
         report(BAD, "Ошибка шифрования секретов", f"{type(exc).__name__}: {exc}")
 
