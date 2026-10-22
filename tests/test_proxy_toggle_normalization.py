@@ -40,7 +40,7 @@ def test_settings_endpoint_returns_canonical_proxy_toggle(monkeypatch) -> None:
 
     monkeypatch.setattr(Site, "db", FakeDB())
 
-    settings = asyncio.run(Site.api_get_settings(module=None))
+    settings = asyncio.run(Site.api_get_settings())
 
     assert settings["use_proxy"] == "1"
 

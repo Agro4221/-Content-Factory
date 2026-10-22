@@ -129,13 +129,60 @@ def test_post_can_be_edited_through_api(client: TestClient) -> None:
     )
     response = client.post(
         f"/api/posts/{post_id}",
-        json={"publish_text": "Стало", "category": "TECH", "target_chat": "@new"},
+        json={
+            "publish_text": "Стало",
+            "category": "TECH",
+            "target_chat": "@new_channel",
+        },
     )
     assert response.status_code == 200
     stored = client.fake_db.get_queued_post(post_id)
     assert stored["publish_text"] == "Стало"
     assert stored["category"] == "tech"  # приводится к нижнему регистру
-    assert stored["target_chat"] == "@new"
+    assert stored["target_chat"] == "@new_channel"
+
+
+def test_post_edit_rejects_invalid_target_channel(client: TestClient) -> None:
+    """Канал должен быть настоящим: иначе пост ушёл бы не туда."""
+    post_id = client.fake_db.save_post_to_queue(
+        {"source_name": "@donor", "post_id": "1", "media_files": "[]"}
+    )
+    response = client.post(
+        f"/api/posts/{post_id}",
+        json={"target_chat": "@a"},
+    )
+    assert response.status_code == 400
+    stored = client.fake_db.get_queued_post(post_id)
+    assert stored["target_chat"] == ""
+
+
+def test_post_edit_rejects_malformed_scheduled_at(client: TestClient) -> None:
+    """Произвольная строка в дате означала бы «опубликовать немедленно»."""
+    post_id = client.fake_db.save_post_to_queue(
+        {"source_name": "@donor", "post_id": "1", "media_files": "[]"}
+    )
+    response = client.post(
+        f"/api/posts/{post_id}",
+        json={"scheduled_at": "не дата"},
+    )
+    assert response.status_code == 400
+    stored = client.fake_db.get_queued_post(post_id)
+    assert stored["status"] == "draft"
+
+
+def test_post_edit_accepts_iso_like_scheduled_at(client: TestClient) -> None:
+    """Формат из HTML-поля (с «T» вместо пробела) тоже принимается."""
+    post_id = client.fake_db.save_post_to_queue(
+        {"source_name": "@donor", "post_id": "1", "media_files": "[]"}
+    )
+    response = client.post(
+        f"/api/posts/{post_id}",
+        json={"scheduled_at": "2026-11-01T10:30:00"},
+    )
+    assert response.status_code == 200
+    stored = client.fake_db.get_queued_post(post_id)
+    assert stored["scheduled_at"] == "2026-11-01 10:30:00"
+    assert stored["status"] == "scheduled"
 
 
 def test_scheduling_via_api_sets_status(client: TestClient) -> None:

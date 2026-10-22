@@ -87,14 +87,36 @@ def test_lm_studio_returns_model_ids_and_uses_fixed_loopback_url(client, monkeyp
 
 
 def test_ollama_supports_a_custom_validated_loopback_port(client, monkeypatch):
+    """Свой порт работает, если он сохранён в настройках.
+
+    Проверка списка моделей идёт по настроенному порту: так эндпоинт не
+    превращается в перебор локальных портов.
+    """
     calls = []
     install_fake_session(monkeypatch, {"models": [{"name": "custom-port-model"}]}, calls)
+    monkeypatch.setattr(Site.db, "get_setting", lambda key, default="": (
+        "11435" if key == "local_port" else default
+    ))
 
     response = client.get("/api/ai/models?provider=ollama&port=11435")
 
     assert response.status_code == 200
     assert response.json()["models"] == ["custom-port-model"]
     assert calls == ["http://127.0.0.1:11435/api/tags"]
+
+
+def test_unsaved_arbitrary_port_is_rejected(client, monkeypatch):
+    """Произвольный порт без настройки — это попытка перебрать localhost."""
+    calls = []
+    install_fake_session(monkeypatch, {"models": []}, calls)
+    monkeypatch.setattr(Site.db, "get_setting", lambda key, default="": (
+        "11434" if key == "local_port" else default
+    ))
+
+    response = client.get("/api/ai/models?provider=ollama&port=6379")
+
+    assert response.status_code == 400
+    assert calls == []
 
 
 @pytest.mark.parametrize("port", ["0", "65536", "not-a-port"])

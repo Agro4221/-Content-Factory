@@ -1894,6 +1894,9 @@ async function loadModelList(){
   list.innerHTML = '<div class="model-list-empty"><span class="spinner"></span> Загружаем список моделей…</div>';
   if (status) status.textContent = 'Опрашиваем локальный сервер…';
 
+  // Порт сохраняем заранее: сервер спрашивает только настроенный порт.
+  await saveLocalAiConnection();
+
   const query = new URLSearchParams({
     provider: provider.value,
     host: (host && host.value) || '127.0.0.1',
@@ -2284,7 +2287,7 @@ function buildPostItem(post){
   head.className = 'post-head';
   head.innerHTML =
     '<div class="post-meta">' +
-      '<span class="post-status ' + post.status + '">' + escapeHtml(status) + '</span>' +
+      '<span class="post-status ' + escapeHtml(post.status || '') + '">' + escapeHtml(status) + '</span>' +
       '<span>' + escapeHtml(post.source_name || '') + ' · пост ' + escapeHtml(post.post_id || '') + '</span>' +
       (post.category ? '<span>· ' + escapeHtml(post.category) + '</span>' : '') +
       (post.target_chat ? '<span>· ' + escapeHtml(post.target_chat) + '</span>' : '') +
@@ -2529,10 +2532,16 @@ async function saveQuick(){
       updateSaveState();
       forceSecretRefresh = true;
       try { await refreshAll(); } finally { forceSecretRefresh = false; }
-      toast(cleared > 0
-        ? (cleared === 1 ? 'Настройки сохранены, секрет удалён' : 'Настройки сохранены, секретов удалено: ' + cleared)
-        : 'Настройки сохранены', 'success');
-    } else {
+      const j = await res.json().catch(() => ({}));
+      if (j.status === 'partial' && j.msg){
+        // Настройки сохранены, но отдельные поля не приняты — говорим
+        // об этом, а не выдаём ошибку.
+        toast(j.msg, 'warn');
+      } else {
+        toast(cleared > 0
+          ? (cleared === 1 ? 'Настройки сохранены, секрет удалён' : 'Настройки сохранены, секретов удалено: ' + cleared)
+          : 'Настройки сохранены', 'success');
+      }    } else {
       const j = await res.json().catch(()=>({}));
       toast(j.msg || 'Ошибка сохранения', 'err');
     }
@@ -2565,6 +2574,30 @@ async function toggleBot(){
 }
 
 // ---------- Проверка AI ----------
+// Порт локального сервера сохраняем до запроса списка моделей: сервер
+// спрашивает только тот порт, который настроен, — иначе проверка
+// превращалась бы в перебор локальных портов.
+async function saveLocalAiConnection(){
+  const providerSelect = $id('f-local_ai_provider');
+  const provider = providerSelect ? providerSelect.value : 'ollama';
+  const host = ($id('f-local_host') && $id('f-local_host').value) || '127.0.0.1';
+  const port = $id('f-local_port').value || (AI_PROVIDERS[provider] ? AI_PROVIDERS[provider].port : 11434);
+  try {
+    const res = await fetch(API + '/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        local_ai_provider: provider,
+        local_host: host,
+        local_port: String(port)
+      })
+    });
+    return res.ok;
+  } catch (e){
+    return false;
+  }
+}
+
 async function testAI(){
   if ($id('f-ai_mode').checked){
     const url = $id('f-remote_url').value.trim();
@@ -2579,6 +2612,7 @@ async function testAI(){
   const provider = providerSelect ? providerSelect.value : 'ollama';
   const host = ($id('f-local_host') && $id('f-local_host').value) || '127.0.0.1';
   const port = $id('f-local_port').value || (AI_PROVIDERS[provider] ? AI_PROVIDERS[provider].port : 11434);
+  await saveLocalAiConnection();
   try {
     const query = new URLSearchParams({ provider: provider, host: host, port: String(port) });
     const res = await fetch(API + '/api/ai/models?' + query.toString());

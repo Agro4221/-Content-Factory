@@ -61,13 +61,12 @@ def format_display_timestamp(ts: str | None) -> str:
 def _anchor_sqlite_modifier(modifier: str) -> str:
     """Resolves SQLite 'start of day/month/year' modifiers in local time."""
     now = datetime.now()
-    midnight = {"hour": 0, "minute": 0, "second": 0, "microsecond": 0}
     if modifier == "start of day":
-        anchored = now.replace(**midnight)
+        anchored = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif modifier == "start of month":
-        anchored = now.replace(day=1, **midnight)
+        anchored = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     elif modifier == "start of year":
-        anchored = now.replace(month=1, day=1, **midnight)
+        anchored = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
     else:
         raise ValueError(f"Unsupported SQLite anchor modifier: {modifier!r}")
     return anchored.strftime("%Y-%m-%d %H:%M:%S")
@@ -1695,7 +1694,9 @@ class DB:
                     error_code,
                 ),
             )
-            return int(cur.lastrowid)
+            if cur.lastrowid is not None:
+                return int(cur.lastrowid)
+            return 0
 
     def get_behavior_stats_snapshot(self) -> dict[str, Any]:
         with self._lock:

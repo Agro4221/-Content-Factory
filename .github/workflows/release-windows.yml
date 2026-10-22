@@ -49,6 +49,9 @@ jobs:
       - name: Run static analysis
         run: python -m ruff check .
 
+      - name: Check types
+        run: python -m mypy
+
       - name: Check admin panel JavaScript syntax
         run: python tools/check_frontend.py
 
