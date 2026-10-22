@@ -80,6 +80,7 @@ from telethon.errors import (
 )
 from telethon.tl.custom.message import Message
 
+import media_convert
 from config import (
     AI_REQUEST_TIMEOUT_S,
     AI_TEMPERATURE,
@@ -92,6 +93,10 @@ from config import (
     MEDIA_CLEANUP_INTERVAL_HOURS,
     MIN_AD_WORD_LEN,
     MIN_PROXY_PORT,
+    REWRITE_INVENTION_LENGTH_RATIO,
+    REWRITE_MIN_SHARED_WORDS,
+    SIGNIFICANT_WORD_MIN_LEN,
+    TG_CAPTION_LIMIT,
     POLL_DELAY_DEFAULT,
     POLL_DELAY_MAX,
     POLL_DELAY_MIN,
@@ -305,6 +310,55 @@ def _contains_ad(text: str, words: list[str]) -> bool:
         if re.search(r"\b" + re.escape(w.lower()) + r"\b", lowered):
             return True
     return False
+
+
+def _meaningful_text_length(text: str) -> int:
+    """Число содержательных символов в тексте.
+
+    Считаются только буквы и цифры: эмодзи, пробелы и пунктуация не дают
+    материала для пересказа, но делают подпись длинной.
+    """
+    return sum(1 for ch in text if ch.isalnum())
+
+
+def _significant_words(text: str) -> set[str]:
+    """Значимые слова текста: буквы длиной от 4 символов.
+
+    Эмодзи, числа и короткие служебные слова (��, и, на) не входят: по ним
+    нельзя понять, о чём пост.
+    """
+    return set(
+        re.findall(
+            rf"[^\W\d_]{{{SIGNIFICANT_WORD_MIN_LEN},}}",
+            text.lower(),
+            re.UNICODE,
+        )
+    )
+
+
+def _rewrite_is_about_original(original: str, rewritten: str) -> bool:
+    """Проверяет, что пересказ относится к исходному тексту.
+
+    Лёгкая модель иногда сочиняет новость целиком: из короткой подписи
+    «One, two, three» получается «шторм обрушился на Приморский край». Такая
+    «новость» уезжает в канал вместе с картинкой исходного поста, и подпись
+    перестаёт соответствовать изображению. Если ни одного значимого слова
+    исходника не попало в пересказ — пересказ выдуман, и публиковать его
+    нельзя.
+    """
+    if REWRITE_MIN_SHARED_WORDS <= 0:
+        return True
+    source_words = _significant_words(original)
+    if not source_words:
+        # Переписывать нечего — это разбирается отдельно, до запроса к ИИ.
+        return True
+    rewritten_words = _significant_words(rewritten)
+    if len(source_words & rewritten_words) >= REWRITE_MIN_SHARED_WORDS:
+        return True
+    # Общих слов нет. Пересказ считается выдумкой, только если он
+    # заметно длиннее оригинала: выдуманная новость всегда длиннее
+    # подписи, из которой её сочинили.
+    return len(rewritten) < len(original) * REWRITE_INVENTION_LENGTH_RATIO
 
 
 class ProxyConfigurationError(RuntimeError):
@@ -868,20 +922,61 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
                 return False, "В посте нет ни текста, ни медиа."
         elif len(paths) == 1:
             kind = str(post.get("media_kind") or "document")
+            # Текст длиннее подписи уходит отдельным сообщением, но не
+            # делится надвое.
+            fits_caption = len(text) <= TG_CAPTION_LIMIT
+            caption = text if fits_caption else None
             if kind == "photo":
-                await bot.send_photo(chat_id=target_chat, photo=FSInputFile(paths[0]), caption=text or None)
+                await bot.send_photo(chat_id=target_chat, photo=FSInputFile(paths[0]), caption=caption or None)
             elif kind == "video":
-                await bot.send_video(chat_id=target_chat, video=FSInputFile(paths[0]), caption=text or None)
+                await bot.send_video(chat_id=target_chat, video=FSInputFile(paths[0]), caption=caption or None)
             else:
-                await bot.send_document(chat_id=target_chat, document=FSInputFile(paths[0]), caption=text or None)
+                await bot.send_document(chat_id=target_chat, document=FSInputFile(paths[0]), caption=caption or None)
+            if text and not fits_caption:
+                await bot.send_message(chat_id=target_chat, text=text)
         else:
-            media = []
-            for path in paths:
-                media.append(InputMediaDocument(media=FSInputFile(path), caption=text or None))
-            await bot.send_media_group(chat_id=target_chat, media=media)
+            media = _build_album_media(paths, text)
+            try:
+                await bot.send_media_group(chat_id=target_chat, media=media)
+            except Exception:
+                # Альбом из файлов одного вида Telegram принимает не всегда.
+                # Откатываемся к документам — они принимаются всегда.
+                media = [
+                    InputMediaDocument(media=FSInputFile(path), caption=text or None)
+                    for path in paths
+                ]
+                await bot.send_media_group(chat_id=target_chat, media=media)
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
     return True, "Опубликовано."
+
+
+def _build_album_media(paths: list[str], caption: str | None) -> list:
+    """Собирает медиа для альбома: фото или видео, если все файлы одного вида.
+
+    Telegram принимает в альбоме только файлы одного вида — смешанный
+    альбом он отклоняет. Подпись можно указать лишь к первому элементу,
+    поэтому она ставится только туда.
+    """
+    extensions = {media_convert.file_extension(path) for path in paths}
+    if extensions and extensions.issubset(media_convert.IMAGE_EXTENSIONS):
+        return [
+            InputMediaPhoto(
+                media=FSInputFile(path), caption=caption if index == 0 else None
+            )
+            for index, path in enumerate(paths)
+        ]
+    if extensions and extensions.issubset(media_convert.NATIVE_VIDEO_EXTENSIONS):
+        return [
+            InputMediaVideo(
+                media=FSInputFile(path), caption=caption if index == 0 else None
+            )
+            for index, path in enumerate(paths)
+        ]
+    return [
+        InputMediaDocument(media=FSInputFile(path), caption=caption if index == 0 else None)
+        for index, path in enumerate(paths)
+    ]
 
 
 async def _cleanup_expired_media() -> int:
@@ -968,6 +1063,18 @@ async def _process_message_group(
         _save_skipped_group(source, messages, "ads_word")
         return
 
+    if raw_text and not _significant_words(raw_text):
+        # Подпись без единого значимого слова — обычно только эмодзи. ИИ на
+        # таком материале не пересказывает, а выдумывает новость, и она уходит
+        # в канал вместе с картинкой исходного поста. Такой пост пропускаем.
+        _save_skipped_group(source, messages, "short_text")
+        db.add_log(
+            "WARN-408",
+            f"Пост {source}/{messages[0].id} пропущен: в подписи нет ни одного "
+            "содержательного слова, переписывать нечего.",
+        )
+        return
+
     if not bot_running.is_set():
         return
 
@@ -992,6 +1099,18 @@ async def _process_message_group(
     else:
         # Media-only source posts have no text to rewrite.
         topic, final_text = "общее", ""
+
+    if raw_text and not _rewrite_is_about_original(raw_text, final_text):
+        # Пересказ не связан с исходным постом — ИИ выдумал новость. Такая
+        # «новость» уехала бы в канал вместе с картинкой исходного поста.
+        _save_skipped_group(source, messages, "rewrite_unrelated")
+        db.add_log(
+            "WARN-410",
+            f"Пост {source}/{messages[0].id} пропущен: пересказ не связан с "
+            "исходным текстом (ни одного общего значимого слова).",
+        )
+        print(f"!!! Перескав не связан с оригиналом для {source}/{messages[0].id}; пост пропущен.")
+        return
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
@@ -1043,7 +1162,6 @@ async def _process_message_group(
             f"Текст ответа ИИ обрезан с {original_len} до {len(final_text)} символов для Telegram.",
         )
 
-    caption_remainder = _media_caption_remainder(final_text)
 
     # Ручной режим: пост не публикуется сразу, а попадает в очередь,
     # где его можно поправить, отложить, отправить или отменить.
@@ -1069,42 +1187,43 @@ async def _process_message_group(
     secondary_text_to_send = ""
     try:
         if media_list:
+            # Подпись у картинки ограничена 1024 символами, а обычное
+            # сообщение вмещает 4096. Если текст не влезает в подпись, но
+            # влезает в сообщение, отправляем картинку без подписи, а текст
+            # одним сообщением — иначе текст рвётся на две части.
+            text_fits_caption = len(final_text) <= TG_CAPTION_LIMIT
+            media_caption = final_text if text_fits_caption else None
             if len(media_list) == 1:
                 single = media_list[0]
                 if isinstance(single, InputMediaPhoto):
                     await bot.send_photo(
                         chat_id=target_chat,
                         photo=single.media,
-                        caption=single.caption or final_text or None,
+                        caption=media_caption or None,
                     )
                 elif isinstance(single, InputMediaVideo):
                     await bot.send_video(
                         chat_id=target_chat,
                         video=single.media,
-                        caption=single.caption or final_text or None,
+                        caption=media_caption or None,
                     )
                 else:
                     await bot.send_document(
                         chat_id=target_chat,
                         document=single.media,
-                        caption=single.caption or final_text or None,
+                        caption=media_caption or None,
                     )
             else:
                 safe_media_group = _prepare_media_group(media_list)
+                if not text_fits_caption:
+                    for item in safe_media_group:
+                        item.caption = None
                 await bot.send_media_group(chat_id=target_chat, media=safe_media_group)
 
-            # The media call above is the primary publication. A separate text
-            # suffix is not atomic with it: if the suffix fails, retrying the
-            # whole group could publish the media a second time.
-            if caption_remainder:
-                secondary_text_to_send = caption_remainder
-                try:
-                    await bot.send_message(chat_id=target_chat, text=secondary_text_to_send)
-                except Exception as exc:
-                    secondary_send_error = exc
-            elif final_text and not any(
-                getattr(item, "caption", None) for item in media_list
-            ):
+            # Текст, который не влез в подпись, уходит отдельным
+            # сообщением. Он не делится надвое: подпись в подписи не
+            # обрезается, хвост не отбрасывается.
+            if final_text and not text_fits_caption:
                 secondary_text_to_send = final_text
                 try:
                     await bot.send_message(chat_id=target_chat, text=secondary_text_to_send)
@@ -1214,6 +1333,34 @@ async def _process_message_group(
     await asyncio.sleep(max(SLEEP_BETWEEN_POSTS_S, retry_delay_s))
 
 
+def _convert_media_for_telegram(path: str) -> str:
+    """Приводит видеофайл к MP4, если Telegram не умеет проигрывать исходный.
+
+    Telegram принимает в sendVideo только MP4: MOV уезжает в чат файлом, а
+    GIF превращается в статичную картинку. Конвертация выполняется через
+    ffmpeg. Если ffmpeg нет или он не справился, возвращается исходный
+    файл — он уйдёт в чат как документ, публикация при этом не ломается.
+    """
+    if not media_convert.needs_conversion(path):
+        return path
+    converted = media_convert.convert_to_mp4(path)
+    if not converted:
+        db.add_log(
+            "WARN-409",
+            f"Не удалось перевести видео в MP4 ({os.path.basename(path)}): "
+            "файл будет отправлен как документ. Установите ffmpeg, чтобы видео "
+            "проигрывалось в канале.",
+        )
+        print(f"!!! [WARN-409] Не удалось конвертировать {os.path.basename(path)} в MP4")
+        return path
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    print(f"--> [МЕДИА] {os.path.basename(path)} переведён в MP4")
+    return converted
+
+
 async def _download_media(messages: list[Message], caption: str = "") -> tuple[list, list[str]]:
     media_list = []
     temp_paths = []
@@ -1232,6 +1379,7 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
                         f"Telethon не вернул файл для сообщения {getattr(m, 'id', '?')}"
                     )
                 continue
+            path = _convert_media_for_telegram(path)
             temp_paths.append(path)
             m_t = _classify_extension(path)
             cap = cap_text if cap_text and not caption_assigned else None
@@ -1240,7 +1388,7 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
             media_list.append(m_t(media=FSInputFile(path), caption=cap))
 
     except BaseException:
-        # The caller cannot clean these files if this function never returns.
+        # Вызывающий код не сможет убрать эти файлы, если функция не вернулась.
         for path in temp_paths:
             try:
                 os.remove(path)

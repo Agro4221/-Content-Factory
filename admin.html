@@ -1257,6 +1257,7 @@
           <button class="filter-btn" type="button" data-post-filter="scheduled" onclick="setPostFilter('scheduled')">Отложенные</button>
           <button class="filter-btn" type="button" data-post-filter="published" onclick="setPostFilter('published')">Опубликованные</button>
           <button class="filter-btn" type="button" data-post-filter="cancelled" onclick="setPostFilter('cancelled')">Отменённые</button>
+          <button class="filter-btn" type="button" data-post-filter="failed" onclick="setPostFilter('failed')">С ошибкой</button>
           <span class="hint" id="posts-count"></span>
         </div>
         <div class="posts-list" id="posts-list"></div>
@@ -1926,6 +1927,15 @@ const FAQ_CODES = [
   { code: 'WARN-406', level: 'warn', title: 'Временная ошибка отправки',
     meaning: 'Сеть или сервер Telegram ответили временной ошибкой: таймаут, сбой 5xx или лимит запросов.',
     solution: 'Публикация будет повторена автоматически. Если повторяется — увеличьте «Задержка опроса».' },
+  { code: 'WARN-408', level: 'warn', title: 'Пост пропущен: подпись пустая',
+    meaning: 'В подписи меньше 30 содержательных символов — только эмодзи или короткая подпись. Подать не публикуется.',
+    solution: 'Скачала текста поста без содержательного текста были попустает. Если нужен подборка самого текста, неполучильный для публикации свяжите с картинкой.' },
+  { code: 'WARN-410', level: 'warn', title: 'Пересказ не связан с оригиналом',
+    meaning: 'ИИ выдумал новость, которой не было в исходном посте. Такой пост пропускается: иначе к выдуманной новости приклеилась бы картинка чужого поста.',
+    solution: 'Проверьте саму модель: легковесные модели часто сочиняют. Уберите ненадёжные каналы из списка или добавьте их в стоп-слова.' },
+  { code: 'WARN-409', level: 'warn', title: 'Видео не удалось перевести в MP4',
+    meaning: 'Видеофайл в формате .mov, .mkv, .webm или .gif не удалось перевести в MP4, потому что в канал уйдёт как файл, а GIF — как статичная картинка. Фал будет отправлен как документ.',
+    solution: 'Установите ffmpeg и добавьте его в PATH. Без него фалы уйдут в чат как обычный файл.' },
   { code: 'WARN-407', level: 'warn', title: 'Не доставлен хвост подписи',
     meaning: 'Медиа отправлено, а длинный текст сверх лимита подписи — нет. Текст сохранён в базе и будет дослан.',
     solution: 'Ничего делать не нужно: остаток текста уйдёт следующим сообщением. Повторная отправка медиа при этом не произойдёт.' },
@@ -2111,7 +2121,9 @@ function renderPosts(data){
     counter.textContent = 'Всего: ' + (data.total || 0)
       + ' · черновиков: ' + (counts.draft || 0)
       + ' · отложенных: ' + (counts.scheduled || 0)
-      + ' · опубликовано: ' + (counts.published || 0);
+      + ' · опубликовано: ' + (counts.published || 0)
+      + ' · отменённых: ' + (counts.cancelled || 0)
+      + ' · с ошибкой: ' + (counts.failed || 0);
   }
   if (!posts.length){
     list.innerHTML = '<div class="posts-empty">Постов в очереди нет. Переключите режим публикации на «Через очередь», чтобы посты попадали сюда.</div>';
@@ -2291,7 +2303,9 @@ async function cancelPost(postId){
       toast(j.msg || j.detail || 'Не удалось отменить пост', 'err');
       return;
     }
-    toast('Публикация отменена', 'success');
+    // Если открыт другой фильтр, пост уходит из него — говорим, куда он делся.
+    const hidden = POST_FILTER && POST_FILTER !== 'all' && POST_FILTER !== 'cancelled';
+    toast('Публикация отменена' + (hidden ? '. Пост в разделе «Отменённые».' : '.'), 'success');
     await loadPosts();
   } catch (e){
     toast('Ошибка сети при отмене поста', 'err');
