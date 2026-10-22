@@ -2257,11 +2257,16 @@ function buildPostItem(post){
   if (post.media_count > 0){
     const media = document.createElement('div');
     media.className = 'post-media';
+    const marker = post.media_marker || '';
     for (let i = 0; i < post.media_count; i++){
       const link = document.createElement('a');
       link.href = API + '/api/posts/' + post.id + '/media/' + i;
       link.target = '_blank';
       link.rel = 'noopener';
+      // В подсказке — метка поста: видно, какому посту принадлежит файл.
+      link.title = marker
+        ? 'Медиа ' + (i + 1) + ' — пост ' + marker
+        : 'Медиа ' + (i + 1);
       link.innerHTML = '<svg class="icon icon-sm"><use href="#i-file-text"/></svg>Медиа ' + (i + 1);
       media.appendChild(link);
     }

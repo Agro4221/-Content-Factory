@@ -51,6 +51,7 @@ from proxy_check import (
     normalize_mtproto_proxy_link,
     resolve_proxy_type,
 )
+import media_marker
 import routing
 from state import bot_running
 import contextlib
@@ -1022,6 +1023,10 @@ def _post_row_to_dict(row: dict) -> dict:
         "id": row.get("id"),
         "source_name": row.get("source_name") or "",
         "post_id": row.get("post_id") or "",
+        # Метка поста: по ней видно, какому посту принадлежит медиа.
+        "media_marker": media_marker.media_marker(
+            row.get("source_name") or "", row.get("post_id") or ""
+        ),
         "original_text": row.get("original_text") or "",
         "publish_text": row.get("publish_text") or "",
         "media_files": media_files,

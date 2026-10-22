@@ -89,6 +89,7 @@ from telethon.errors import (
 from telethon.tl.custom.message import Message
 
 import media_convert
+import media_marker
 import routing
 import text_format
 from config import (
@@ -1031,6 +1032,7 @@ def _save_post_to_queue(
 ) -> int:
     """Сохраняет пост в очередь ручной публикации вместе с медиа."""
     os.makedirs(_queue_media_dir(), exist_ok=True)
+    marker = media_marker.media_marker(source, messages[0].id)
     media_files: list[str] = []
     media_kind = ""
     for path in temp_paths:
@@ -1038,8 +1040,11 @@ def _save_post_to_queue(
             continue
         try:
             # Уникальное имя не даёт разным постам перезаписать один файл.
+            # В имени есть метка поста: по ней видно, чьё это медиа.
             ext = os.path.splitext(os.path.basename(path))[1]
-            name = f"{int(time.time() * 1000)}_{len(media_files)}{ext}"
+            name = media_marker.media_file_name(
+                marker, int(time.time() * 1000), len(media_files), ext
+            )
             target_path = os.path.join(_queue_media_dir(), name)
             shutil.copy2(path, target_path)
             media_files.append(name)
@@ -1137,10 +1142,22 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
         media_files = []
 
     media_dir = _queue_media_dir()
+    expected_marker = media_marker.media_marker(
+        str(post.get("source_name") or ""), str(post.get("post_id") or "")
+    )
     paths = []
     for name in media_files:
         safe_name = os.path.basename(str(name).replace("\\", "/"))
         if not safe_name or safe_name != str(name):
+            continue
+        if not media_marker.belongs_to_post(safe_name, expected_marker):
+            # Файл помечен как чужой: публиковать его вместе с этим постом
+            # нельзя, иначе картинка окажется не от того поста.
+            db.add_log(
+                "WARN-512",
+                f"Медиафайл {safe_name} принадлежит другому посту; "
+                f"в публикации {post.get('id')} пропущен.",
+            )
             continue
         full = os.path.join(media_dir, safe_name)
         if os.path.isfile(full):
@@ -1166,7 +1183,7 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
                         bot,
                         "send_photo",
                         chat_id=target_chat,
-                        photo=FSInputFile(paths[0]),
+                        photo=FSInputFile(paths[0], filename=media_marker.clean_filename(paths[0])),
                         caption=caption or None,
                     )
                 elif kind == "video":
@@ -1174,7 +1191,7 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
                         bot,
                         "send_video",
                         chat_id=target_chat,
-                        video=FSInputFile(paths[0]),
+                        video=FSInputFile(paths[0], filename=media_marker.clean_filename(paths[0])),
                         caption=caption or None,
                     )
                 else:
@@ -1182,7 +1199,7 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
                         bot,
                         "send_document",
                         chat_id=target_chat,
-                        document=FSInputFile(paths[0]),
+                        document=FSInputFile(paths[0], filename=media_marker.clean_filename(paths[0])),
                         caption=caption or None,
                     )
                 if text and not fits_caption:
@@ -1206,7 +1223,10 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
                     # Альбом из файлов одного вида Telegram принимает не всегда.
                     # Откатываемся к документам — они принимаются всегда.
                     media = [
-                        InputMediaDocument(media=FSInputFile(path), caption=caption or None)
+                        InputMediaDocument(
+                            media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                            caption=caption or None,
+                        )
                         for path in paths
                     ]
                     await _send_with_retry(
@@ -1232,19 +1252,22 @@ def _build_album_media(paths: list[str], caption: str | None) -> list:
     if extensions and extensions.issubset(media_convert.IMAGE_EXTENSIONS):
         return [
             InputMediaPhoto(
-                media=FSInputFile(path), caption=caption if index == 0 else None
+                media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                caption=caption if index == 0 else None
             )
             for index, path in enumerate(paths)
         ]
     if extensions and extensions.issubset(media_convert.NATIVE_VIDEO_EXTENSIONS):
         return [
             InputMediaVideo(
-                media=FSInputFile(path), caption=caption if index == 0 else None
+                media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                caption=caption if index == 0 else None
             )
             for index, path in enumerate(paths)
         ]
     return [
-        InputMediaDocument(media=FSInputFile(path), caption=caption if index == 0 else None)
+        InputMediaDocument(media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                caption=caption if index == 0 else None)
         for index, path in enumerate(paths)
     ]
 
@@ -1804,7 +1827,12 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
             cap = cap_text if cap_text and not caption_assigned else None
             if cap is not None:
                 caption_assigned = True
-            media_list.append(m_t(media=FSInputFile(path), caption=cap))
+            media_list.append(
+                m_t(
+                    media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                    caption=cap,
+                )
+            )
 
     except BaseException:
         # Вызывающий код не сможет убрать эти файлы, если функция не вернулась.

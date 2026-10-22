@@ -121,6 +121,7 @@ hiddenimports = [
     # Внутренние модули: настройка кодировки консоли (кириллица в Windows)
     "console_setup",
     "media_convert",
+    "media_marker",
     # Модули самого проекта: перечислены явно, чтобы новый модуль нельзя
     # было забыть добавить (проверяет tests/test_packaging_assets.py).
     "api_security",
