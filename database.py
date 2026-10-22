@@ -1229,9 +1229,20 @@ class DB:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
                     ON CONFLICT(source_name, post_id) DO UPDATE SET
                         original_text = excluded.original_text,
+                        publish_text = excluded.publish_text,
                         media_files = excluded.media_files,
                         media_kind = excluded.media_kind,
-                        updated_at = excluded.updated_at
+                        category = excluded.category,
+                        target_chat = excluded.target_chat,
+                        updated_at = excluded.updated_at,
+                        -- Ошибка снимается: содержимое изменилось, значит
+                        -- пост снова можно публиковать. Отменённый и уже
+                        -- опубликованный пост не трогаем: отмена — решение
+                        -- пользователя, а повторная публикация не нужна.
+                        status = CASE post_queue.status
+                            WHEN 'failed' THEN 'draft'
+                            ELSE post_queue.status
+                        END
                     """,
                     (
                         str(post.get("source_name", "")),
@@ -1282,11 +1293,17 @@ class DB:
         return [dict(zip(columns, row, strict=True)) for row in rows]
 
     def is_post_queued(self, source: str, post_id: int | str) -> bool:
-        """Return whether a source post already has a durable queue entry."""
+        """Return whether a source post already has a pending queue entry.
+
+        Only entries that still need work count: a draft waiting for the
+        user, a scheduled post, or one the user cancelled. A failed entry
+        does not block the source — such a post is worth another try.
+        """
         with self._lock:
             cur = self.conn.cursor()
             cur.execute(
-                "SELECT 1 FROM post_queue WHERE source_name = ? AND post_id = ? LIMIT 1",
+                "SELECT 1 FROM post_queue WHERE source_name = ? AND post_id = ? "
+                "AND status IN ('draft', 'scheduled', 'cancelled') LIMIT 1",
                 (str(source), str(post_id)),
             )
             return cur.fetchone() is not None
@@ -1300,6 +1317,27 @@ class DB:
                 "published_at, last_error, created_at, updated_at "
                 "FROM post_queue WHERE id = ?",
                 (int(post_id),),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        columns = [
+            "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
+            "media_files", "media_kind", "category", "target_chat", "status",
+            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+        ]
+        return dict(zip(columns, row, strict=True))
+
+    def get_queued_post_by_source(self, source: str, post_id: int | str) -> dict | None:
+        """Черновик поста по источнику и идентификатору сообщения."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
+                "media_files, media_kind, category, target_chat, status, scheduled_at, "
+                "published_at, last_error, created_at, updated_at "
+                "FROM post_queue WHERE source_name = ? AND post_id = ?",
+                (str(source), str(post_id)),
             )
             row = cur.fetchone()
         if not row:

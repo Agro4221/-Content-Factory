@@ -61,6 +61,8 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramEntityTooLarge,
     TelegramNetworkError,
     TelegramRetryAfter,
     TelegramServerError,
@@ -117,6 +119,7 @@ from config import (
     TELEGRAM_FORMATTING_RULES,
     TEMP_DIR,
     TG_CAPTION_LIMIT,
+    TG_MESSAGE_LIMIT,
     is_truthy,
     normalize_target_chat,
     warn_if_defaults,
@@ -983,6 +986,35 @@ def _queue_media_dir() -> str:
     return os.path.join(BASE_DIR, "queue_media")
 
 
+def _remove_stale_queue_media(raw_media_files: object, keep: list[str]) -> None:
+    """Удаляет копии медиа, на которые больше не ссылается очередь.
+
+    При повторной постановке поста в очередь база получает новый список
+    файлов, а прежние копии остаются в queue_media навсегда — диск растёт,
+    а в панели они не видны.
+    """
+    if not raw_media_files:
+        return
+    try:
+        previous = json.loads(raw_media_files) if isinstance(raw_media_files, str) else []
+    except (TypeError, ValueError):
+        return
+    if not isinstance(previous, list):
+        return
+
+    keep_set = {str(name) for name in keep}
+    queue_dir = _queue_media_dir()
+    for name in previous:
+        file_name = str(name or "")
+        if not file_name or file_name in keep_set:
+            continue
+        safe_name = os.path.basename(file_name.replace("\\", "/"))
+        if safe_name != file_name:
+            continue
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(queue_dir, safe_name))
+
+
 #: Момент последней автоочистки медиа (монотонное время, не зависит от часов).
 _last_media_cleanup_ts = 0.0
 
@@ -1031,6 +1063,12 @@ def _save_post_to_queue(
             group_id = str(candidate)
             break
 
+    # Прежние копии медиа этого поста больше не нужны: база сейчас получит
+    # новый список файлов, а старые иначе остались бы в queue_media навсегда.
+    previous = db.get_queued_post_by_source(source, messages[0].id)
+    if previous:
+        _remove_stale_queue_media(previous.get("media_files"), media_files)
+
     return db.save_post_to_queue(
         {
             "source_name": source,
@@ -1053,6 +1091,16 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
         return False, "Не указан канал назначения."
 
     text = str(post.get("publish_text") or "")
+    # Текст поста мог править пользователь в панели: он может содержать
+    # сырые теги или быть длиннее, чем Telegram принимает.
+    text = _sanitize_telegram_html(text)
+    if len(text) > TG_MESSAGE_LIMIT:
+        original_len = len(text)
+        text = _truncate_telegram_text(text, TG_MESSAGE_LIMIT)
+        db.add_log(
+            "WARN-500",
+            f"Текст поста обрезан с {original_len} до {len(text)} символов для Telegram.",
+        )
     try:
         media_files = json.loads(post.get("media_files") or "[]")
     except (TypeError, ValueError):
@@ -1113,7 +1161,13 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
                     bot, "send_message", chat_id=target_chat, text=text
                 )
         else:
-            media = _build_album_media(paths, text)
+            # Подпись альбома ограничена 1024 символами, а обычное
+            # сообщение вмещает 4096. Длинный текст уходит отдельным
+            # сообщением — иначе Telegram отклоняет подпись целиком и
+            # пост не публикуется никогда.
+            fits_caption = len(text) <= TG_CAPTION_LIMIT
+            caption = text if fits_caption else None
+            media = _build_album_media(paths, caption)
             try:
                 await _send_with_retry(
                     bot, "send_media_group", chat_id=target_chat, media=media
@@ -1122,11 +1176,15 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
                 # Альбом из файлов одного вида Telegram принимает не всегда.
                 # Откатываемся к документам — они принимаются всегда.
                 media = [
-                    InputMediaDocument(media=FSInputFile(path), caption=text or None)
+                    InputMediaDocument(media=FSInputFile(path), caption=caption or None)
                     for path in paths
                 ]
                 await _send_with_retry(
                     bot, "send_media_group", chat_id=target_chat, media=media
+                )
+            if text and not fits_caption:
+                await _send_with_retry(
+                    bot, "send_message", chat_id=target_chat, text=text
                 )
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
@@ -1405,7 +1463,7 @@ async def _process_message_group(
         print(f"!!! Не удалось скачать вложение для {source}/{messages[0].id}; пост оставлен для повтора.")
         return
 
-    MAX_TG_LEN = 4096
+    MAX_TG_LEN = TG_MESSAGE_LIMIT
     if len(final_text) > MAX_TG_LEN:
         original_len = len(final_text)
         final_text = _truncate_telegram_text(final_text, MAX_TG_LEN)
@@ -1427,6 +1485,12 @@ async def _process_message_group(
             )
             print(f"!!! Не удалось сохранить пост {source}/{messages[0].id} в очередь: {exc}")
             return
+        finally:
+            # Копии медиа уже лежат в очереди — временные файлы больше не
+            # нужны. Без этой очистки temp_media рос бы бесконечно.
+            for temp_path in temp_paths:
+                with contextlib.suppress(OSError):
+                    os.remove(temp_path)
         db.add_log(
             "OK-510",
             f"Пост {source}/{messages[0].id} добавлен в очередь и ждёт подтверждения.",
@@ -1523,6 +1587,20 @@ async def _process_message_group(
                 f"Пост {source}/{messages[0].id} не отправлен из-за временной ошибки "
                 f"({type(send_error).__name__}); оставлен для повторной попытки.",
             )
+        elif _is_post_level_send_error(send_error):
+            # Дефект конкретного поста (например, файл больше 50 МБ).
+            # Останавливать из-за него весь парсер нельзя: лента должна
+            # продолжаться. Пост помечается пропущенным и не повторяется.
+            _save_skipped_group(source, messages, "send_failed")
+            db.add_log(
+                "WARN-407",
+                f"Пост {source}/{messages[0].id} не доставлен: Telegram отклонил медиа "
+                f"({type(send_error).__name__}: {send_error}). Пост пропущен, парсер продолжает работу.",
+            )
+            print(
+                f"!!! [WARN-407] Пост {source}/{messages[0].id} отклонён Telegram "
+                f"({send_error}); пропущен, парсер работает дальше."
+            )
         else:
             # A send rejection can be corrected (permissions, target, token, or
             # malformed payload). Never turn a delivery failure into a permanent
@@ -1603,7 +1681,7 @@ async def _process_message_group(
     await asyncio.sleep(max(SLEEP_BETWEEN_POSTS_S, retry_delay_s))
 
 
-def _convert_media_for_telegram(path: str) -> str:
+async def _convert_media_for_telegram(path: str) -> str:
     """Приводит видеофайл к MP4, если Telegram не умеет проигрывать исходный.
 
     Telegram принимает в sendVideo только MP4: MOV уезжает в чат файлом, а
@@ -1613,7 +1691,7 @@ def _convert_media_for_telegram(path: str) -> str:
     """
     if not media_convert.needs_conversion(path):
         return path
-    converted = media_convert.convert_to_mp4(path)
+    converted = await asyncio.to_thread(media_convert.convert_to_mp4, path)
     if not converted:
         db.add_log(
             "WARN-409",
@@ -1647,7 +1725,7 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
                         f"Telethon не вернул файл для сообщения {getattr(m, 'id', '?')}"
                     )
                 continue
-            path = _convert_media_for_telegram(path)
+            path = await _convert_media_for_telegram(path)
             temp_paths.append(path)
             m_t = _classify_extension(path)
             cap = cap_text if cap_text and not caption_assigned else None
@@ -1663,6 +1741,38 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
         raise
     print()
     return media_list, temp_paths
+
+
+#: Признаки ошибок, относящихся к конкретному посту, а не к настройкам
+#: бота: слишком большой файл, неподдерживаемый формат, битая ссылка.
+_POST_LEVEL_BAD_REQUEST_MARKERS = (
+    "request entity too large",
+    "too big",
+    "file is too large",
+    "message is too long",
+    "caption is too long",
+    "wrong file identifier",
+    "file_reference_expired",
+    "photo_invalid_dimensions",
+    "video_content_type",
+    "unsupported",
+    "wrong file",
+)
+
+
+def _is_post_level_send_error(exc: Exception) -> bool:
+    """Ошибка относится к конкретному посту, а не к настройкам бота.
+
+    Слишком большой файл или неподдерживаемый формат — это дефект одного
+    поста. Останавливать из-за него весь парсер нельзя: остальные посты
+    публикуются нормально, а пользователь увидит только обрыв ленты.
+    """
+    if isinstance(exc, TelegramEntityTooLarge):
+        return True
+    if not isinstance(exc, TelegramBadRequest):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _POST_LEVEL_BAD_REQUEST_MARKERS)
 
 
 def _log_send_error(send_error: Exception, target_chat) -> None:
@@ -1840,7 +1950,11 @@ def _extract_ai_content(data: object) -> str:
 
 
 def _strip_reasoning_blocks(text: str) -> str:
-    """Убирает служебные блоки размышления моделей (<think>...</think>)."""
+    """Убирает служебные блоки размышления моделей (<think>...</think>).
+
+    Модели часто не закрывают тег<think> — размышление уходит в пост
+    целиком. Незакрытый блок вырезается до конца ответа.
+    """
     if not text:
         return ""
     cleaned = re.sub(
@@ -1849,23 +1963,98 @@ def _strip_reasoning_blocks(text: str) -> str:
         text,
         flags=re.DOTALL | re.IGNORECASE,
     )
+    # Незакрытый блок: вырезаем от тега до конца ответа.
+    cleaned = re.sub(
+        r"<(?:think|thinking|reasoning)>.*\Z",
+        "",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Вариант служебных маркеров без угловых скобок: <|thinking|>
+    cleaned = re.sub(
+        r"<\|(?:thinking|thought|reasoning)\|>.*?(?:<\|(?:thinking|thought|reasoning)\|>|\Z)",
+        "",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     return cleaned.strip()
+
+
+#: Метки разделов в ответе модели. Локальные модели часто оборачивают их
+#: в Markdown-выделение: «**ТЕМА:** политика». Метка должна распознаваться
+#: в любом оформлении, иначе тема не находится и пост уходит не туда.
+_AI_SECTIONS = ("ТЕМА", "ТЕКСТ", "ХЭШТЕГИ")
+
+#: Метка, обёрнутая в выделение: **ТЕМА:**, **ТЕМА**, *ТЕМА:*, __ТЕМА__:.
+#: Между обвязкой и меткой допускаются только горизонтальные пробелы —
+#: иначе выделение текста рядом с меткой принято за метку.
+_AI_LABEL_RE = re.compile(
+    r"(?P<mark>\*\*|__|\*|_|`)[ \t]*"
+    r"(?P<label>ТЕМА|ТЕКСТ|ХЭШТЕГИ)[ \t]*"
+    r"(?::)?[ \t]*(?P=mark)(?::)?",
+    re.IGNORECASE,
+)
+
+
+def _normalize_ai_labels(res: str) -> str:
+    """Приводит метки разделов к виду «ТЕМА:», снимая Markdown-обвязку."""
+    return _AI_LABEL_RE.sub(lambda m: f"{m.group('label')}:", res)
+
+
+def _strip_emphasis(value: str) -> str:
+    """Снимает внешнее Markdown-выделение с короткого значения."""
+    return value.strip().strip("*_`").strip()
+
+
+def _extract_ai_topic(normalized: str) -> str:
+    """Достаёт тему из ответа модели.
+
+    Значение может стоять на следующей строке — тогда берём первую
+    непустую строку, которая не является следующей меткой.
+    """
+    match = re.search(r"ТЕМА[ \t]*:[ \t]*([^\n]*)", normalized, re.IGNORECASE)
+    if not match:
+        return "общее"
+
+    topic = _strip_emphasis(match.group(1))
+    if topic:
+        return topic.lower()
+
+    for line in normalized[match.end():].splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        if re.match(r"^(?:ТЕКСТ|ХЭШТЕГИ)[ \t]*:", candidate, re.IGNORECASE):
+            break
+        return _strip_emphasis(candidate).lower()
+    return "общее"
+
 
 def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
     if not isinstance(res, str) or not res.strip():
         raise AIResponseFormatError("пустой ответ")
-    t_m = re.search(r"ТЕМА:\s*(.*)", res, re.IGNORECASE)
-    c_m = re.search(r"ТЕКСТ:\s*(.*)", res, re.DOTALL | re.IGNORECASE)
-    h_m = re.search(r"ХЭШТЕГИ:\s*(.*)", res, re.IGNORECASE)
+
+    normalized = _normalize_ai_labels(res)
+    topic = _extract_ai_topic(normalized)
+    c_m = re.search(r"ТЕКСТ[ \t]*:[ \t]*(.*)", normalized, re.DOTALL | re.IGNORECASE)
+    h_m = re.search(r"ХЭШТЕГИ[ \t]*:[ \t]*(.*)", normalized, re.DOTALL | re.IGNORECASE)
 
     if not c_m:
         raise AIResponseFormatError("отсутствует обязательный раздел ТЕКСТ:")
-    topic = (t_m.group(1).strip().lower() if t_m else "общее").split("\n")[0].strip()
+
     full = c_m.group(1).strip()
-    clean = re.split(r"ХЭШТЕГИ\s*:", full, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    clean = re.split(r"ХЭШТЕГИ[ \t]*:", full, maxsplit=1, flags=re.IGNORECASE)[0].strip()
     if not clean:
         raise AIResponseFormatError("раздел ТЕКСТ: пуст")
-    tags = h_m.group(1).strip() if h_m else ""
+
+    tags = ""
+    if h_m:
+        # Хештеги модель часто пишет в несколько строк — собираем их все.
+        tags = " ".join(
+            part.strip()
+            for part in h_m.group(1).splitlines()
+            if part.strip()
+        )
     return topic, f"{clean}\n\n{tags}" if tags else clean
 
 
@@ -2278,12 +2467,22 @@ async def _process_one_source(
         if cursor is not None and cursor > previous_cursor:
             _set_source_cursor(source, cursor)
 
+    # Очередь работает только в ручном режиме: в автоматическом пост
+    # публикуется сразу. Без этой проверки черновик, оставшийся от ручного
+    # режима, навсегда блокировал бы автопубликацию своих постов.
+    queue_marker_active = cfg.get("publish_mode") == "manual"
+
+    def post_has_pending_queue_entry(message_id: int | str) -> bool:
+        if not queue_marker_active:
+            return False
+        checker = getattr(db, "is_post_queued", None)
+        return callable(checker) and checker(source, message_id)
+
     for gid, messages in grouped.items():
         if not bot_running.is_set():
             break
 
-        is_post_queued = getattr(db, "is_post_queued", None)
-        if callable(is_post_queued) and is_post_queued(source, messages[0].id):
+        if post_has_pending_queue_entry(messages[0].id):
             completed_groups[gid] = True
             advance_cursor()
             continue
@@ -2298,8 +2497,7 @@ async def _process_one_source(
                 client, source, pending, cfg, bot, ai_session
             )
 
-        queued_check = getattr(db, "is_post_queued", None)
-        queued_group = callable(queued_check) and queued_check(source, messages[0].id)
+        queued_group = post_has_pending_queue_entry(messages[0].id)
         completed_groups[gid] = queued_group or all(
             db.is_published(source, message.id)
             or db.is_skipped(source, message.id)
@@ -2390,9 +2588,17 @@ async def main() -> None:
                     cfg["api_hash"],
                     proxy=proxy.telethon_proxy,
                 )
-            ai_session = _make_ai_session(
-                proxy, cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
-            )
+            try:
+                ai_session = _make_ai_session(
+                    proxy, cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
+                )
+            except ProxyConfigurationError as ai_proxy_error:
+                # Прокси для запросов к ИИ настроить не удалось. Это
+                # ошибка настройки, а не сбой цикла: сообщаем и ждём.
+                db.add_log("ERR-302", f"Невозможно настроить прокси для ИИ: {ai_proxy_error}")
+                print(f"!!! [ERR-302] {ai_proxy_error}")
+                await asyncio.sleep(SLEEP_NO_CONFIG_S)
+                continue
 
             session_file = SESSION_PATH + ".session"
             allow_interactive_login = _stdin_is_interactive()

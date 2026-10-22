@@ -134,6 +134,9 @@ SIGNIFICANT_WORD_MIN_LEN = 4
 #: Ограничение Telegram на длину подписи к медиа (у обычного сообщения — 4096).
 TG_CAPTION_LIMIT = 1024
 
+#: Ограничение Telegram на длину обычного сообщения.
+TG_MESSAGE_LIMIT = 4096
+
 MIN_AD_WORD_LEN = 3
 POLL_DELAY_DEFAULT = 60
 
