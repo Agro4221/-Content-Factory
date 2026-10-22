@@ -102,7 +102,7 @@ def test_every_project_module_is_bundled_explicitly() -> None:
     on_disk = {
         path.stem
         for path in ROOT.glob("*.py")
-        if path.stem not in {"Parser"}
+        if path.stem != "Parser"
     }
     assert on_disk <= hiddenimports, (
         "Модули проекта не перечислены в hiddenimports: "

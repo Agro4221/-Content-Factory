@@ -123,7 +123,11 @@ def parse_routes(raw: object) -> dict[str, list[str]]:
                 "Маршруты должны быть корректным JSON-объектом; настройки не применены."
             ) from exc
     if not isinstance(raw, dict):
-        raise ValueError("Маршруты должны быть JSON-объектом; настройки не применены.")
+        # Это не ошибка типа аргумента, а неверные данные из настроек:
+        # вызывающий код ловит ValueError и сообщает пользователю.
+        raise ValueError(  # noqa: TRY004
+            "Маршруты должны быть JSON-объектом; настройки не применены."
+        )
 
     routes: dict[str, list[str]] = {}
     for channel, tags in raw.items():

@@ -488,10 +488,11 @@ def _make_socks_session(cfg: dict) -> AiohttpSession:
 
     user = cfg.get("proxy_user") or ""
     password = cfg.get("proxy_pass") or ""
-    if user or password:
-        auth = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
-    else:
-        auth = ""
+    auth = (
+        f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
+        if (user or password)
+        else ""
+    )
 
     url_host = format_proxy_host(host)
     proxy_url = f"{proxy_type}://{auth}{url_host}:{port}"

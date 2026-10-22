@@ -609,10 +609,7 @@ async def api_get_settings(module: str | None = Query(default=None)) -> dict:
     # Секреты не покидают бэкенд в открытом виде: панель получает маску и
     # может заменить значение или удалить его, но не прочитать текущее.
     masked_getter = getattr(db, "get_masked_settings", None)
-    if callable(masked_getter):
-        settings = dict(masked_getter())
-    else:
-        settings = dict(db.get_all_settings())
+    settings = dict(masked_getter()) if callable(masked_getter) else dict(db.get_all_settings())
     settings["use_proxy"] = "1" if is_truthy(settings.get("use_proxy", "0")) else "0"
     return settings
 
