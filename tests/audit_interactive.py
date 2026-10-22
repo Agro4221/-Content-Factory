@@ -71,7 +71,7 @@ for m in re.finditer(r"<(input|select|textarea)\b([^>]*)>", html):
 
 print(f"{'тип':<18}{'id':<26}{'обработчики':<44}источник")
 print("-" * 100)
-for tag, ident, cls, inline, src in rows:
+for tag, ident, _cls, inline, src in rows:
     handlers = ", ".join(inline) if inline else ""
     if src == "из скрипта":
         handlers = "добавляется из скрипта"

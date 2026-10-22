@@ -32,14 +32,14 @@ def test_empty_proxy_type_uses_http_for_sender_and_checker(monkeypatch) -> None:
         "proxy_pass": "",
     }
 
-    telethon_proxy, mtproto_kwargs, bot_session = main._setup_proxy(cfg)
+    setup = main._setup_proxy(cfg)
 
     assert proxy_check.resolve_proxy_type(cfg) == "http"
-    assert telethon_proxy is not None
-    assert telethon_proxy["proxy_type"] == "http"
-    assert mtproto_kwargs is None
-    assert isinstance(bot_session, FakeAiohttpSession)
-    assert bot_session.proxy == "http://proxy.example:8080"
+    assert setup.telethon_proxy is not None
+    assert setup.telethon_proxy["proxy_type"] == "http"
+    assert setup.mtproto_kwargs is None
+    assert isinstance(setup.bot_session, FakeAiohttpSession)
+    assert setup.bot_session.proxy == "http://proxy.example:8080"
 
 def test_explicit_http_type_overrides_stale_mtproto_key(monkeypatch) -> None:
     monkeypatch.setattr(main, "AiohttpSession", FakeAiohttpSession)
@@ -59,13 +59,13 @@ def test_explicit_http_type_overrides_stale_mtproto_key(monkeypatch) -> None:
         "proxy_pass": "",
     }
 
-    telethon_proxy, mtproto_kwargs, bot_session = main._setup_proxy(cfg)
+    setup = main._setup_proxy(cfg)
 
     assert proxy_check.resolve_proxy_type(cfg) == "http"
-    assert telethon_proxy is not None
-    assert telethon_proxy["proxy_type"] == "http"
-    assert mtproto_kwargs is None
-    assert bot_session.proxy == "http://proxy.example:8080"
+    assert setup.telethon_proxy is not None
+    assert setup.telethon_proxy["proxy_type"] == "http"
+    assert setup.mtproto_kwargs is None
+    assert setup.bot_session.proxy == "http://proxy.example:8080"
 
 
 def test_legacy_empty_proxy_type_can_still_infer_mtproto_from_key() -> None:

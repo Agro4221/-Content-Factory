@@ -1,4 +1,4 @@
-"""Конфигурация приложения Project MaryJane / Parser v1.28.3.6."""
+"""Конфигурация приложения Content Factory."""
 from __future__ import annotations
 
 import math
@@ -42,7 +42,7 @@ def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> 
 
 load_environment()
 
-APP_VERSION = "1.29.0.0"
+APP_VERSION = "1.29.0.3"
 
 API_HOST = os.environ.get("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 API_PORT = _env_int("API_PORT", 8000, minimum=1, maximum=65535)
@@ -67,10 +67,17 @@ SLEEP_BETWEEN_POSTS_S = 5
 SLEEP_API_ERROR_S = 30
 SLEEP_FLOOD_POLL_S = 1
 
+#: Границы таймаута ИИ. Один и тот же диапазон использует панель при
+#: сохранении настроек и загрузчик конфигурации из .env.
+AI_TIMEOUT_MIN_S = 10
+AI_TIMEOUT_MAX_S = 3600
+
 #: Таймаут запроса к ИИ, секунды. Локальные модели на процессоре и слабых
 #: видеокартах думают минутами, поэтому запас большой. Меняется в панели
 #: (поле «Таймаут ИИ, сек») или переменной AI_REQUEST_TIMEOUT_S в .env.
-AI_REQUEST_TIMEOUT_S = int(os.environ.get("AI_REQUEST_TIMEOUT_S", "300") or 300)
+AI_REQUEST_TIMEOUT_S = _env_int(
+    "AI_REQUEST_TIMEOUT_S", 300, minimum=AI_TIMEOUT_MIN_S, maximum=AI_TIMEOUT_MAX_S
+)
 AI_TEMPERATURE = 0.4
 AI_TRUNCATE_FALLBACK = 300
 
@@ -152,6 +159,7 @@ SETTING_KEYS = frozenset({
     "poll_delay", "use_proxy", "proxy_type", "proxy_host", "proxy_port",
     "proxy_user", "proxy_pass", "mtproto_key",
     "publish_mode", "media_retention_days", "media_cleanup_enabled",
+    "ai_timeout",
 })
 
 # Настройки, которые хранятся в базе в зашифрованном виде (Windows DPAPI).

@@ -17,12 +17,23 @@ SQLite-обёртка для проекта Content Factory.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
+
+from config import DB_PATH, SECRET_MASK, SECRET_SETTING_KEYS, make_post_key
+from secrets_store import (
+    SecretDecryptionError,
+    SecretEncryptionError,
+)
+from secrets_store import decrypt as _decrypt_secret
+from secrets_store import encrypt as _encrypt_secret
+from secrets_store import is_encrypted as _is_encrypted_secret
+from secrets_store import supported as _secret_storage_supported
 
 
 def _local_now_str() -> str:
@@ -79,24 +90,6 @@ def _parse_sqlite_modifier(modifier: str) -> int:
     }
     return sign * value * multipliers.get(unit, 1)
 
-from config import DB_PATH, SECRET_MASK, SECRET_SETTING_KEYS, make_post_key
-from secrets_store import (
-    SecretDecryptionError,
-    SecretEncryptionError,
-)
-from secrets_store import (
-    decrypt as _decrypt_secret,
-)
-from secrets_store import (
-    encrypt as _encrypt_secret,
-)
-from secrets_store import (
-    is_encrypted as _is_encrypted_secret,
-)
-from secrets_store import (
-    supported as _secret_storage_supported,
-)
-import contextlib
 
 _logger = logging.getLogger("database")
 if not _logger.handlers:
@@ -155,16 +148,11 @@ def _migration_v2(db: DB) -> None:
 
     # 3) Индексы. CREATE INDEX IF NOT EXISTS — идемпотентно на уровне SQLite.
     indexes = (
-        "CREATE INDEX IF NOT EXISTS idx_published_created_at "
-        "ON published_posts(created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
-        "ON published_posts(source_name, created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_skipped_created_at "
-        "ON skipped_posts(created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_skipped_reason "
-        "ON skipped_posts(reason)",
-        "CREATE INDEX IF NOT EXISTS idx_logs_type_timestamp "
-        "ON system_logs(type, timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_published_created_at ON published_posts(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_published_source_created_at ON published_posts(source_name, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_skipped_created_at ON skipped_posts(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_skipped_reason ON skipped_posts(reason)",
+        "CREATE INDEX IF NOT EXISTS idx_logs_type_timestamp ON system_logs(type, timestamp)",
     )
     with db.conn:
         for stmt in indexes:
@@ -422,16 +410,12 @@ class DB:
         """
         table_indexes = {
             "published_posts": (
-                "CREATE INDEX IF NOT EXISTS idx_published_created_at "
-                "ON published_posts(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
-                "ON published_posts(source_name, created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_published_created_at ON published_posts(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_published_source_created_at ON published_posts(source_name, created_at)",
             ),
             "skipped_posts": (
-                "CREATE INDEX IF NOT EXISTS idx_skipped_created_at "
-                "ON skipped_posts(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_skipped_reason "
-                "ON skipped_posts(reason)",
+                "CREATE INDEX IF NOT EXISTS idx_skipped_created_at ON skipped_posts(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_skipped_reason ON skipped_posts(reason)",
             ),
         }
         schema_version = self._get_schema_version()
@@ -501,10 +485,10 @@ class DB:
                     migration_fn(self)
                 self._set_schema_version(version)
                 _logger.info("[DB] Applied migration v%d", version)
-            except sqlite3.Error as e:
+            except sqlite3.Error:
                 # Не получилось — БД остаётся на старой версии, при следующем
                 # запуске миграция повторится.
-                _logger.error("[DB] Migration v%d failed: %s", version, e)
+                _logger.exception("[DB] Migration v%d failed", version)
                 raise
 
     def _create_initial_tables(self) -> None:
@@ -557,7 +541,7 @@ class DB:
         try:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(published_posts)").fetchall()]
         except sqlite3.Error as exc:
-            _logger.error("Could not inspect published_posts before legacy migration: %s", exc)
+            _logger.exception("Could not inspect published_posts before legacy migration")
             raise RuntimeError(
                 "Cannot inspect the legacy published_posts schema; database startup aborted."
             ) from exc
@@ -608,7 +592,7 @@ class DB:
                     )
                     _logger.info("Migrated published_posts to composite key")
             except sqlite3.Error as e:
-                _logger.error("Migration of published_posts failed; aborting startup: %s", e)
+                _logger.exception("Migration of published_posts failed; aborting startup")
                 raise RuntimeError(
                     "Legacy published_posts migration failed; refusing to run with an incompatible database."
                 ) from e
@@ -618,7 +602,7 @@ class DB:
         try:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(skipped_posts)").fetchall()]
         except sqlite3.Error as exc:
-            _logger.error("Could not inspect skipped_posts before legacy migration: %s", exc)
+            _logger.exception("Could not inspect skipped_posts before legacy migration")
             raise RuntimeError(
                 "Cannot inspect the legacy skipped_posts schema; database startup aborted."
             ) from exc
@@ -668,7 +652,7 @@ class DB:
                     )
                     _logger.info("Migrated skipped_posts to composite key")
             except sqlite3.Error as e:
-                _logger.error("Migration of skipped_posts failed; aborting startup: %s", e)
+                _logger.exception("Migration of skipped_posts failed; aborting startup")
                 raise RuntimeError(
                     "Legacy skipped_posts migration failed; refusing to run with an incompatible database."
                 ) from e
@@ -796,7 +780,7 @@ class DB:
                         self.conn.rollback()
                 except sqlite3.Error:
                     pass
-                _logger.error("set_settings batch failed (%d keys): %s", len(rows), exc)
+                _logger.exception("set_settings batch failed (%d keys)", len(rows))
                 raise RuntimeError("could not save settings batch; transaction rolled back") from exc
 
     def migrate_plaintext_secrets(self) -> int:
@@ -883,23 +867,22 @@ class DB:
                         (post_key,),
                     ).fetchone()
                 except sqlite3.Error as check_error:
-                    _logger.error(
-                        "save_post failed for %s/%s while checking duplicate: %s",
+                    _logger.exception(
+                        "save_post failed for %s/%s while checking duplicate",
                         source,
                         post_id,
-                        check_error,
                     )
                     raise DatabaseWriteError(
                         f"could not verify publication record for {source}/{post_id}"
                     ) from check_error
                 if existing:
                     return
-                _logger.error("save_post integrity failure for %s/%s: %s", source, post_id, exc)
+                _logger.exception("save_post integrity failure for %s/%s", source, post_id)
                 raise DatabaseWriteError(
                     f"could not record publication for {source}/{post_id}"
                 ) from exc
             except sqlite3.Error as exc:
-                _logger.error("save_post failed for %s/%s: %s", source, post_id, exc)
+                _logger.exception("save_post failed for %s/%s", source, post_id)
                 raise DatabaseWriteError(
                     f"could not record publication for {source}/{post_id}"
                 ) from exc
@@ -938,11 +921,10 @@ class DB:
                         self.conn.rollback()
                 except sqlite3.Error:
                     pass
-                _logger.error(
-                    "save_posts failed for group %s (%s IDs): %s",
+                _logger.exception(
+                    "save_posts failed for group %s (%s IDs)",
                     source,
                     len(post_ids),
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not record publication group for {source}"
@@ -1006,11 +988,10 @@ class DB:
                         self.conn.rollback()
                 except sqlite3.Error:
                     pass
-                _logger.error(
-                    "save_posts_with_followup failed for %s/%s: %s",
+                _logger.exception(
+                    "save_posts_with_followup failed for %s/%s",
                     source,
                     post_ids[0],
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not atomically record publication and text follow-up for {source}/{post_ids[0]}"
@@ -1138,11 +1119,10 @@ class DB:
                         self.conn.rollback()
                 except sqlite3.Error:
                     pass
-                _logger.error(
-                    "save_skipped_posts failed for group %s (%s IDs): %s",
+                _logger.exception(
+                    "save_skipped_posts failed for group %s (%s IDs)",
                     source,
                     len(post_ids),
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not record skipped group for {source}"
@@ -1164,32 +1144,29 @@ class DB:
                         (make_post_key(source, post_id),),
                     ).fetchone()
                 except sqlite3.Error as check_error:
-                    _logger.error(
-                        "save_skipped_post failed for %s/%s while checking duplicate: %s",
+                    _logger.exception(
+                        "save_skipped_post failed for %s/%s while checking duplicate",
                         source,
                         post_id,
-                        check_error,
                     )
                     raise DatabaseWriteError(
                         f"could not verify skipped record for {source}/{post_id}"
                     ) from check_error
                 if existing:
                     return
-                _logger.error(
-                    "save_skipped_post integrity failure for %s/%s: %s",
+                _logger.exception(
+                    "save_skipped_post integrity failure for %s/%s",
                     source,
                     post_id,
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not record skipped post for {source}/{post_id}"
                 ) from exc
             except sqlite3.Error as exc:
-                _logger.error(
-                    "save_skipped_post failed for %s/%s: %s",
+                _logger.exception(
+                    "save_skipped_post failed for %s/%s",
                     source,
                     post_id,
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not record skipped post for {source}/{post_id}"
@@ -1302,7 +1279,7 @@ class DB:
             "media_files", "media_kind", "category", "target_chat", "status",
             "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
         ]
-        return [dict(zip(columns, row)) for row in rows]
+        return [dict(zip(columns, row, strict=True)) for row in rows]
 
     def is_post_queued(self, source: str, post_id: int | str) -> bool:
         """Return whether a source post already has a durable queue entry."""
@@ -1332,7 +1309,7 @@ class DB:
             "media_files", "media_kind", "category", "target_chat", "status",
             "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
         ]
-        return dict(zip(columns, row))
+        return dict(zip(columns, row, strict=True))
 
     def update_queued_post(self, post_id: int, changes: dict) -> bool:
         allowed = {
@@ -1376,7 +1353,7 @@ class DB:
             "media_files", "media_kind", "category", "target_chat", "status",
             "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
         ]
-        return [dict(zip(columns, row)) for row in rows]
+        return [dict(zip(columns, row, strict=True)) for row in rows]
 
     def count_queued_posts(self) -> dict[str, int]:
         """Счётчики постов по статусам для панели."""
@@ -1431,7 +1408,7 @@ class DB:
         self.update_queued_post(post_id, {"media_files": "[]", "media_kind": ""})
         return names
 
-    def total_media_size(self) -> tuple[int, list]:
+    def total_media_size(self) -> tuple[int, list[tuple[Any, Any]]]:
         """Суммарный размер и количество медиафайлов очереди (для оценки места)."""
         with self._lock:
             cur = self.conn.cursor()
@@ -1496,7 +1473,7 @@ class DB:
                         ["(" + " OR ".join(["type LIKE ?"] * len(types)) + ")"]
                     )
                     + " AND timestamp >= ?",
-                    tuple(list(f"{t}%" for t in types) + [since_iso]),
+                    tuple([f"{t}%" for t in types] + [since_iso]),
                 )
             row = cur.fetchone()
             return int(row[0]) if row else 0

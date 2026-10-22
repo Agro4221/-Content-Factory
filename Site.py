@@ -19,11 +19,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from deps import check_and_install_dependencies
 
-check_and_install_dependencies()
-
 from config import (
     ADMIN_HTML_PATH,
     API_LOG_LEVEL,
+    AI_REQUEST_TIMEOUT_S,
+    AI_TIMEOUT_MAX_S,
+    AI_TIMEOUT_MIN_S,
     BASE_DIR,
     BUNDLE_DIR,
     DEFAULT_LOCAL_AI_PROVIDER,
@@ -263,6 +264,19 @@ def _normalize_validated_setting(key: str, value) -> str:
             max_value=POLL_DELAY_MAX,
         )
 
+    if key == "ai_timeout":
+        if not raw:
+            # Пустое поле = «использовать значение приложения по умолчанию».
+            # Значение по умолчанию намеренно не записывается в базу: иначе
+            # после первого сохранения настройка из .env перестала бы влиять.
+            return ""
+        return _normalize_int_range(
+            "ai_timeout",
+            raw,
+            min_value=AI_TIMEOUT_MIN_S,
+            max_value=AI_TIMEOUT_MAX_S,
+        )
+
     if key == "local_ai_provider":
         normalized = raw.strip().lower()
         if not normalized:
@@ -304,12 +318,12 @@ def _normalize_validated_setting(key: str, value) -> str:
         else:
             try:
                 ipaddress.ip_address(host_value)
-            except ValueError:
+            except ValueError as exc:
                 if ":" in host_value or not re.fullmatch(r"[A-Za-z0-9.-]+", host_value):
                     raise SettingsValidationError(
                         field=key,
                         msg="local_host должен быть корректным именем хоста или IP-адресом.",
-                    )
+                    ) from exc
         return raw
 
     if key == "remote_url":
@@ -534,7 +548,9 @@ async def api_get_settings_defaults() -> dict:
     """Рекомендуемые значения настроек, которые можно вернуть одним нажатием."""
     return {
         "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "ai_timeout": AI_REQUEST_TIMEOUT_S,
     }
+
 
 @app.get("/api/settings")
 async def api_get_settings(module: str | None = Query(default=None)) -> dict:
@@ -1407,6 +1423,11 @@ async def _api_startup_tasks() -> None:
 
 if __name__ == "__main__":
     import uvicorn
+
+    # Зависимости проверяются только в точке входа. Вызов на этапе импорта
+    # мог перезапустить процесс (os.execv) внутри pytest или другого
+    # приложения, которое импортирует Site.
+    check_and_install_dependencies()
 
     from config import API_HOST, API_PORT
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level=API_LOG_LEVEL)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import ipaddress
 import re
 from typing import Any
@@ -11,7 +12,6 @@ from urllib.parse import parse_qs, quote, urlsplit
 import aiohttp
 
 from config import MAX_PROXY_PORT, MIN_PROXY_PORT
-import contextlib
 
 try:
     from aiohttp_socks import ProxyConnector
@@ -157,7 +157,9 @@ async def _test_http(
                 if resp.status < 500:
                     return True, "Соединение установлено"
                 return False, f"Прокси ответил с кодом {resp.status}"
-    except TimeoutError as exc:
+    except TimeoutError:
+        # Таймаут не маскируем под «прокси отказал»: пусть вызывающий код
+        # отличит отсутствие ответа от явного отказа соединения.
         raise
     except aiohttp.ClientHttpProxyError as exc:
         if getattr(exc, "status", None) == 407:

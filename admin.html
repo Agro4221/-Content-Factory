@@ -1074,11 +1074,16 @@
             <span class="switch-track"></span>
             <span class="switch-text">
               <span class="switch-title">Подключать через прокси</span>
-              <span class="switch-desc">Все запросы к Telegram и AI будут идти через указанный сервер.</span>
+              <span class="switch-desc">Нужно, если Telegram тормозит или обрывается. Без прокси бот работает напрямую.</span>
             </span>
           </label>
           <div class="field-hint" id="proxy-disabled-hint" style="margin-top:10px;">
             Параметры подключения появятся ниже после включения прокси.
+          </div>
+          <div class="field-hint" style="margin-top:6px;">
+            Что пойдёт через прокси, зависит от типа: HTTP и SOCKS закрывают весь внешний
+            трафик (чтение каналов, публикация, облачный ИИ), а MTProto — только чтение каналов.
+            Локальный ИИ на своём компьютере через прокси не ходит в любом случае.
           </div>
         </div>
       </div>
@@ -1505,6 +1510,25 @@ const SECRET_CLEAR_SIGNAL = '__clear__';
 const SECRET_FIELDS = ['f-tg_api_hash', 'f-bot_token', 'f-remote_api_key', 'f-proxy_pass', 'f-mtproto_key'];
 const pendingSecretClear = new Set();
 
+// ---------- Значения по умолчанию ----------
+// Приходят с сервера: применяются, если пользователь ещё не сохранил
+// соответствующую настройку. Держатся в одном месте, чтобы значения
+// в панели и в приложении не расходились.
+const DEFAULTS = { ai_timeout: '' };
+
+async function loadDefaults(){
+  try {
+    const res = await fetch(API + '/api/settings/defaults');
+    if (!res.ok) return;
+    const j = await res.json();
+    if (j && j.ai_timeout !== undefined && j.ai_timeout !== null){
+      DEFAULTS.ai_timeout = String(j.ai_timeout);
+    }
+  } catch (e){
+    // Дефолт необязателен: при недоступности сервера панель останется рабочей.
+  }
+}
+
 function applySecretState(fieldId, savedValue){
   const input = $id(fieldId);
   if (!input) return;
@@ -1689,7 +1713,7 @@ function fillSettings(s){
     'proxy_host':'f-proxy_host','proxy_port':'f-proxy_port','proxy_user':'f-proxy_user','proxy_pass':'f-proxy_pass',
     'mtproto_key':'f-mtproto_key','ads_words':'f-ads_words','watermark_text':'f-watermark_text',
     'publish_mode':'publish_mode_auto','media_retention_days':'f-media_retention_days',
-      'ai_timeout':'f-ai_timeout'
+    'ai_timeout':'f-ai_timeout'
   };
   for (const [key, elId] of Object.entries(map)){
     const el = $id(elId);
@@ -1737,6 +1761,13 @@ function fillSettings(s){
       const has = Array.from(el.options).some(o => o.value === norm);
       el.value = has ? norm : 'http';
       onProxyTypeChange();
+      continue;
+    }
+    if (key === 'ai_timeout'){
+      // В базе значения может ещё не быть — показываем дефолт приложения,
+      // чтобы поле не выглядело пустым и не сбрасывалось на 0.
+      const raw = String(val == null ? '' : val).trim();
+      el.value = raw || DEFAULTS.ai_timeout || el.value || '';
       continue;
     }
     el.value = val || '';
@@ -2539,10 +2570,10 @@ function onProxyTypeChange(){
 
   if (typeHint){
     typeHint.textContent = type === 'mtproto'
-      ? 'MTProto — только чтение каналов. Публикация идёт напрямую: Bot API не поддерживает MTProto.'
+      ? 'MTProto — только чтение каналов. Публикация и запросы к облачному ИИ идут напрямую: MTProxy не пропускает обычный HTTPS.'
       : (type === 'http'
-        ? 'HTTP-прокси применяется и к чтению каналов, и к публикации.'
-        : 'SOCKS-прокси применяется и к чтению каналов, и к публикации.');
+        ? 'HTTP-прокси применяется ко всему внешнему трафику: чтение каналов, публикация и запросы к облачному ИИ.'
+        : 'SOCKS-прокси применяется ко всему внешнему трафику: чтение каналов, публикация и запросы к облачному ИИ.');
   }
   if (hostHint){
     hostHint.textContent = type === 'mtproto'
@@ -2597,13 +2628,12 @@ if (addTopicBtn) addTopicBtn.addEventListener('click', () => {
   updateSaveState();
 });
 updateSaveState();
-refreshAll();
+// Дефолты загружаем до первой отрисовки настроек, иначе поле таймаута
+// показало бы пустое значение.
+loadDefaults().then(refreshAll);
 setInterval(refreshAll, 15000);
 loadLogs();
 setInterval(loadLogs, 20000);
-</script>
-</body>
-</html>
 
 async function restoreDefaultPrompt(){
   const btn = $id('btn-default-prompt');
@@ -2628,3 +2658,6 @@ async function restoreDefaultPrompt(){
     if (btn) btn.disabled = false;
   }
 }
+</script>
+</body>
+</html>

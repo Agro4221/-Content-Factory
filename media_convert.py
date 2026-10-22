@@ -11,11 +11,11 @@ Telegram Bot API принимает в `sendVideo` только MP4 (H.264). Ф�
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
 import sys
-import contextlib
 
 #: Расширения, которые нужно приводить к MP4 перед отправкой в Telegram.
 CONVERTIBLE_VIDEO_EXTENSIONS = {

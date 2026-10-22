@@ -27,9 +27,9 @@ def test_http_proxy_credentials_are_percent_encoded(
         "mtproto_key": "",
     }
 
-    _, _, bot_session = main._setup_proxy(cfg)
+    setup = main._setup_proxy(cfg)
 
-    assert bot_session is not None
+    assert setup.bot_session is not None
     assert proxy_urls == [
         "http://name%40domain:p%40ss%3A%2F%3F%23%25@proxy.example:3128"
     ]

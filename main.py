@@ -50,6 +50,7 @@ import sys
 import threading
 import time
 import webbrowser
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import ClassVar
 from urllib.parse import quote, urlsplit
@@ -436,6 +437,35 @@ class ProxyConfigurationError(RuntimeError):
     """Enabled proxy settings cannot be applied safely."""
 
 
+@dataclass(frozen=True)
+class ProxySetup:
+    """Как именно применяется включённый прокси.
+
+    Прокси в проекте не один: разные виды трафика уходят разными
+    протоколами, и не каждый вид прокси умеет их все.
+
+    * ``telethon_proxy`` — параметры для TelegramClient (чтение каналов).
+    * ``mtproto_kwargs`` — параметры для TelegramClient в режиме MTProto.
+    * ``bot_session`` — сессия aiogram для Bot API (публикация).
+    * ``ai_proxy_url`` — адрес прокси для запросов к ИИ. ``None`` означает,
+      что эти запросы идут напрямую (MTProxy не умеет HTTP).
+    * ``ai_proxy_kind`` — ``"http"``, ``"socks"`` или ``None``.
+    * ``covers_all_traffic`` — True, если через прокси уходит весь внешний
+      трафик. Панель показывает это пользователю.
+    """
+
+    telethon_proxy: dict | None = None
+    mtproto_kwargs: dict | None = None
+    bot_session: AiohttpSession | None = None
+    ai_proxy_url: str | None = None
+    ai_proxy_kind: str | None = None
+
+    @property
+    def covers_all_traffic(self) -> bool:
+        """True, если через прокси идёт и трафик к ИИ, и трафик Telegram."""
+        return self.ai_proxy_url is not None and self.mtproto_kwargs is None
+
+
 def _make_socks_session(cfg: dict) -> AiohttpSession:
     if not _HAS_SOCKS:
         raise ProxyConfigurationError(
@@ -557,11 +587,11 @@ def _load_config() -> dict:
     else:
         try:
             ipaddress.ip_address(host_value)
-        except ValueError:
+        except ValueError as exc:
             if ":" in host_value or not re.fullmatch(r"[A-Za-z0-9.-]+", host_value):
                 raise ValueError(
                     "local_host должен быть корректным именем хоста или IP-адресом."
-                )
+                ) from exc
     if local_port is None:
         raise ValueError("local_port должен быть целым числом от 1 до 65535.")
 
@@ -695,9 +725,9 @@ def _load_config() -> dict:
     }
 
 
-def _setup_proxy(cfg: dict) -> tuple[dict | None, dict | None, AiohttpSession | None]:
+def _setup_proxy(cfg: dict) -> ProxySetup:
     if not cfg["use_proxy"]:
-        return None, None, None
+        return ProxySetup()
 
     try:
         cfg = normalize_mtproto_proxy_link(cfg)
@@ -737,9 +767,10 @@ def _setup_proxy(cfg: dict) -> tuple[dict | None, dict | None, AiohttpSession | 
             ) from exc
         db.add_log(
             "WARN-300",
-            "MTProto-прокси применяется только для чтения каналов; бот-отправщик подключается напрямую.",
+            "MTProto-прокси применяется только для чтения каналов; бот-отправщик "
+            "и запросы к ИИ подключаются напрямую.",
         )
-        return None, mtproto_kwargs, None
+        return ProxySetup(mtproto_kwargs=mtproto_kwargs)
     if proxy_type not in ("http", "socks5", "socks4"):
         raise ProxyConfigurationError(
             f"Неподдерживаемый тип прокси: {proxy_type!r}. Прямое подключение не будет использоваться."
@@ -766,10 +797,63 @@ def _setup_proxy(cfg: dict) -> tuple[dict | None, dict | None, AiohttpSession | 
             raise ProxyConfigurationError(
                 f"Не удалось инициализировать HTTP-прокси: {exc}. Прямое подключение не будет использоваться."
             ) from exc
-    else:
-        bot_session = _make_socks_session(cfg)
+        return ProxySetup(
+            telethon_proxy=telethon_proxy,
+            bot_session=bot_session,
+            ai_proxy_url=proxy_url,
+            ai_proxy_kind="http",
+        )
 
-    return telethon_proxy, None, bot_session
+    bot_session = _make_socks_session(cfg)
+    return ProxySetup(
+        telethon_proxy=telethon_proxy,
+        bot_session=bot_session,
+        ai_proxy_url=_socks_proxy_url(cfg),
+        ai_proxy_kind="socks",
+    )
+
+
+def _socks_proxy_url(cfg: dict) -> str:
+    """Адрес SOCKS-прокси в виде URL для клиента aiohttp."""
+    proxy_type = (cfg.get("proxy_type") or "socks5").strip().lower()
+    host = (cfg.get("proxy_host") or "").strip()
+    port = _validate_port(str(cfg.get("proxy_port") or ""))
+    if port is None:
+        raise ProxyConfigurationError("Для SOCKS-прокси нужны корректные host и port.")
+    user = cfg.get("proxy_user") or ""
+    password = cfg.get("proxy_pass") or ""
+    auth = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@" if (user or password) else ""
+    url_host = format_proxy_host(host)
+    return f"{proxy_type}://{auth}{url_host}:{port}"
+
+
+def _make_ai_session(proxy: ProxySetup, timeout: int) -> aiohttp.ClientSession:
+    """Сессия для запросов к ИИ.
+
+    Через прокси уходит весь внешний трафик, если прокси это умеет
+    (HTTP или SOCKS). Для MTProxy это невозможно: протокол MTProxy
+    пропускает только Telegram-трафик, обычный HTTPS через него не идёт.
+    """
+    client_timeout = aiohttp.ClientTimeout(total=timeout)
+    if not proxy.ai_proxy_url:
+        return aiohttp.ClientSession(timeout=client_timeout)
+
+    if proxy.ai_proxy_kind == "http":
+        return aiohttp.ClientSession(timeout=client_timeout, proxy=proxy.ai_proxy_url)
+
+    # SOCKS: aiohttp сам по себе SOCKS не поддерживает, нужен коннектор
+    # из aiohttp-socks — того же пакета, что используется для Bot API.
+    if not _HAS_SOCKS:
+        raise ProxyConfigurationError(
+            "Для SOCKS-прокси нужен пакет aiohttp-socks; запросы к ИИ не пойдут через прокси."
+        )
+    try:
+        connector = SocksConnector.from_url(proxy.ai_proxy_url)
+    except Exception as exc:
+        raise ProxyConfigurationError(
+            f"Не удалось инициализировать SOCKS-подключение для ИИ: {exc}"
+        ) from exc
+    return aiohttp.ClientSession(timeout=client_timeout, connector=connector)
 
 # ==========================================
 # ОБРАБОТКА ПОСТОВ
@@ -1271,7 +1355,7 @@ async def _process_message_group(
             f"Пост {source}/{messages[0].id}: пересказ не связан с исходным "
             "текстом, опубликован исходный текст поста.",
         )
-        print(f"!!! Перескав не связан с оригиналом для {source}/{messages[0].id}; публикуем исходный текст.")
+        print(f"!!! Пересказ не связан с оригиналом для {source}/{messages[0].id}; публикуем исходный текст.")
         topic, final_text = "общее", raw_text
 
     if cfg["watermark"]:
@@ -2270,7 +2354,7 @@ async def main() -> None:
             continue
 
         try:
-            telethon_proxy, mtproto_kwargs, bot_session = _setup_proxy(cfg)
+            proxy = _setup_proxy(cfg)
         except ProxyConfigurationError as proxy_error:
             db.add_log("ERR-302", f"Невозможно запустить парсер: {proxy_error}")
             print(f"!!! [ERR-302] {proxy_error}")
@@ -2284,7 +2368,7 @@ async def main() -> None:
         try:
             bot = Bot(
                 token=cfg["bot_token"],
-                session=bot_session,
+                session=proxy.bot_session,
                 default=DefaultBotProperties(parse_mode="HTML"),
             )
             # Drain text tails left by a successful media send before scanning
@@ -2292,22 +2376,22 @@ async def main() -> None:
             await _retry_pending_text_followups(bot)
             if not bot_running.is_set():
                 continue
-            if mtproto_kwargs:
+            if proxy.mtproto_kwargs:
                 client = TelegramClient(
                     SESSION_PATH,
                     cfg["api_id"],
                     cfg["api_hash"],
-                    **mtproto_kwargs,
+                    **proxy.mtproto_kwargs,
                 )
             else:
                 client = TelegramClient(
                     SESSION_PATH,
                     cfg["api_id"],
                     cfg["api_hash"],
-                    proxy=telethon_proxy,
+                    proxy=proxy.telethon_proxy,
                 )
-            ai_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S)
+            ai_session = _make_ai_session(
+                proxy, cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
             )
 
             session_file = SESSION_PATH + ".session"
@@ -2390,8 +2474,10 @@ async def main() -> None:
                 )
             if bot is not None and getattr(bot, "session", None):
                 closers.append(lambda current_bot=bot: current_bot.session.close())
-            elif bot_session is not None:
-                closers.append(lambda current_session=bot_session: current_session.close())
+            elif proxy.bot_session is not None:
+                closers.append(
+                    lambda current_session=proxy.bot_session: current_session.close()
+                )
             if ai_session is not None and not ai_session.closed:
                 closers.append(lambda current_ai=ai_session: current_ai.close())
 

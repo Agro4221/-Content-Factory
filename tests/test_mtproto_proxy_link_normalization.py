@@ -115,11 +115,11 @@ def test_runtime_setup_normalizes_mtproto_url_before_validating_port(monkeypatch
         "mtproto_key": "",
     }
 
-    telethon_proxy, mtproto_kwargs, bot_session = main._setup_proxy(cfg)
+    setup = main._setup_proxy(cfg)
 
-    assert telethon_proxy is None
-    assert mtproto_kwargs is not None
-    assert bot_session is None
+    assert setup.telethon_proxy is None
+    assert setup.mtproto_kwargs is not None
+    assert setup.bot_session is None
     assert captured == [("proxy.example", 443, SECRET)]
 
 def test_proxy_checker_normalizes_legacy_saved_mtproto_link(monkeypatch) -> None:
