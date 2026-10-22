@@ -8,7 +8,8 @@ import re
 from pathlib import Path
 
 PATH = str(Path(__file__).resolve().parents[1] / "admin.html")
-html = open(PATH, encoding="utf-8").read()
+with open(PATH, encoding="utf-8") as _admin_file:
+    html = _admin_file.read()
 # В документе несколько блоков <script>: основной логики — самый крупный.
 script_blocks = re.findall(r"<script>(.*?)</script>", html, re.DOTALL)
 script = max(script_blocks, key=len) if script_blocks else ""

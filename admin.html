@@ -464,6 +464,14 @@
     font-size: 12px; color: var(--text-2); background: var(--surface);
   }
   .post-media a:hover { border-color: var(--accent); color: var(--accent); }
+  .post-media-remove {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; padding: 0;
+    border: 1px solid var(--border-strong); border-radius: var(--radius);
+    background: var(--surface); color: var(--text-2); cursor: pointer;
+  }
+  .post-media-remove:hover { border-color: var(--danger); color: var(--danger); }
+  .post-media-attach { align-self: center; }
   .post-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
   .post-edit { display: grid; gap: 10px; margin-top: 12px; padding: 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
   .post-edit .grid { gap: 12px; }
@@ -2194,6 +2202,57 @@ async function loadPosts(){
   }
 }
 
+// ---------- Медиа поста: удаление и загрузка ----------
+async function removePostMedia(postId, index, item){
+  if (!window.confirm('Убрать этот файл из поста? Файл будет удалён с диска.')) return;
+  try {
+    const res = await fetch(API + '/api/posts/' + postId + '/media/' + index, {method: 'DELETE'});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok){
+      toast(j.msg || j.detail || 'Не удалось убрать медиа.', 'err');
+      return;
+    }
+    toast('Медиа убрано из поста.', 'success');
+    await loadPosts();
+  } catch (e){
+    toast('Не удалось убрать медиа: ' + e, 'err');
+  }
+}
+
+function pickPostMedia(postId, item){
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    await uploadPostMedia(postId, file);
+  });
+  input.click();
+}
+
+async function uploadPostMedia(postId, file){
+  const toastEl = toast('Загружаю файл…', 'info');
+  try {
+    const res = await fetch(
+      API + '/api/posts/' + postId + '/media?name=' + encodeURIComponent(file.name),
+      {
+        method: 'POST',
+        headers: {'Content-Type': file.type || 'application/octet-stream'},
+        body: file
+      }
+    );
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok){
+      toast(j.msg || j.detail || 'Не удалось загрузить файл.', 'err');
+      return;
+    }
+    toast('Файл прикреплён к посту.', 'success');
+    await loadPosts();
+  } catch (e){
+    toast('Не удалось загрузить файл: ' + e, 'err');
+  }
+}
+
 function renderPosts(data){
   const list = $id('posts-list');
   const counter = $id('posts-count');
@@ -2254,24 +2313,42 @@ function buildPostItem(post){
     item.appendChild(err);
   }
 
-  if (post.media_count > 0){
-    const media = document.createElement('div');
-    media.className = 'post-media';
-    const marker = post.media_marker || '';
-    for (let i = 0; i < post.media_count; i++){
-      const link = document.createElement('a');
-      link.href = API + '/api/posts/' + post.id + '/media/' + i;
-      link.target = '_blank';
-      link.rel = 'noopener';
-      // В подсказке — метка поста: видно, какому посту принадлежит файл.
-      link.title = marker
-        ? 'Медиа ' + (i + 1) + ' — пост ' + marker
-        : 'Медиа ' + (i + 1);
-      link.innerHTML = '<svg class="icon icon-sm"><use href="#i-file-text"/></svg>Медиа ' + (i + 1);
-      media.appendChild(link);
+  const media = document.createElement('div');
+  media.className = 'post-media';
+  const marker = post.media_marker || '';
+  const editableMedia = post.status !== 'published' && post.status !== 'cancelled';
+  for (let i = 0; i < post.media_count; i++){
+    const link = document.createElement('a');
+    link.href = API + '/api/posts/' + post.id + '/media/' + i;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    // В подсказке — метка поста: видно, какому посту принадлежит файл.
+    link.title = marker
+      ? 'Медиа ' + (i + 1) + ' — пост ' + marker
+      : 'Медиа ' + (i + 1);
+    link.innerHTML = '<svg class="icon icon-sm"><use href="#i-file-text"/></svg>Медиа ' + (i + 1);
+    media.appendChild(link);
+
+    if (editableMedia){
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'post-media-remove';
+      remove.title = 'Убрать медиа из поста';
+      remove.setAttribute('aria-label', 'Убрать медиа ' + (i + 1));
+      remove.innerHTML = '<svg class="icon icon-sm"><use href="#i-x"/></svg>';
+      remove.addEventListener('click', () => removePostMedia(post.id, i, item));
+      media.appendChild(remove);
     }
-    item.appendChild(media);
   }
+  if (editableMedia){
+    const attach = document.createElement('button');
+    attach.type = 'button';
+    attach.className = 'btn btn-secondary btn-sm post-media-attach';
+    attach.innerHTML = '<svg class="icon icon-sm"><use href="#i-plus"/></svg>Прикрепить медиа';
+    attach.addEventListener('click', () => pickPostMedia(post.id, item));
+    media.appendChild(attach);
+  }
+  item.appendChild(media);
 
   const actions = document.createElement('div');
   actions.className = 'post-actions';

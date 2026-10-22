@@ -16,9 +16,10 @@ PROJECT = str(Path(__file__).resolve().parents[1])
 
 sys.path.insert(0, PROJECT)
 
+import contextlib
+
 import secrets_store
 from database import DB
-import contextlib
 
 FAKE_TOKEN = "123456789:AAFakeTokenForMigrationCheckNotARealToken"
 FAKE_AI_KEY = "sk-fake-key-for-migration-check"

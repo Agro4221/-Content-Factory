@@ -5,6 +5,7 @@ FastAPI-приложение: HTML-админка, JSON API для управл�
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import os
@@ -17,15 +18,15 @@ import aiohttp
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from deps import check_and_install_dependencies
-
 import api_security
+import media_marker
+import routing
 from config import (
     ADMIN_HTML_PATH,
-    API_LOG_LEVEL,
     AI_REQUEST_TIMEOUT_S,
     AI_TIMEOUT_MAX_S,
     AI_TIMEOUT_MIN_S,
+    API_LOG_LEVEL,
     BASE_DIR,
     BUNDLE_DIR,
     DEFAULT_LOCAL_AI_PROVIDER,
@@ -45,16 +46,14 @@ from config import (
     normalize_target_chat,
 )
 from database import format_display_timestamp, get_db
+from deps import check_and_install_dependencies
 from proxy_check import (
     check_proxy,
     decode_mtproto_secret_full,
     normalize_mtproto_proxy_link,
     resolve_proxy_type,
 )
-import media_marker
-import routing
 from state import bot_running
-import contextlib
 
 db = get_db()
 # Документация API отключена: локальный сервер не должен отдавать схему
@@ -1010,6 +1009,18 @@ async def api_proxy_test(request: Request) -> dict:
 POST_STATUSES = {"draft", "scheduled", "published", "cancelled", "failed"}
 POST_MEDIA_DIR = "queue_media"
 
+#: Расширения файлов, которые разрешено прикреплять к посту. Ровно те же,
+#: что Telegram принимает в постах.
+ALLOWED_MEDIA_EXTENSIONS = frozenset({
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".heic",
+    ".mp4", ".mov", ".mkv", ".webm", ".avi",
+    ".pdf", ".txt", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".zip", ".rar", ".7z", ".csv", ".json", ".xml",
+})
+
+#: Предельный размер прикрепляемого файла — как в Telegram.
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 
 def _post_row_to_dict(row: dict) -> dict:
     """Готовит запись очереди к отдаче в панель."""
@@ -1241,6 +1252,107 @@ async def api_get_post_media(post_id: int, index: int) -> FileResponse:
     if not os.path.isfile(full):
         raise HTTPException(status_code=404, detail="Медиафайл не найден.")
     return FileResponse(full)
+
+
+@app.post("/api/posts/{post_id}/media")
+async def api_add_post_media(post_id: int, request: Request) -> dict:
+    """Прикрепляет файл к посту в очереди.
+
+    Файл приходит телом запроса, имя — параметром ``name``. Так не нужна
+    дополнительная библиотека для разбора multipart-форм.
+    """
+    row = db.get_queued_post(post_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Пост не найден.")
+    status = str(row.get("status") or "")
+    if status in {"published", "cancelled"}:
+        raise HTTPException(status_code=409, detail="К этому посту уже нельзя прикреплять медиа.")
+
+    raw_name = str(request.query_params.get("name") or "").strip()
+    safe_name = os.path.basename(raw_name.replace("\\", "/"))
+    if not safe_name or safe_name != raw_name:
+        raise HTTPException(status_code=400, detail="Некорректное имя файла.")
+    extension = os.path.splitext(safe_name)[1].lower()
+    if extension not in ALLOWED_MEDIA_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Такой тип файла не поддерживается: {extension or 'без расширения'}.",
+        )
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Файл пуст.")
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Файл больше {MAX_UPLOAD_BYTES // (1024 * 1024)} МБ — Telegram столько не примет.",
+        )
+
+    try:
+        files = json.loads(row.get("media_files") or "[]")
+    except (TypeError, ValueError):
+        files = []
+    if not isinstance(files, list):
+        files = []
+
+    media_dir = os.path.join(BASE_DIR, POST_MEDIA_DIR)
+    os.makedirs(media_dir, exist_ok=True)
+    marker = media_marker.media_marker(
+        row.get("source_name") or "", row.get("post_id") or ""
+    )
+    file_name = media_marker.media_file_name(
+        marker, int(time.time() * 1000), len(files), extension
+    )
+    try:
+        with open(os.path.join(media_dir, file_name), "wb") as handle:
+            handle.write(body)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить файл: {exc}") from exc
+
+    files.append(file_name)
+    db.update_queued_post(
+        post_id,
+        {"media_files": json.dumps(files, ensure_ascii=False)},
+    )
+    db.add_log("OK-514", f"К посту {post_id} прикреплён файл {safe_name}.")
+    updated = db.get_queued_post(post_id)
+    return {
+        "status": "success",
+        "file": safe_name,
+        "post": _post_row_to_dict(updated) if updated else {},
+    }
+
+
+@app.delete("/api/posts/{post_id}/media/{index}")
+async def api_delete_post_media(post_id: int, index: int) -> dict:
+    """Убирает один медиафайл из поста."""
+    row = db.get_queued_post(post_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Пост не найден.")
+    status = str(row.get("status") or "")
+    if status in {"published", "cancelled"}:
+        raise HTTPException(status_code=409, detail="Медиа опубликованного поста менять нельзя.")
+
+    try:
+        files = json.loads(row.get("media_files") or "[]")
+    except (TypeError, ValueError):
+        files = []
+    if not isinstance(files, list) or index < 0 or index >= len(files):
+        raise HTTPException(status_code=404, detail="Медиафайл не найден.")
+
+    removed_name = str(files.pop(index) or "")
+    changes: dict = {"media_files": json.dumps(files, ensure_ascii=False)}
+    if not files:
+        changes["media_kind"] = ""
+    db.update_queued_post(post_id, changes)
+    _delete_media_files([removed_name])
+    db.add_log("OK-514", f"У поста {post_id} удалён медиафайл {removed_name}.")
+    updated = db.get_queued_post(post_id)
+    return {
+        "status": "success",
+        "removed": removed_name,
+        "post": _post_row_to_dict(updated) if updated else {},
+    }
 
 
 @app.post("/api/posts/{post_id}/publish")

@@ -40,6 +40,7 @@ check_and_install_dependencies()
 # ОСНОВНОЙ КОД БОТА
 # ==========================================
 import asyncio
+import contextlib
 import html
 import ipaddress
 import json
@@ -134,7 +135,6 @@ from proxy_check import (
 )
 from Site import app
 from state import bot_running
-import contextlib
 
 try:
     from aiohttp_socks import ProxyConnector as SocksConnector  # noqa: F401
@@ -1081,7 +1081,13 @@ def _save_post_to_queue(
 
     # Прежние копии медиа этого поста больше не нужны: база сейчас получит
     # новый список файлов, а старые иначе остались бы в queue_media навсегда.
-    previous = db.get_queued_post_by_source(source, messages[0].id)
+    previous = None
+    getter = getattr(db, "get_queued_post_by_source", None)
+    if callable(getter):
+        try:
+            previous = getter(source, messages[0].id)
+        except Exception:
+            previous = None
     if previous:
         _remove_stale_queue_media(previous.get("media_files"), media_files)
 
@@ -1353,6 +1359,79 @@ async def _publish_due_scheduled_posts(bot: Bot) -> int:
     return published
 
 
+def _mark_queue_entry_published(source: str, messages: list[Message]) -> None:
+    """Помечает черновик в очереди как опубликованный.
+
+    Пост мог остаться в очереди после сбоя. Когда он всё же ушёл, запись
+    должна исчезнуть из списка ожидающих: иначе пользователь отправит
+    его повторно и получит дубль в канале.
+    """
+    getter = getattr(db, "get_queued_post_by_source", None)
+    updater = getattr(db, "update_queued_post", None)
+    if not callable(getter) or not callable(updater):
+        return
+    for message in messages:
+        try:
+            row = getter(source, message.id)
+        except Exception:
+            return
+        if not row:
+            continue
+        status = str(row.get("status") or "")
+        if status in {"published", "cancelled"}:
+            continue
+        try:
+            updater(
+                row["id"],
+                {
+                    "status": "published",
+                    "published_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_error": "",
+                },
+            )
+        except Exception:
+            continue
+
+
+def _keep_post_for_manual_publish(
+    source: str,
+    messages: list[Message],
+    text: str,
+    target_chats: list[str],
+    tags: list[str],
+    reason: str,
+) -> bool:
+    """Кладёт пост в очередь, чтобы его можно было отправить вручную.
+
+    Используется, когда автоматическая отправка не удалась: контент не
+    должен пропадать. Запись в очереди пользователь увидит в разделе
+    «Посты» и сможет отправить её вручную, когда проблема исчезнет.
+    """
+    try:
+        queue_id = _save_post_to_queue(
+            source, messages, text, list(target_chats), ", ".join(tags), [], []
+        )
+        if not queue_id:
+            return False
+        db.update_queued_post(queue_id, {"last_error": reason})
+        db.add_log(
+            "WARN-408",
+            f"Пост {source}/{messages[0].id} сохранён в очереди для ручной отправки: {reason}",
+        )
+        print(
+            f"--> Пост {source}/{messages[0].id} сохранён в очереди; "
+            "отправьте его вручную в разделе «Посты»."
+        )
+        return True
+    except Exception as exc:
+        db.add_log(
+            "ERR-510",
+            f"Не удалось сохранить пост {source}/{messages[0].id} в очередь: {exc}",
+        )
+        print(f"!!! Не удалось сохранить пост {source}/{messages[0].id} в очередь: {exc}")
+        return False
+
+
 def _post_publish_attempts(post: dict) -> int:
     """Сколько раз уже пытались опубликовать пост."""
     try:
@@ -1368,17 +1447,24 @@ async def _queue_source_draft_after_ai_failure(
     cfg: dict,
     reason: str,
 ) -> bool:
-    """Keep a source post visible in the manual queue when its AI rewrite fails."""
-    if (cfg.get("publish_mode") or "auto") != "manual":
-        return False
+    """Сохраняет пост в очередь, когда отправить его сейчас не получилось.
 
-    topic = "общее"
-    target_chat = (cfg.get("topic_channels") or {}).get(topic) or ""
-    if target_chat:
+    Черновик нужен в любом режиме: пока ИИ недоступен или Telegram
+    отклоняет отправку, пост не должен пропадать. В очереди он ждёт, и
+    пользователь может отправить его вручную из панели, когда всё
+    наладится.
+    """
+    routes = _effective_tag_routes(cfg)
+    # Канал для черновика: запасной маршрут (тег «общее»). Без него
+    # пользователь укажет канал вручную в панели.
+    target_chats: list[str] = []
+    for chat in routing.fallback_channels(routes):
         try:
-            target_chat = _target_chat_id(target_chat)
+            resolved = _target_chat_id(chat)
         except Exception:
-            target_chat = ""
+            continue
+        if resolved:
+            target_chats.append(resolved)
 
     media_list: list = []
     temp_paths: list[str] = []
@@ -1393,7 +1479,7 @@ async def _queue_source_draft_after_ai_failure(
 
     try:
         queue_id = _save_post_to_queue(
-            source, messages, raw_text, target_chat, topic, media_list, temp_paths
+            source, messages, raw_text, target_chats, "общее", media_list, temp_paths
         )
         if not queue_id:
             raise RuntimeError("database returned an empty queue ID")
@@ -1734,12 +1820,18 @@ async def _process_message_group(
                 # malformed payload). Never turn a delivery failure into a permanent
                 # skip: stop the loop and leave the post pending for a deliberate retry.
                 bot_running.clear()
+                # Пост не должен пропасть: сохраняем его в очередь, чтобы
+                # после исправления отправить вручную из панели.
+                _keep_post_for_manual_publish(
+                    source, messages, final_text, target_chats, post_tags,
+                    f"Telegram отклонил отправку: {type(send_error).__name__}: {send_error}",
+                )
                 db.add_log(
                     "ERR-408",
                     f"Пост {source}/{messages[0].id} не доставлен в {target_chat} из-за "
-                    f"постоянной ошибки ({type(send_error).__name__}); пост оставлен для повтора, "
-                    "парсер остановлен. Исправьте токен/права/целевой канал и запустите "
-                    "парсер снова.",
+                    f"постоянной ошибки ({type(send_error).__name__}); пост сохранён в очереди "
+                    "для ручной отправки, парсер остановлен. Исправьте токен/права/целевой "
+                    "канал и запустите парсер снова.",
                 )
                 print(
                     f"!!! [ERR-408] Отправка поста {source}/{messages[0].id} отклонена; "
@@ -1777,6 +1869,9 @@ async def _process_message_group(
                         for m in messages:
                             failed_post_id = m.id
                             db.save_post(source, m.id)
+                # Пост опубликован — черновик в очереди (если он был) больше
+                # не ждёт отправки, иначе пользователь отправит его дважды.
+                _mark_queue_entry_published(source, messages)
             except DatabaseWriteError as db_error:
                 # Telegram has already accepted the send. Stop before more posts can
                 # be emitted with missing deduplication records.
@@ -2520,12 +2615,10 @@ def _load_source_cursors() -> dict[str, int]:
         # key (for example, https://t.me/Channel/123). Runtime config now uses
         # canonical @usernames/peer IDs; keep the old cursor so upgrading does
         # not accidentally trigger the "first scan: latest ten posts" baseline.
-        try:
+        # A stale cursor for a removed/malformed source should not block
+        # unrelated channels. It simply will not match a valid configured source.
+        with contextlib.suppress(ValueError):
             source_key = normalize_target_chat(source_key) or source_key
-        except ValueError:
-            # A stale cursor for a removed/malformed source should not block
-            # unrelated channels. It simply will not match a valid configured source.
-            pass
 
         previous = normalized.get(source_key)
         # If legacy aliases collide, rewind to the earliest known cursor. Already

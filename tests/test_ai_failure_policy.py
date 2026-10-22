@@ -171,9 +171,11 @@ def test_failed_rewrite_is_saved_as_manual_queue_draft(monkeypatch) -> None:
 
     assert len(queued) == 1
     source, message_id, publish_text, target, category, media_list, temp_paths = queued[0]
-    assert (source, message_id, publish_text, target, category) == (
-        "@source", 43, "Original text", "@target", "общее"
+    # target — список каналов: черновику нужен канал, куда его можно отправить.
+    assert (source, message_id, publish_text, category) == (
+        "@source", 43, "Original text", "общее"
     )
+    assert target == ["@target"]
     assert media_list == []
     assert temp_paths == []
     assert updates[0][0] == 17

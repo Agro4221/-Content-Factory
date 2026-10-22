@@ -7,7 +7,6 @@ import pytest
 
 import routing
 
-
 # ---------- Разбор маршрутов ----------
 
 def test_routes_are_channel_to_tags() -> None:
