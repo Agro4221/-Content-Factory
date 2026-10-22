@@ -42,6 +42,18 @@ def test_post_is_saved_to_queue_as_draft(db: DB) -> None:
     assert stored["category"] == "общее"
 
 
+def test_source_post_can_be_detected_after_queueing(db: DB) -> None:
+    assert not db.is_post_queued("@donor", "101")
+
+    post_id = db.save_post_to_queue(_make_post())
+
+    assert db.is_post_queued("@donor", 101)
+    assert db.is_post_queued("@donor", "101")
+    assert not db.is_post_queued("@other", "101")
+    assert db.delete_queued_post(post_id)
+    assert not db.is_post_queued("@donor", "101")
+
+
 def test_same_source_post_is_not_duplicated(db: DB) -> None:
     first = db.save_post_to_queue(_make_post())
     second = db.save_post_to_queue(_make_post(text="Обновлённый текст"))

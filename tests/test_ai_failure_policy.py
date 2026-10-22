@@ -126,6 +126,61 @@ def test_failed_rewrite_leaves_post_unprocessed_for_retry(monkeypatch) -> None:
     assert any(entry[0] == "WARN-405" for entry in logs)
 
 
+def test_failed_rewrite_is_saved_as_manual_queue_draft(monkeypatch) -> None:
+    logs: list[tuple] = []
+    queued: list[tuple] = []
+    updates: list[tuple] = []
+
+    async def fail_rewrite(*_args, **_kwargs):
+        raise main.AIRewriteError("AI endpoint недоступен")
+
+    async def download_source_media(messages, caption=""):
+        assert caption == "Original text"
+        return [], []
+
+    def save_queue(source, messages, publish_text, target_chat, category, media_list, temp_paths):
+        queued.append((source, messages[0].id, publish_text, target_chat, category, media_list, temp_paths))
+        return 17
+
+    monkeypatch.setattr(main, "_ai_rewrite", fail_rewrite)
+    monkeypatch.setattr(main, "_download_media", download_source_media)
+    monkeypatch.setattr(main, "_save_post_to_queue", save_queue)
+    monkeypatch.setattr(main.db, "add_log", lambda *args: logs.append(args))
+    monkeypatch.setattr(main.db, "update_queued_post", lambda *args: updates.append(args) or True)
+
+    message = SimpleNamespace(id=43, message="Original text", media=None)
+    main.bot_running.set()
+    try:
+        asyncio.run(
+            main._process_message_group(
+                client=None,
+                source="@source",
+                messages=[message],
+                cfg={
+                    "ads_words": [],
+                    "watermark": "",
+                    "publish_mode": "manual",
+                    "topic_channels": {"общее": "@target"},
+                },
+                bot=None,
+                ai_session=None,
+            )
+        )
+    finally:
+        main.bot_running.clear()
+
+    assert len(queued) == 1
+    source, message_id, publish_text, target, category, media_list, temp_paths = queued[0]
+    assert (source, message_id, publish_text, target, category) == (
+        "@source", 43, "Original text", "@target", "общее"
+    )
+    assert media_list == []
+    assert temp_paths == []
+    assert updates[0][0] == 17
+    assert "Сохранён исходный текст" in updates[0][1]["last_error"]
+    assert any(entry[0] == "WARN-406" for entry in logs)
+
+
 def test_valid_ai_response_still_returns_rewritten_text(monkeypatch) -> None:
     patch_ai_logging(monkeypatch)
     session = FakeSession(

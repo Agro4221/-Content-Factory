@@ -1306,6 +1306,16 @@ class DB:
         ]
         return [dict(zip(columns, row)) for row in rows]
 
+    def is_post_queued(self, source: str, post_id: int | str) -> bool:
+        """Return whether a source post already has a durable queue entry."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM post_queue WHERE source_name = ? AND post_id = ? LIMIT 1",
+                (str(source), str(post_id)),
+            )
+            return cur.fetchone() is not None
+
     def get_queued_post(self, post_id: int) -> dict | None:
         with self._lock:
             cur = self.conn.cursor()
