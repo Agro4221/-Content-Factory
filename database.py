@@ -13,7 +13,7 @@ SQLite-обёртка для проекта Content Factory.
     Каждое изменение схемы — новая запись в _MIGRATIONS с номером версии.
     При открытии БД автоматически применяются миграции от текущей до
     последней версии. Идемпотентно, безопасно для отката к старой версии.
-  - **Секреты шифруются** средствами Windows DPAPI (см. secrets_store.py).
+  - **Секреты шифруются** системным хранилищем ОС (см. secrets_store.py).
 """
 from __future__ import annotations
 
@@ -717,7 +717,8 @@ class DB:
         with contextlib.suppress(Exception):
             self.add_log(
                 "WARN-503",
-                "Шифрование секретов недоступно на этой платформе (DPAPI — только Windows). "
+                "Шифрование секретов недоступно на этой платформе "
+                "Системное хранилище секретов на этой платформе недоступно. "
                 "Токены и ключи хранятся в базе открытым текстом — защищайте папку приложения.",
             )
 
@@ -735,7 +736,7 @@ class DB:
         if not value:
             return value
         try:
-            return _decrypt_secret(value)
+            return _decrypt_secret(value, key)
         except SecretDecryptionError as exc:
             self._log_secret_failure("ERR-502", key, exc)
             return ""
@@ -752,7 +753,7 @@ class DB:
             # приложение оставалось рабочим. Ограничение фиксируется в журнале.
             return text
         try:
-            return _encrypt_secret(text)
+            return _encrypt_secret(text, key)
         except SecretEncryptionError as exc:
             # Значение нельзя потерять, поэтому сохраняем как есть и явно
             # сообщаем об этом в журнале (без самого значения).
@@ -848,7 +849,7 @@ class DB:
             if not value or _is_encrypted_secret(value):
                 continue
             try:
-                encrypted = _encrypt_secret(value)
+                encrypted = _encrypt_secret(value, key)
             except SecretEncryptionError as exc:
                 self._log_secret_failure("ERR-503", key, exc)
                 continue

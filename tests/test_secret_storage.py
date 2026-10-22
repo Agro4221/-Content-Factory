@@ -215,7 +215,7 @@ def test_decryption_failure_is_logged_without_value(tmp_path, monkeypatch) -> No
     try:
         db.set_setting("bot_token", "123456:AAExampleTokenValue")
 
-        def broken(_value: str) -> str:
+        def broken(_value: str, _account: str = "") -> str:
             raise secrets_store.SecretDecryptionError("CryptUnprotectData failed")
 
         monkeypatch.setattr("database._decrypt_secret", broken)

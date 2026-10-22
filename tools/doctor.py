@@ -204,19 +204,22 @@ def check_secret_storage() -> None:
         report(
             WARN,
             "Шифрование секретов недоступно на этой платформе",
-            "DPAPI работает только в Windows: секреты будут храниться открытым текстом.",
+            "Системное хранилище секретов на этой платформе недоступно: "
+            "секреты будут храниться открытым текстом.",
         )
         return
     try:
         sample = "doctor-check"
-        encrypted = secrets_store.encrypt(sample)
+        account = "doctor_check"
+        encrypted = secrets_store.encrypt(sample, account)
         if not secrets_store.is_encrypted(encrypted):
             report(BAD, "Секреты не шифруются", "неверный формат значения")
             return
-        if secrets_store.decrypt(encrypted) != sample:
+        if secrets_store.decrypt(encrypted, account) != sample:
             report(BAD, "Секреты не расшифровываются обратно")
             return
-        report(OK, "Шифрование секретов работает (Windows DPAPI)")
+        backend = "системное хранилище"
+        report(OK, f"Шифрование секретов работает ({backend})")
     except Exception as exc:
         report(BAD, "Ошибка шифрования секретов", f"{type(exc).__name__}: {exc}")
 
