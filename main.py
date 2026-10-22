@@ -1494,6 +1494,48 @@ def _stdin_is_interactive() -> bool:
         return False
 
 
+def _hide_console_window() -> None:
+    """Прячет окно консоли после успешного входа в Telegram.
+
+    Консоль нужна только для запроса номера телефона и кода подтверждения.
+    Когда вход пройден, окно скрывается, чтобы не висеть в панели задач.
+    Само приложение продолжает работать, панель управления остаётся
+    доступна по http://127.0.0.1:8000/.
+
+    Прячется только собственная консоль процесса: если приложение запущено
+    из уже открытого окна терминала, чужое окно не трогаем.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+        kernel32.GetConsoleProcessList.argtypes = [
+            ctypes.POINTER(ctypes.c_ulong),
+            ctypes.c_ulong,
+        ]
+        kernel32.GetConsoleProcessList.restype = ctypes.c_ulong
+        kernel32.GetConsoleWindow.restype = ctypes.c_void_p
+        user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.ShowWindow.restype = ctypes.c_int
+
+        buffer = (ctypes.c_ulong * 8)()
+        attached = kernel32.GetConsoleProcessList(buffer, 8)
+        if attached != 1:
+            # Либо в консоли есть другие процессы (окно cmd), либо не удалось
+            # определить их число. В обоих случаях чужое окно не трогаем.
+            return
+
+        hwnd = kernel32.GetConsoleWindow()
+        if hwnd:
+            user32.ShowWindow(hwnd, 0)  # SW_HIDE
+    except Exception:
+        # Прятать окно — необязательный шаг, его неудача не должна мешать работе.
+        pass
+
+
 async def _connect_authorized_client(
     client: TelegramClient,
     *,
@@ -1714,6 +1756,7 @@ async def _process_one_source(
 
 
 async def main() -> None:
+    global _last_media_cleanup_ts
     print("=======================================")
     print("     БОТ ЗАПУЩЕН       ")
     print("=======================================")
@@ -1813,6 +1856,10 @@ async def main() -> None:
             ):
                 bot_running.clear()
                 continue
+            # Вход в Telegram выполнен — консоль больше не нужна.
+            print("--> [СИСТЕМА] Вход в Telegram выполнен. Окно консоли скрывается, "
+                  "приложение продолжает работать.")
+            _hide_console_window()
             print("\n=== КРУГ ОБХОДА ИСТОЧНИКОВ НАЧАТ ===")
             # Отложенные посты публикуются независимо от наличия новых в ленте.
             try:
