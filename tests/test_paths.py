@@ -52,5 +52,8 @@ def test_source_run_uses_project_folder(monkeypatch) -> None:
 
     data_dir = paths.app_data_dir()
 
-    assert Path(data_dir).name == "ContentFactory-updated"
+    # Имя папки проекта может быть любым (при клонировании репозитория
+    # оно не совпадает с локальным), поэтому проверяем только то, что это
+    # каталог самого проекта и он существует.
     assert Path(data_dir).is_dir()
+    assert (Path(data_dir) / "paths.py").is_file()
