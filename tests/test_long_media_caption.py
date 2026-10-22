@@ -17,7 +17,7 @@ class MessageMediaPhoto:
 class FakePhotoMessage:
     def __init__(self, message_id: int, path: Path) -> None:
         self.id = message_id
-        self.message = "source caption"
+        self.message = "Длинный текст публикации с подробностями"
         self.media = MessageMediaPhoto()
         self.path = path
 
@@ -75,15 +75,13 @@ def test_caption_remainder_helper_respects_1024_character_limit() -> None:
     assert main._media_caption_remainder(text) == normalized[len(prefix):].lstrip()
 
 
-def test_long_media_caption_is_sent_as_caption_plus_continuation(
+def test_long_text_is_sent_as_single_message_beside_media(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    final_text = "Длинный текст публикации с подробностями. " * 50
-    normalized = final_text.strip()
-    displayed_prefix = normalized[:1020].rsplit(" ", 1)[0]
-    expected_caption = displayed_prefix + "…"
-    expected_remainder = normalized[len(displayed_prefix):].lstrip()
+    # Текст длиннее подписи (1024) не должен рваться надвое: картинка
+    # уходит без подписи, текст — одним сообщением целиком.
+    final_text = ("Длинный текст публикации с подробностями. " * 50).strip()
 
     db = FakeDB()
     bot = FakeBot()
@@ -110,9 +108,10 @@ def test_long_media_caption_is_sent_as_caption_plus_continuation(
 
     assert bot.photo is not None
     assert bot.photo["chat_id"] == "@target"
-    assert bot.photo["caption"] == expected_caption
-    assert len(bot.photo["caption"]) <= 1024
-    assert bot.texts == [expected_remainder]
+    # Подписи у картинки нет: текст не помещается в 1024 символа.
+    assert bot.photo["caption"] is None
+    # Текст уходит ровно одним сообщением и не делится.
+    assert bot.texts == [final_text]
     assert db.published == [("@source", 17)]
     assert len(db.logs) == 1
     assert db.logs[0][0] == "OK-501"

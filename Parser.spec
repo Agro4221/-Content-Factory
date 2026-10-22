@@ -125,6 +125,7 @@ hiddenimports = [
     "websockets",
     # Внутренний модуль: настройка кодировки консоли (кириллица в Windows)
     "console_setup",
+    "media_convert",
 ]
 
 # === Исключения (то, что НЕ надо тащить) ===
