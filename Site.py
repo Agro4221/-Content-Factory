@@ -52,7 +52,7 @@ from database import format_display_timestamp, get_db
 from state import bot_running
 
 db = get_db()
-app = FastAPI(title="API Panel Marej")
+app = FastAPI(title="Content Factory API")
 
 
 def _is_loopback_host(host: str | None) -> bool:

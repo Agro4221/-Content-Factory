@@ -1,7 +1,8 @@
 # Карта функций админ-панели Content Factory
 
-Снята перед редизайном. Редизайн не должен менять эти идентификаторы,
-названия функций и API-вызовы.
+Справочник идентификаторов DOM, функций JavaScript, API-маршрутов и
+автоматических проверок панели Content Factory. Обновляйте его вместе
+с изменениями панели и связанных тестов.
 
 ## ID элементов (54)
 
@@ -21,12 +22,12 @@
 ### Маршруты (2)
 `topics-list` `add-topic`
 
-### AI (8)
+### AI (10)
 `f-ai_mode` `ai-remote-fields` `f-remote_url` `f-remote_model`
 `f-remote_api_key` `ai-local-fields` `f-local_host` `f-local_port`
 `f-local_model` `f-system_prompt`
 
-### Прокси (8)
+### Прокси (9)
 `f-use_proxy` `proxy-fields` `f-proxy_type` `f-proxy_host` `f-proxy_port`
 `f-proxy_user` `f-proxy_pass` `f-mtproto_key` `proxy-result`
 
@@ -36,10 +37,13 @@
 ### Журнал (4)
 `log-view` `clear-logs-btn` `log-hint` `clear-logs-confirm`
 
-### Служебные (4)
-`toast-container` + `data-secret-toggle` / `data-secret-clear` / `data-secret-hint`
+### Служебный элемент (1)
+`toast-container`
 
-## Функции JS (24)
+### Атрибуты управления секретами (3)
+`data-secret-toggle` / `data-secret-clear` / `data-secret-hint`
+
+## Функции JS (23)
 `$id` `toast` `setCard` `refreshAll` `addTopicRow` `loadTopics` `collectTopics`
 `shouldSkipField` `applySecretState` `setupSecretControls` `fillSettings`
 `parseTopics` `saveQuick` `toggleBot` `testAI` `testProxy` `loadLogs`

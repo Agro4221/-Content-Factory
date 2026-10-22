@@ -1,4 +1,3 @@
-# REFACTORED: navigation / UX / UI restructured per expert spec v2.0
 """
 SQLite-обёртка для проекта Content Factory.
 
@@ -179,16 +178,12 @@ def _migration_v2(db: "DB") -> None:
 
 
 def _migration_v3(db: "DB") -> None:
-    """v3: reserved for future modules.
-
-    The modules were removed from the project, so the migration creates
-    nothing. The version number is kept so existing databases stay valid.
-    """
+    """v3: reserved schema version; no schema changes were required."""
     return None
 
 
 def _migration_v4(db: "DB") -> None:
-    """v4: reserved - the reviews module was removed, schema is unchanged."""
+    """v4: reserved schema version; no schema changes were required."""
     return None
 
 

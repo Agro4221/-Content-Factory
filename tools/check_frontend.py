@@ -40,9 +40,8 @@ CRITICAL_CSS_RULES = (
     (r"^\s*@media\s*\(max-width:\s*620px\)\s*\{", "@media max-width 620px"),
 )
 
-# Вызовы модулей, удалённых из проекта. Их присутствие означает, что панель
-# зовёт несуществующий код.
-STALE_CALLS = (
+# Block calls to unsupported interface handlers from entering the panel bundle.
+UNSUPPORTED_CALLS = (
     "refreshBehaviorStatus()",
     "refreshReviewsStatus()",
     "syncBehaviorFormFromSettings(",
@@ -217,9 +216,9 @@ def main() -> int:
             print(f"  - {error}", file=sys.stderr)
         return 1
 
-    found_stale_calls = [call for call in STALE_CALLS if call in javascript]
-    if found_stale_calls:
-        print("Найдены вызовы удалённых модулей: " + ", ".join(found_stale_calls), file=sys.stderr)
+    found_unsupported_calls = [call for call in UNSUPPORTED_CALLS if call in javascript]
+    if found_unsupported_calls:
+        print("Найдены неподдерживаемые вызовы в панели: " + ", ".join(found_unsupported_calls), file=sys.stderr)
         return 1
 
     with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:

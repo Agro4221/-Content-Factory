@@ -123,7 +123,7 @@ hiddenimports = [
     "uvicorn.lifespan.on",
     "uvicorn.logging",
     "websockets",
-    # Внутренний модуль: настройка кодировки консоли (кириллица в Windows)
+    # Настройка UTF-8 для корректного вывода текста в консоли Windows.
     "console_setup",
 ]
 
@@ -177,7 +177,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,                  # сжатие UPX (если установлен; иначе просто пропустит)
+    upx=True,                  # Использовать UPX для сжатия, если он доступен.
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,              # True = консольное окно (видно логи); False = без окна
@@ -186,6 +186,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # icon=str(PROJECT_DIR / "icon.ico"),  # раскомментируй, если есть иконка
+    # icon=str(PROJECT_DIR / "icon.ico"),  # Укажите путь к значку, если icon.ico присутствует.
 )
 
