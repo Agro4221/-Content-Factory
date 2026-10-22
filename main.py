@@ -2715,6 +2715,67 @@ async def _process_one_source(
 
 
 
+def _connection_signature(cfg: dict) -> tuple:
+    """Отпечаток настроек, при котором соединение нужно пересоздать.
+
+    Пока отпечаток тот же, соединение живёт: раньше клиент создавался
+    заново каждый круг, что переписывало файл сессии и лишний раз
+    беспокоило Telegram.
+    """
+    return (
+        str(cfg.get("bot_token") or ""),
+        str(cfg.get("api_id") or ""),
+        str(cfg.get("api_hash") or ""),
+        bool(cfg.get("use_proxy")),
+        str(cfg.get("proxy_type") or ""),
+        str(cfg.get("proxy_host") or ""),
+        str(cfg.get("proxy_port") or ""),
+        str(cfg.get("proxy_user") or ""),
+        str(cfg.get("proxy_pass") or ""),
+        str(cfg.get("mtproto_key") or ""),
+    )
+
+
+def _client_is_connected(client) -> bool:
+    """Живо ли соединение с Telegram."""
+    if client is None:
+        return False
+    connected = getattr(client, "is_connected", None)
+    if callable(connected):
+        try:
+            return bool(connected())
+        except Exception:
+            return False
+    return bool(getattr(client, "_connected", False))
+
+
+async def _close_clients(bot, client, ai_session, proxy) -> None:
+    """Аккуратно закрывает клиенты Telegram, бота и сессию ИИ."""
+    closers = []
+    if client is not None:
+        closers.append(
+            lambda current_client=client: current_client.disconnect()
+            if getattr(current_client, "_connected", False)
+            else None
+        )
+    if bot is not None and getattr(bot, "session", None):
+        closers.append(lambda current_bot=bot: current_bot.session.close())
+    elif proxy is not None and getattr(proxy, "bot_session", None) is not None:
+        closers.append(
+            lambda current_session=proxy.bot_session: current_session.close()
+        )
+    if ai_session is not None and not ai_session.closed:
+        closers.append(lambda current_ai=ai_session: current_ai.close())
+
+    for closer in closers:
+        try:
+            res = closer()
+            if asyncio.iscoroutine(res):
+                await res
+        except Exception as cleanup_error:
+            print(f"!!! [CLEANUP] Не удалось закрыть ресурс: {cleanup_error}")
+
+
 async def main() -> None:
     global _last_media_cleanup_ts
     print("=======================================")
@@ -2763,70 +2824,154 @@ async def main() -> None:
             await asyncio.sleep(SLEEP_NO_CONFIG_S)
             continue
 
-        bot = None
-        client = None
-        ai_session = None
-        need_reconnect = False
+    bot = None
+    client = None
+    ai_session = None
+    proxy = None
+    connection_signature = None
+
+    while True:
+        if not bot_running.is_set():
+            # Парсер остановлен из панели: закрываем соединения и ждём
+            # запуска. Файл сессии остаётся целым.
+            await _close_clients(bot, client, ai_session, proxy)
+            bot = client = ai_session = proxy = None
+            connection_signature = None
+            await _wait_for_resume()
+            continue
+
         try:
-            bot = Bot(
-                token=cfg["bot_token"],
-                session=proxy.bot_session,
-                default=DefaultBotProperties(parse_mode="HTML"),
-            )
-            # Drain text tails left by a successful media send before scanning
-            # sources. A tail retry must never resend the corresponding media.
-            await _retry_pending_text_followups(bot)
-            if not bot_running.is_set():
-                continue
-            if proxy.mtproto_kwargs:
-                client = TelegramClient(
-                    SESSION_PATH,
-                    cfg["api_id"],
-                    cfg["api_hash"],
-                    **proxy.mtproto_kwargs,
-                )
-            else:
-                client = TelegramClient(
-                    SESSION_PATH,
-                    cfg["api_id"],
-                    cfg["api_hash"],
-                    proxy=proxy.telethon_proxy,
-                )
+            cfg = _load_config()
+        except Exception as e:
+            db.add_log("ERR-100", f"Ошибка чтения настроек из БД: {e}")
+            await _wait_for_db()
+            continue
+
+        if not cfg["bot_token"] or not cfg["api_id"] or not cfg["api_hash"]:
+            await _wait_for_settings()
+            continue
+
+        if not _is_valid_bot_token_format(cfg["bot_token"]):
+            db.add_log("ERR-202", "Неверный формат токена бота. Проверьте значение bot_token в настройках.")
+            print("!!! [ERR-202] Неверный формат токена бота — проверьте настройки и повторите.")
+            await asyncio.sleep(SLEEP_NO_CONFIG_S)
+            continue
+
+        signature = _connection_signature(cfg)
+        if (
+            client is None
+            or signature != connection_signature
+            or not _client_is_connected(client)
+        ):
+            # Соединение создаётся один раз и живёт между кругами. Пересоздаём
+            # его, только если сменились настройки или соединение отвалилось.
+            # Раньше клиент создавался заново каждый круг: файл сессии
+            # переписывался, а Telegram получал лишние переподключения.
+            await _close_clients(bot, client, ai_session, proxy)
+            bot = client = ai_session = proxy = None
+            connection_signature = None
+
             try:
-                ai_session = _make_ai_session(
-                    proxy, cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
-                )
-            except ProxyConfigurationError as ai_proxy_error:
-                # Прокси для запросов к ИИ настроить не удалось. Это
-                # ошибка настройки, а не сбой цикла: сообщаем и ждём.
-                db.add_log("ERR-302", f"Невозможно настроить прокси для ИИ: {ai_proxy_error}")
-                print(f"!!! [ERR-302] {ai_proxy_error}")
+                proxy = _setup_proxy(cfg)
+            except ProxyConfigurationError as proxy_error:
+                db.add_log("ERR-302", f"Невозможно запустить парсер: {proxy_error}")
+                print(f"!!! [ERR-302] {proxy_error}")
                 await asyncio.sleep(SLEEP_NO_CONFIG_S)
                 continue
 
-            session_file = SESSION_PATH + ".session"
-            allow_interactive_login = _stdin_is_interactive()
-            session_exists = await asyncio.to_thread(os.path.exists, session_file)
-            if not session_exists and not allow_interactive_login:
-                db.add_log(
-                    "ERR-203",
-                    "Сессия Telegram не найдена и интерактивный терминал недоступен. "
-                    "Запустите парсер из терминала для создания сессии или положите "
-                    "готовый .session в каталог приложения.",
+            try:
+                bot = Bot(
+                    token=cfg["bot_token"],
+                    session=proxy.bot_session,
+                    default=DefaultBotProperties(parse_mode="HTML"),
                 )
-                print("!!! [ERR-203] Нужна авторизация Telegram в интерактивном терминале.")
-                bot_running.clear()
+                # Drain text tails left by a successful media send before scanning
+                # sources. A tail retry must never resend the corresponding media.
+                await _retry_pending_text_followups(bot)
+                if not bot_running.is_set():
+                    continue
+                if proxy.mtproto_kwargs:
+                    client = TelegramClient(
+                        SESSION_PATH,
+                        cfg["api_id"],
+                        cfg["api_hash"],
+                        **proxy.mtproto_kwargs,
+                    )
+                else:
+                    client = TelegramClient(
+                        SESSION_PATH,
+                        cfg["api_id"],
+                        cfg["api_hash"],
+                        proxy=proxy.telethon_proxy,
+                    )
+                try:
+                    ai_session = _make_ai_session(
+                        proxy, cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
+                    )
+                except ProxyConfigurationError as ai_proxy_error:
+                    # Прокси для запросов к ИИ настроить не удалось. Это
+                    # ошибка настройки, а не сбой цикла: сообщаем и ждём.
+                    db.add_log("ERR-302", f"Невозможно настроить прокси для ИИ: {ai_proxy_error}")
+                    print(f"!!! [ERR-302] {ai_proxy_error}")
+                    await asyncio.sleep(SLEEP_NO_CONFIG_S)
+                    continue
+
+                session_file = SESSION_PATH + ".session"
+                allow_interactive_login = _stdin_is_interactive()
+                session_exists = await asyncio.to_thread(os.path.exists, session_file)
+                if not session_exists and not allow_interactive_login:
+                    db.add_log(
+                        "ERR-203",
+                        "Сессия Telegram не найдена и интерактивный терминал недоступен. "
+                        "Запустите парсер из терминала для создания сессии или положите "
+                        "готовый .session в каталог приложения.",
+                    )
+                    print("!!! [ERR-203] Нужна авторизация Telegram в интерактивном терминале.")
+                    bot_running.clear()
+                    continue
+                if not await _connect_authorized_client(
+                    client,
+                    allow_interactive=allow_interactive_login,
+                ):
+                    bot_running.clear()
+                    continue
+                connection_signature = signature
+            except ApiIdInvalidError:
+                db.add_log("ERR-201", "Неверный tg_api_id / tg_api_hash. Проверьте my.telegram.org.")
+                print("!!! [ERR-201] Критическая ошибка Telegram API.")
+                await _close_clients(bot, client, ai_session, proxy)
+                bot = client = ai_session = proxy = None
+                await asyncio.sleep(SLEEP_API_ERROR_S)
                 continue
-            if not await _connect_authorized_client(
-                client,
-                allow_interactive=allow_interactive_login,
-            ):
-                bot_running.clear()
+            except FloodWaitError as fwe:
+                db.add_log("ERR-204", f"Telegram выдал FloodWait на {fwe.seconds} сек.")
+                print(f"!!! [ERR-204] FloodWait {fwe.seconds} сек...")
+                await _close_clients(bot, client, ai_session, proxy)
+                bot = client = ai_session = proxy = None
+                for _ in range(fwe.seconds):
+                    if not bot_running.is_set():
+                        break
+                    await asyncio.sleep(SLEEP_FLOOD_POLL_S)
                 continue
+            except Exception as connect_error:
+                err_msg = str(connect_error).lower()
+                if "proxy" in err_msg or "connection" in err_msg:
+                    db.add_log("ERR-301", f"Сеть/прокси: {connect_error}")
+                    print("!!! [ERR-301] Прокси-сеть.")
+                else:
+                    db.add_log("ERR-100", f"Критический сбой подключения: {connect_error}")
+                    print(f"!!! КРИТИЧЕСКИЙ СБОЙ: {connect_error}")
+                await _close_clients(bot, client, ai_session, proxy)
+                bot = client = ai_session = proxy = None
+                await asyncio.sleep(SLEEP_API_ERROR_S)
+                continue
+
             # Вход в Telegram выполнен — консоль больше не нужна.
             print("--> [СИСТЕМА] Вход в Telegram выполнен. Окно консоли скрывается, "
                   "приложение продолжает работать.")
             _hide_console_window()
+
+        try:
             print("\n=== КРУГ ОБХОДА ИСТОЧНИКОВ НАЧАТ ===")
             # Отложенные посты публикуются независимо от наличия новых в ленте.
             try:
@@ -2846,15 +2991,16 @@ async def main() -> None:
                 except Exception as exc:
                     db.add_log("WARN-513", f"Автоочистка медиа не удалась: {exc}")
             for source in cfg["sources"]:
-                if await _process_one_source(client, source, cfg, bot, ai_session):
-                    need_reconnect = True
-                    break
+                await _process_one_source(client, source, cfg, bot, ai_session)
 
-            if bot_running.is_set() and not need_reconnect:
+            if bot_running.is_set():
                 print(f"--> Круг завершён. Засыпаю на {cfg['poll_delay']} секунд...")
         except ApiIdInvalidError:
             db.add_log("ERR-201", "Неверный tg_api_id / tg_api_hash. Проверьте my.telegram.org.")
             print("!!! [ERR-201] Критическая ошибка Telegram API.")
+            await _close_clients(bot, client, ai_session, proxy)
+            bot = client = ai_session = proxy = None
+            connection_signature = None
             await asyncio.sleep(SLEEP_API_ERROR_S)
         except FloodWaitError as fwe:
             db.add_log("ERR-204", f"Telegram выдал FloodWait на {fwe.seconds} сек.")
@@ -2863,8 +3009,7 @@ async def main() -> None:
                 if not bot_running.is_set():
                     break
                 await asyncio.sleep(SLEEP_FLOOD_POLL_S)
-            if not bot_running.is_set():
-                continue
+            continue
         except Exception as loop_error:
             err_msg = str(loop_error).lower()
             if "proxy" in err_msg or "connection" in err_msg:
@@ -2874,30 +3019,6 @@ async def main() -> None:
                 db.add_log("ERR-100", f"Критический сбой цикла: {loop_error}")
                 print(f"!!! КРИТИЧЕСКИЙ СБОЙ: {loop_error}")
             await asyncio.sleep(SLEEP_API_ERROR_S)
-        finally:
-            closers = []
-            if client is not None:
-                closers.append(
-                    lambda current_client=client: current_client.disconnect()
-                    if getattr(current_client, "_connected", False)
-                    else None
-                )
-            if bot is not None and getattr(bot, "session", None):
-                closers.append(lambda current_bot=bot: current_bot.session.close())
-            elif proxy.bot_session is not None:
-                closers.append(
-                    lambda current_session=proxy.bot_session: current_session.close()
-                )
-            if ai_session is not None and not ai_session.closed:
-                closers.append(lambda current_ai=ai_session: current_ai.close())
-
-            for closer in closers:
-                try:
-                    res = closer()
-                    if asyncio.iscoroutine(res):
-                        await res
-                except Exception as cleanup_error:
-                    print(f"!!! [CLEANUP] Не удалось закрыть ресурс: {cleanup_error}")
 
         if not bot_running.is_set():
             continue
