@@ -112,3 +112,42 @@ known-first-party = ["main", "Site", "database", "config", "state", "paths"]
 markers = [
     "real_security: тест проверяет саму защиту API — служебные послабления для тестов не применяются",
 ]
+
+[tool.mypy]
+python_version = "3.11"
+files = [
+    "main.py",
+    "Site.py",
+    "api_security.py",
+    "config.py",
+    "console_setup.py",
+    "database.py",
+    "deps.py",
+    "env_loader.py",
+    "media_convert.py",
+    "media_marker.py",
+    "paths.py",
+    "proxy_check.py",
+    "routing.py",
+    "secrets_store.py",
+    "single_instance.py",
+    "startup.py",
+    "state.py",
+    "text_format.py",
+]
+# Сторонние библиотеки (telethon, TelethonFakeTLS) не поставляют подсказок
+# типов — это не наша ошибка и не повод заглушать код.
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# Модули используют ctypes: типы WinDLL и его функций mypy не знает.
+module = ["secrets_store"]
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+# fcntl есть только в POSIX-системах, а проверка кода идёт на Windows.
+module = ["single_instance"]
+disable_error_code = ["attr-defined"]
