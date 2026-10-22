@@ -2057,7 +2057,15 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
     # голым текстом, без цитат, ссылок и акцентов.
     if "<blockquote>" not in base_prompt:
         base_prompt = f"{base_prompt}\n\n{TELEGRAM_FORMATTING_RULES}"
-    s_prompt = f"{base_prompt}\n\nДоступные теги: [{tags}]"
+    s_prompt = (
+        f"{base_prompt}\n\n"
+        f"Доступные теги для маршрутизации: [{tags}]\n"
+        "В ответе обязательно должен быть раздел с тегами публикации — "
+        "ТЕГИ, ХЭШТЕГИ или ТЕМА, как требует твой формат ответа. "
+        "Теги определяют, в какие каналы уйдёт пост: он попадёт во все каналы, "
+        "у которых есть такой тег. Если ни один тег не подошёл, пост уйдёт в канал "
+        "с тегом «общее»."
+    )
 
     if cfg["ai_mode"] == "LOCAL":
         url, model = cfg["local_url"], cfg["local_model"]
@@ -2311,7 +2319,12 @@ def _parse_ai_response(res: str, raw_text: str) -> tuple[list[str], str]:
 
 
 def _collect_ai_tags(normalized: str) -> list[str]:
-    """Собирает теги из разделов ТЕГИ, ХЭШТЕГИ или ТЕМА."""
+    """Собирает теги из разделов ТЕГИ, ХЭШТЕГИ и ТЕМА.
+
+    Берутся все найденные разделы, а не только первый: старый промпт
+    отдаёт категорию в «ТЕМА:» и хештеги в «ХЭШТЕГИ:», новый — теги в
+    «ТЕГИ:». Любой из них подходит для маршрутизации.
+    """
     tags: list[str] = []
 
     def _add(values: list[str]) -> None:
@@ -2320,19 +2333,14 @@ def _collect_ai_tags(normalized: str) -> list[str]:
                 tags.append(tag)
 
     for pattern in (
-        r"ХЭШТЕГИ[ \t]*:[ \t]*(.*)",
         r"ТЕГИ[ \t]*:[ \t]*(.*)",
+        r"ХЭШТЕГИ[ \t]*:[ \t]*(.*)",
         r"ТЕМА[ \t]*:[ \t]*([^\n]*)",
     ):
         match = re.search(pattern, normalized, re.DOTALL | re.IGNORECASE)
         if not match:
             continue
-        raw = match.group(1)
-        _add(routing.parse_tag_list(raw))
-        if tags:
-            # Теги из раздела ТЕМА — запасной источник: если раздел ТЕГИ
-            # пуст, берём тему.
-            break
+        _add(routing.parse_tag_list(match.group(1)))
     return tags
 
 
@@ -3136,10 +3144,16 @@ def open_browser_delayed() -> None:
 
 
 if __name__ == "__main__":
-    from startup import run_startup_bootstrap
+    from startup import ensure_single_instance, run_startup_bootstrap
 
     print("--> [СИСТЕМА] Инициализация графического интерфейса и API...")
     run_startup_bootstrap()
+
+    # Вторая копия закрывается: две копии делят файл сессии Telegram, и
+    # Telegram признаёт ключ использованным с двух адресов, после чего
+    # сессию приходится пересоздавать вручную.
+    if not ensure_single_instance():
+        raise SystemExit(1)
 
     threading.Thread(target=start_api_server, daemon=True).start()
     if BROWSER_OPEN_ON_START:

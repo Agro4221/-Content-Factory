@@ -201,7 +201,8 @@ def test_valid_ai_response_still_returns_rewritten_text(monkeypatch) -> None:
     tags, rewritten = asyncio.run(main._ai_rewrite("original source text", ai_config(), session))
 
     # Теги нужны для маршрутизации, в самом тексте их нет.
-    assert tags == ["новости"]
+    # Берутся из всех разделов: и из ХЭШТЕГИ, и из ТЕМА.
+    assert tags == ["новости", "общее"]
     assert "Переписанный текст" in rewritten
     assert "original source text" not in rewritten
     assert "#новости" not in rewritten

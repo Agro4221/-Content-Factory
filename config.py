@@ -42,7 +42,7 @@ def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> 
 
 load_environment()
 
-APP_VERSION = "1.29.0.3"
+APP_VERSION = "1.30.0.0"
 
 API_HOST = os.environ.get("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
 API_PORT = _env_int("API_PORT", 8000, minimum=1, maximum=65535)

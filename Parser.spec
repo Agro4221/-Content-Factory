@@ -135,6 +135,7 @@ hiddenimports = [
     "routing",
     "secrets_store",
     "Site",
+    "single_instance",
     "startup",
     "state",
     "text_format",
