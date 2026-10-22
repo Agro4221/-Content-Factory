@@ -287,6 +287,30 @@ def _migration_v8(db: DB) -> None:
     )
 
 
+def _migration_v9(db: DB) -> None:
+    """v9: список целевых каналов для поста.
+
+    Один пост может уйти сразу в несколько каналов: теги совпали с
+    маршрутами нескольких каналов. Старая колонка target_chat остаётся
+    основным каналом — по ней видно, куда пост ушёл.
+    """
+    columns = {
+        row[1]
+        for row in db.conn.execute("PRAGMA table_info(post_queue)").fetchall()
+    }
+    if not columns:
+        return
+    if "target_chats" not in columns:
+        db.conn.execute(
+            "ALTER TABLE post_queue ADD COLUMN target_chats TEXT NOT NULL DEFAULT '[]'"
+        )
+    # Для старых записей список каналов совпадает с основным каналом.
+    db.conn.execute(
+        "UPDATE post_queue SET target_chats = '[]' "
+        "WHERE target_chats IS NULL OR target_chats = ''"
+    )
+
+
 # Регистрируем миграции
 MIGRATIONS.append((1, _migration_v1))
 MIGRATIONS.append((2, _migration_v2))
@@ -296,6 +320,7 @@ MIGRATIONS.append((5, _migration_v5))
 MIGRATIONS.append((6, _migration_v6))
 MIGRATIONS.append((7, _migration_v7))
 MIGRATIONS.append((8, _migration_v8))
+MIGRATIONS.append((9, _migration_v9))
 
 CURRENT_SCHEMA_VERSION: int = max(v for v, _ in MIGRATIONS)
 
@@ -1224,9 +1249,9 @@ class DB:
                     """
                     INSERT INTO post_queue (
                         source_name, post_id, group_id, original_text, publish_text,
-                        media_files, media_kind, category, target_chat, status,
+                        media_files, media_kind, category, target_chat, target_chats, status,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
                     ON CONFLICT(source_name, post_id) DO UPDATE SET
                         original_text = excluded.original_text,
                         publish_text = excluded.publish_text,
@@ -1234,6 +1259,7 @@ class DB:
                         media_kind = excluded.media_kind,
                         category = excluded.category,
                         target_chat = excluded.target_chat,
+                        target_chats = excluded.target_chats,
                         updated_at = excluded.updated_at,
                         -- Ошибка снимается: содержимое изменилось, значит
                         -- пост снова можно публиковать. Отменённый и уже
@@ -1254,6 +1280,7 @@ class DB:
                         str(post.get("media_kind", "")),
                         str(post.get("category", "")),
                         str(post.get("target_chat", "")),
+                        str(post.get("target_chats", "[]")),
                         now,
                         now,
                     ),
@@ -1271,7 +1298,7 @@ class DB:
         """Список постов очереди. Пустой status — все статусы."""
         sql = (
             "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
-            "media_files, media_kind, category, target_chat, status, scheduled_at, "
+            "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
             "published_at, last_error, created_at, updated_at "
             "FROM post_queue"
         )
@@ -1287,7 +1314,7 @@ class DB:
             rows = cur.fetchall()
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
-            "media_files", "media_kind", "category", "target_chat", "status",
+            "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
             "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
         ]
         return [dict(zip(columns, row, strict=True)) for row in rows]
@@ -1313,7 +1340,7 @@ class DB:
             cur = self.conn.cursor()
             cur.execute(
                 "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
-                "media_files, media_kind, category, target_chat, status, scheduled_at, "
+                "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
                 "published_at, last_error, created_at, updated_at "
                 "FROM post_queue WHERE id = ?",
                 (int(post_id),),
@@ -1323,7 +1350,7 @@ class DB:
             return None
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
-            "media_files", "media_kind", "category", "target_chat", "status",
+            "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
             "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
         ]
         return dict(zip(columns, row, strict=True))
@@ -1334,7 +1361,7 @@ class DB:
             cur = self.conn.cursor()
             cur.execute(
                 "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
-                "media_files, media_kind, category, target_chat, status, scheduled_at, "
+                "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
                 "published_at, last_error, created_at, updated_at "
                 "FROM post_queue WHERE source_name = ? AND post_id = ?",
                 (str(source), str(post_id)),
@@ -1344,7 +1371,7 @@ class DB:
             return None
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
-            "media_files", "media_kind", "category", "target_chat", "status",
+            "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
             "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
         ]
         return dict(zip(columns, row, strict=True))
@@ -1378,7 +1405,7 @@ class DB:
             cur = self.conn.cursor()
             cur.execute(
                 "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
-                "media_files, media_kind, category, target_chat, status, scheduled_at, "
+                "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
                 "published_at, last_error, created_at, updated_at "
                 "FROM post_queue WHERE status = 'scheduled' "
                 "AND scheduled_at IS NOT NULL AND scheduled_at <= ? "
@@ -1388,7 +1415,7 @@ class DB:
             rows = cur.fetchall()
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
-            "media_files", "media_kind", "category", "target_chat", "status",
+            "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
             "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
         ]
         return [dict(zip(columns, row, strict=True)) for row in rows]

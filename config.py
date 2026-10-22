@@ -105,7 +105,7 @@ TELEGRAM_FORMATTING_RULES = """РАЗРЕШЁННЫЕ ВАРИАНТЫ ОФОР�
 DEFAULT_SYSTEM_PROMPT = """Ты — профессиональный редактор новостей. Твоя задача — пересказать ТЕКСТ ПОСТА, сохранив его факты.
 
 ПРАВИЛА:
-1. Выбери ОДНУ тему из списка доступных тем.
+1. Выбери от одного до трёх ТЕГОВ из списка доступных тегов. По тегам определяется, в какие каналы уйдёт новость. Если тег не подходит ни к одному каналу — выбери тег «общее».
 2. Не выдумывай фактов: в пересказе не должно быть того, чего нет в исходном тексте.
 3. Если в тексте есть прямая речь или важная фраза — обязательно оформи её тегом <blockquote>текст</blockquote>.
 4. Если в посте есть ссылка — оформи её тегом <a href="https://example.com">описание ссылки</a>.
@@ -119,9 +119,8 @@ DEFAULT_SYSTEM_PROMPT = """Ты — профессиональный редак�
 - <a href="https://example.com">ссылка</a> — для ссылки с понятным описанием.
 
 ОТВЕТЬ СТРОГО ПО ШАБЛОНУ:
-ТЕМА: [название]
 ТЕКСТ: [твой пересказ]
-ХЭШТЕГИ: [2-3 тега]"""
+ТЕГИ: [тег1, тег2]"""
 
 #: Во сколько раз пересказ должен быть длиннее оригинала, чтобы считать
 #: его выдумкой. Пересказ по-русски из короткой иноязычной подписи
@@ -158,7 +157,7 @@ SETTING_KEYS = frozenset({
     "tg_api_id", "tg_api_hash", "bot_token", "target_channel",
     "ai_mode", "local_ai_provider", "local_host", "local_port", "local_model",
     "remote_url", "remote_api_key", "remote_model", "system_prompt",
-    "sources", "topic_channels", "ads_words", "watermark_text",
+    "sources", "topic_channels", "tag_routes", "ads_words", "watermark_text",
     "poll_delay", "use_proxy", "proxy_type", "proxy_host", "proxy_port",
     "proxy_user", "proxy_pass", "mtproto_key",
     "publish_mode", "media_retention_days", "media_cleanup_enabled",

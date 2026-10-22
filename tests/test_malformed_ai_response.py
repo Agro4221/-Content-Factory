@@ -24,13 +24,13 @@ def test_ai_parser_rejects_responses_without_publishable_text(response: str) -> 
 
 
 def test_ai_parser_preserves_valid_structured_response() -> None:
-    topic, text = main._parse_ai_response(
+    tags, text = main._parse_ai_response(
         "ТЕМА: Новости\nТЕКСТ: Переработанный текст новости.\nХЭШТЕГИ: #новости",
         "original source text",
     )
 
-    assert topic == "новости"
-    assert text == "Переработанный текст новости.\n\n#новости"
+    assert tags == ["новости"]
+    assert text == "Переработанный текст новости."
 
 
 def test_ai_rewrite_does_not_fallback_to_unstructured_model_output(monkeypatch) -> None:
@@ -145,20 +145,22 @@ def test_malformed_ai_response_is_not_sent_or_marked_as_published(
     ["ХЭШТЕГИ:", "хэштеги:", "Хэштеги:"],
 )
 def test_ai_parser_removes_hashtag_heading_case_insensitively(hashtag_label: str) -> None:
-    topic, text = main._parse_ai_response(
+    """Заголовок с тегами распознаётся в любом регистре, а теги не попадают в текст."""
+    tags, text = main._parse_ai_response(
         f"ТЕМА: Новости\nТЕКСТ: Переработанный текст.\n{hashtag_label} #новости",
         "original source text",
     )
 
-    assert topic == "новости"
-    assert text == "Переработанный текст.\n\n#новости"
+    assert tags == ["новости"]
+    assert text == "Переработанный текст."
+
 
 def test_ai_parser_does_not_add_trailing_blank_lines_without_hashtags() -> None:
-    topic, text = main._parse_ai_response(
+    tags, text = main._parse_ai_response(
         "ТЕМА: Новости\nТЕКСТ: Переработанный текст.",
         "original source text",
     )
 
-    assert topic == "новости"
+    assert tags == ["новости"]
     assert text == "Переработанный текст."
 

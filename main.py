@@ -89,6 +89,7 @@ from telethon.errors import (
 from telethon.tl.custom.message import Message
 
 import media_convert
+import routing
 import text_format
 from config import (
     AI_REQUEST_TIMEOUT_S,
@@ -649,37 +650,35 @@ def _load_config() -> dict:
     ads_raw = get_setting("ads_words", "")
     ads_words = [w.strip() for w in ads_raw.split("\n") if w.strip()] if ads_raw else []
 
+    # Маршруты: канал → список тегов. Старый формат «категория → канал»
+    # читается как маршрут «канал → [категория]», поэтому старые настройки
+    # продолжают работать без ручного переноса.
+    raw_routes = get_setting("tag_routes", "") or ""
+    if not raw_routes.strip():
+        raw_routes = get_setting("topic_channels", "{}") or "{}"
     try:
-        raw_topics = json.loads(get_setting("topic_channels", "{}") or "{}")
-    except (TypeError, ValueError) as exc:
+        tag_routes = routing.parse_routes(raw_routes)
+    except ValueError as exc:
         raise ValueError(
-            "topic_channels содержит повреждённый JSON; настройки не применены, "
-            "чтобы не отправлять посты в неверный канал."
+            "Маршруты (tag_routes / topic_channels) содержат повреждённый JSON; "
+            "настройки не применены, чтобы не отправлять посты в неверный канал."
         ) from exc
-    if not isinstance(raw_topics, dict):
-        raise ValueError(
-            "topic_channels должен быть JSON-объектом категорий; настройки не применены."
-        )
 
-    topic_channels: dict[str, str] = {}
-    for key, value in raw_topics.items():
-        if key is None or value is None:
-            continue
-        norm_key = str(key).strip().lower()
+    normalized_routes: dict[str, list[str]] = {}
+    for channel, tags in tag_routes.items():
         try:
-            norm_val = normalize_target_chat(str(value).strip())
+            norm_chat = normalize_target_chat(str(channel).strip())
         except ValueError as exc:
             raise ValueError(
-                f"Некорректный целевой канал для категории {norm_key!r}: {exc}"
+                f"Некорректный целевой канал в маршрутах ({channel!r}): {exc}"
             ) from exc
-        if norm_key and norm_val:
-            if norm_key in topic_channels:
-                raise ValueError(
-                    "topic_channels содержит дублирующиеся категории после "
-                    f"нормализации регистра: {norm_key!r}. Исправьте маршруты, "
-                    "чтобы посты не отправлялись в неверный канал."
-                )
-            topic_channels[norm_key] = norm_val
+        if norm_chat:
+            normalized_routes[norm_chat] = list(tags)
+    tag_routes = normalized_routes
+
+    # Старые настройки остаются в базе, но больше не используются: категории
+    # заменены тегами.
+    topic_channels = {tag: channel for channel, tags in tag_routes.items() for tag in tags[:1]}
 
     poll_delay_raw = str(
         get_setting("poll_delay", str(POLL_DELAY_DEFAULT)) or ""
@@ -713,6 +712,8 @@ def _load_config() -> dict:
         "remote_model": get_setting("remote_model", ""),
         "sources": sources,
         "topic_channels": topic_channels,
+        "tag_routes": tag_routes,
+        "tag_routes_tags": routing.all_tags(tag_routes),
         "ads_words": ads_words,
         "poll_delay": poll_delay,
         "use_proxy": is_truthy(get_setting("use_proxy", "0")),
@@ -1023,7 +1024,7 @@ def _save_post_to_queue(
     source: str,
     messages: list[Message],
     publish_text: str,
-    target_chat: str,
+    target_chats: list[str],
     category: str,
     media_list: list,
     temp_paths: list[str],
@@ -1069,6 +1070,8 @@ def _save_post_to_queue(
     if previous:
         _remove_stale_queue_media(previous.get("media_files"), media_files)
 
+    chats = [str(chat).strip() for chat in target_chats if str(chat).strip()]
+
     return db.save_post_to_queue(
         {
             "source_name": source,
@@ -1079,15 +1082,40 @@ def _save_post_to_queue(
             "media_files": json.dumps(media_files, ensure_ascii=False),
             "media_kind": media_kind,
             "category": (category or "").strip().lower(),
-            "target_chat": target_chat,
+            "target_chat": chats[0] if chats else "",
+            "target_chats": json.dumps(chats, ensure_ascii=False),
         }
     )
 
 
+def _queued_target_chats(post: dict) -> list[str]:
+    """Каналы, в которые нужно опубликовать пост из очереди.
+
+    Пост может уйти сразу в несколько каналов: теги совпали с маршрутами
+    нескольких каналов. Старая колонка target_chat остаётся основным
+    каналом — по ней видно, куда пост ушёл.
+    """
+    chats: list[str] = []
+    raw_list = post.get("target_chats") or "[]"
+    try:
+        parsed = json.loads(raw_list) if isinstance(raw_list, str) else raw_list
+    except (TypeError, ValueError):
+        parsed = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            chat = str(item or "").strip()
+            if chat and chat not in chats:
+                chats.append(chat)
+    main_chat = str(post.get("target_chat") or "").strip()
+    if main_chat and main_chat not in chats:
+        chats.append(main_chat)
+    return chats
+
+
 async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
     """Публикует пост из очереди. Возвращает (успех, сообщение)."""
-    target_chat = str(post.get("target_chat") or "").strip()
-    if not target_chat:
+    target_chats = _queued_target_chats(post)
+    if not target_chats:
         return False, "Не указан канал назначения."
 
     text = str(post.get("publish_text") or "")
@@ -1120,46 +1148,47 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
 
     try:
         if not paths:
-            if text:
+            if not text:
+                return False, "В посте нет ни текста, ни медиа."
+            for target_chat in target_chats:
                 await _send_with_retry(
                     bot, "send_message", chat_id=target_chat, text=text
                 )
-            else:
-                return False, "В посте нет ни текста, ни медиа."
         elif len(paths) == 1:
             kind = str(post.get("media_kind") or "document")
             # Текст длиннее подписи уходит отдельным сообщением, но не
             # делится надвое.
             fits_caption = len(text) <= TG_CAPTION_LIMIT
             caption = text if fits_caption else None
-            if kind == "photo":
-                await _send_with_retry(
-                    bot,
-                    "send_photo",
-                    chat_id=target_chat,
-                    photo=FSInputFile(paths[0]),
-                    caption=caption or None,
-                )
-            elif kind == "video":
-                await _send_with_retry(
-                    bot,
-                    "send_video",
-                    chat_id=target_chat,
-                    video=FSInputFile(paths[0]),
-                    caption=caption or None,
-                )
-            else:
-                await _send_with_retry(
-                    bot,
-                    "send_document",
-                    chat_id=target_chat,
-                    document=FSInputFile(paths[0]),
-                    caption=caption or None,
-                )
-            if text and not fits_caption:
-                await _send_with_retry(
-                    bot, "send_message", chat_id=target_chat, text=text
-                )
+            for target_chat in target_chats:
+                if kind == "photo":
+                    await _send_with_retry(
+                        bot,
+                        "send_photo",
+                        chat_id=target_chat,
+                        photo=FSInputFile(paths[0]),
+                        caption=caption or None,
+                    )
+                elif kind == "video":
+                    await _send_with_retry(
+                        bot,
+                        "send_video",
+                        chat_id=target_chat,
+                        video=FSInputFile(paths[0]),
+                        caption=caption or None,
+                    )
+                else:
+                    await _send_with_retry(
+                        bot,
+                        "send_document",
+                        chat_id=target_chat,
+                        document=FSInputFile(paths[0]),
+                        caption=caption or None,
+                    )
+                if text and not fits_caption:
+                    await _send_with_retry(
+                        bot, "send_message", chat_id=target_chat, text=text
+                    )
         else:
             # Подпись альбома ограничена 1024 символами, а обычное
             # сообщение вмещает 4096. Длинный текст уходит отдельным
@@ -1167,25 +1196,26 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
             # пост не публикуется никогда.
             fits_caption = len(text) <= TG_CAPTION_LIMIT
             caption = text if fits_caption else None
-            media = _build_album_media(paths, caption)
-            try:
-                await _send_with_retry(
-                    bot, "send_media_group", chat_id=target_chat, media=media
-                )
-            except Exception:
-                # Альбом из файлов одного вида Telegram принимает не всегда.
-                # Откатываемся к документам — они принимаются всегда.
-                media = [
-                    InputMediaDocument(media=FSInputFile(path), caption=caption or None)
-                    for path in paths
-                ]
-                await _send_with_retry(
-                    bot, "send_media_group", chat_id=target_chat, media=media
-                )
-            if text and not fits_caption:
-                await _send_with_retry(
-                    bot, "send_message", chat_id=target_chat, text=text
-                )
+            for target_chat in target_chats:
+                media = _build_album_media(paths, caption)
+                try:
+                    await _send_with_retry(
+                        bot, "send_media_group", chat_id=target_chat, media=media
+                    )
+                except Exception:
+                    # Альбом из файлов одного вида Telegram принимает не всегда.
+                    # Откатываемся к документам — они принимаются всегда.
+                    media = [
+                        InputMediaDocument(media=FSInputFile(path), caption=caption or None)
+                        for path in paths
+                    ]
+                    await _send_with_retry(
+                        bot, "send_media_group", chat_id=target_chat, media=media
+                    )
+                if text and not fits_caption:
+                    await _send_with_retry(
+                        bot, "send_message", chat_id=target_chat, text=text
+                    )
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
     return True, "Опубликовано."
@@ -1335,172 +1365,17 @@ async def _queue_source_draft_after_ai_failure(
                 os.remove(path)
 
 
-async def _process_message_group(
-    client: TelegramClient,
-    source: str,
-    messages: list[Message],
-    cfg: dict,
+async def _send_post_to_channel(
     bot: Bot,
-    ai_session: aiohttp.ClientSession,
-) -> None:
-    if not bot_running.is_set():
-        return
+    target_chat: str,
+    media_list: list,
+    final_text: str,
+) -> tuple[bool, Exception | None]:
+    """Отправляет пост в один канал.
 
-    messages.sort(key=lambda m: m.id)
-    captions = [m.message for m in messages if m.message]
-    raw_text = "\n".join(captions).strip()
-
-    has_media = any(_is_downloadable_media(m.media) for m in messages)
-    if not raw_text and not has_media:
-        has_unsupported_media = any(
-            m.media is not None
-            and not _is_media_skippable(m.media)
-            and not _is_downloadable_media(m.media)
-            for m in messages
-        )
-        reason = "unsupported_media" if has_unsupported_media else "empty"
-        _save_skipped_group(source, messages, reason)
-        return
-
-    if raw_text and cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
-        _save_skipped_group(source, messages, "ads_word")
-        return
-
-    if not bot_running.is_set():
-        return
-
-    print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
-    if raw_text and not _significant_words(raw_text):
-        # Подпись без единого значимого слова — обычно одни эмодзи или тег.
-        # Переписывать нечего, а ИИ на таком материале выдумывает новость.
-        # Публикуем исходный текст: он точно соответствует картинке.
-        topic, final_text = "общее", raw_text
-    elif raw_text:
-        try:
-            topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
-        except AIResponseFormatError as exc:
-            db.add_log(
-                "WARN-404",
-                f"Пост {source}/{messages[0].id} не опубликован: AI вернул неверный формат ({exc}). Оставлен для повтора.",
-            )
-            queued = await _queue_source_draft_after_ai_failure(
-                source, messages, raw_text, cfg, str(exc)
-            )
-            if not queued:
-                print(f"!!! AI вернул неверный формат для {source}/{messages[0].id}; пост оставлен для повтора.")
-            return
-        except AIRewriteError as exc:
-            db.add_log(
-                "WARN-405",
-                f"Пост {source}/{messages[0].id} не опубликован: AI недоступен ({exc}). Повторим на следующем проходе.",
-            )
-            queued = await _queue_source_draft_after_ai_failure(
-                source, messages, raw_text, cfg, str(exc)
-            )
-            if not queued:
-                print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
-            return
-    else:
-        # Media-only source posts have no text to rewrite.
-        topic, final_text = "общее", ""
-
-    if raw_text and not _rewrite_is_about_original(raw_text, final_text):
-        # Пересказ не связан с исходным постом — ИИ выдумал новость. Такая
-        # «новость» уехала бы в канал вместе с картинкой исходного поста.
-        # Публикуем исходный текст: он точно соответствует картинке.
-        db.add_log(
-            "WARN-410",
-            f"Пост {source}/{messages[0].id}: пересказ не связан с исходным "
-            "текстом, опубликован исходный текст поста.",
-        )
-        print(f"!!! Пересказ не связан с оригиналом для {source}/{messages[0].id}; публикуем исходный текст.")
-        topic, final_text = "общее", raw_text
-
-    if cfg["watermark"]:
-        final_text = f"{final_text}\n\n{cfg['watermark']}"
-    # Локальные модели часто игнорируют инструкцию по разметке и
-    # возвращают Markdown. Переводим его в HTML Telegram сами, чтобы пост
-    # выглядел одинаково независимо от послушности модели.
-    final_text = _sanitize_telegram_html(
-        text_format.markdown_to_telegram_html(final_text)
-    )
-
-
-    topic_key = (topic or "").strip().lower()
-    target_chat = (
-        cfg["topic_channels"].get(topic_key)
-        or cfg["topic_channels"].get(topic)
-        or cfg["topic_channels"].get("общее")
-    )
-    if target_chat:
-        target_chat = _target_chat_id(target_chat)
-    if not target_chat:
-        # Missing routing is a configuration problem, not a permanent content
-        # skip. Keep the post pending so adding a topic route can recover it.
-        db.add_log(
-            "WARN-400",
-            f"Для темы [{topic}] не настроен целевой канал; пост "
-            f"{source}/{messages[0].id} оставлен для повтора. Настройте категорию "
-            "или добавьте маршрут 'общее'.",
-        )
-        print(f"!!! Целевой канал для темы [{topic}] не настроен; пост оставлен для повтора.")
-        return
-
-    if not bot_running.is_set():
-        return
-
-    try:
-        media_list, temp_paths = await _download_media(messages, final_text)
-    except FloodWaitError:
-        # Let the main loop honor Telegram's required cooldown instead of
-        # retrying this download on every polling cycle.
-        raise
-    except Exception as exc:
-        db.add_log(
-            "WARN-501",
-            f"Пост {source}/{messages[0].id} не опубликован: {exc}. Оставлен для повтора.",
-        )
-        print(f"!!! Не удалось скачать вложение для {source}/{messages[0].id}; пост оставлен для повтора.")
-        return
-
-    MAX_TG_LEN = TG_MESSAGE_LIMIT
-    if len(final_text) > MAX_TG_LEN:
-        original_len = len(final_text)
-        final_text = _truncate_telegram_text(final_text, MAX_TG_LEN)
-        db.add_log(
-            "WARN-500",
-            f"Текст ответа ИИ обрезан с {original_len} до {len(final_text)} символов для Telegram.",
-        )
-
-
-    # Ручной режим: пост не публикуется сразу, а попадает в очередь,
-    # где его можно поправить, отложить, отправить или отменить.
-    if (cfg.get("publish_mode") or "auto") == "manual":
-        try:
-            _save_post_to_queue(source, messages, final_text, target_chat, topic, media_list, temp_paths)
-        except Exception as exc:
-            db.add_log(
-                "ERR-510",
-                f"Пост {source}/{messages[0].id} не попал в очередь: {exc}.",
-            )
-            print(f"!!! Не удалось сохранить пост {source}/{messages[0].id} в очередь: {exc}")
-            return
-        finally:
-            # Копии медиа уже лежат в очереди — временные файлы больше не
-            # нужны. Без этой очистки temp_media рос бы бесконечно.
-            for temp_path in temp_paths:
-                with contextlib.suppress(OSError):
-                    os.remove(temp_path)
-        db.add_log(
-            "OK-510",
-            f"Пост {source}/{messages[0].id} добавлен в очередь и ждёт подтверждения.",
-        )
-        print(f"Пост {source}/{messages[0].id} -> очередь (цель: {target_chat}).")
-        return
-
-    retry_delay_s = 0
-    secondary_send_error: Exception | None = None
-    secondary_text_to_send = ""
+    Возвращает (успех, ошибка). Ошибка при успешной отправке медиа означает,
+    что не доставился только хвост текста — медиа в канале уже есть.
+    """
     try:
         if media_list:
             # Подпись у картинки ограничена 1024 символами, а обычное
@@ -1547,133 +1422,331 @@ async def _process_message_group(
                     media=safe_media_group,
                 )
 
-
             # Текст, который не влез в подпись, уходит отдельным
             # сообщением. Он не делится надвое: подпись в подписи не
             # обрезается, хвост не отбрасывается.
             if final_text and not text_fits_caption:
-                secondary_text_to_send = final_text
                 try:
                     await _send_with_retry(
                         bot,
                         "send_message",
                         chat_id=target_chat,
-                        text=secondary_text_to_send,
+                        text=final_text,
                     )
-
                 except Exception as exc:
-                    secondary_send_error = exc
+                    return True, exc
         else:
             await _send_with_retry(
                 bot, "send_message", chat_id=target_chat, text=final_text
             )
+    except Exception as exc:
+        return False, exc
+    return True, None
 
-    except Exception as send_error:
-        _log_send_error(send_error, target_chat)
-        retryable = isinstance(
-            send_error,
-            (
-                asyncio.TimeoutError,
-                aiohttp.ClientError,
-                TelegramNetworkError,
-                TelegramServerError,
-                TelegramRetryAfter,
-            ),
+
+async def _process_message_group(
+    client: TelegramClient,
+    source: str,
+    messages: list[Message],
+    cfg: dict,
+    bot: Bot,
+    ai_session: aiohttp.ClientSession,
+) -> None:
+    if not bot_running.is_set():
+        return
+
+    messages.sort(key=lambda m: m.id)
+    captions = [m.message for m in messages if m.message]
+    raw_text = "\n".join(captions).strip()
+
+    has_media = any(_is_downloadable_media(m.media) for m in messages)
+    if not raw_text and not has_media:
+        has_unsupported_media = any(
+            m.media is not None
+            and not _is_media_skippable(m.media)
+            and not _is_downloadable_media(m.media)
+            for m in messages
         )
-        if retryable:
-            retry_delay_s = max(0, int(getattr(send_error, "retry_after", 0)))
-            db.add_log(
-                "WARN-406",
-                f"Пост {source}/{messages[0].id} не отправлен из-за временной ошибки "
-                f"({type(send_error).__name__}); оставлен для повторной попытки.",
-            )
-        elif _is_post_level_send_error(send_error):
-            # Дефект конкретного поста (например, файл больше 50 МБ).
-            # Останавливать из-за него весь парсер нельзя: лента должна
-            # продолжаться. Пост помечается пропущенным и не повторяется.
-            _save_skipped_group(source, messages, "send_failed")
-            db.add_log(
-                "WARN-407",
-                f"Пост {source}/{messages[0].id} не доставлен: Telegram отклонил медиа "
-                f"({type(send_error).__name__}: {send_error}). Пост пропущен, парсер продолжает работу.",
-            )
-            print(
-                f"!!! [WARN-407] Пост {source}/{messages[0].id} отклонён Telegram "
-                f"({send_error}); пропущен, парсер работает дальше."
-            )
-        else:
-            # A send rejection can be corrected (permissions, target, token, or
-            # malformed payload). Never turn a delivery failure into a permanent
-            # skip: stop the loop and leave the post pending for a deliberate retry.
-            bot_running.clear()
-            db.add_log(
-                "ERR-408",
-                f"Пост {source}/{messages[0].id} не доставлен из-за постоянной ошибки "
-                f"({type(send_error).__name__}); пост оставлен для повтора, парсер остановлен. "
-                "Исправьте токен/права/целевой канал и запустите парсер снова.",
-            )
-            print(
-                f"!!! [ERR-408] Отправка поста {source}/{messages[0].id} отклонена; "
-                "пост сохранён для повтора, парсер остановлен."
-            )
-    else:
-        failed_post_id = messages[0].id
-        followup_queued = False
+        reason = "unsupported_media" if has_unsupported_media else "empty"
+        _save_skipped_group(source, messages, reason)
+        return
+
+    if raw_text and cfg["ads_words"] and _contains_ad(raw_text, cfg["ads_words"]):
+        _save_skipped_group(source, messages, "ads_word")
+        return
+
+    if not bot_running.is_set():
+        return
+
+    print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
+    if raw_text and not _significant_words(raw_text):
+        # Подпись без единого значимого слова — обычно одни эмодзи или тег.
+        # Переписывать нечего, а ИИ на таком материале выдумывает новость.
+        # Публикуем исходный текст: он точно соответствует картинке.
+        post_tags, final_text = [], raw_text
+    elif raw_text:
         try:
-            if secondary_send_error is not None:
-                # Media is already published. Atomically save deduplication
-                # markers and the undelivered text tail; never retry the whole
-                # source post merely because its second message failed.
-                save_with_followup = getattr(db, "save_posts_with_followup", None)
-                if not callable(save_with_followup):
-                    raise DatabaseWriteError(
-                        "database adapter cannot atomically persist a failed text follow-up"
-                    )
-                save_with_followup(
-                    source,
-                    [message.id for message in messages],
-                    target_chat,
-                    secondary_text_to_send,
-                )
-                followup_queued = True
-            else:
-                # The real DB commits album/message-group deduplication records
-                # atomically. Keep the fallback for older lightweight adapters.
-                save_group = getattr(db, "save_posts", None)
-                if callable(save_group):
-                    save_group(source, [message.id for message in messages])
-                else:
-                    for m in messages:
-                        failed_post_id = m.id
-                        db.save_post(source, m.id)
-        except DatabaseWriteError as db_error:
-            # Telegram has already accepted the send. Stop before more posts can
-            # be emitted with missing deduplication records.
-            bot_running.clear()
+            post_tags, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+        except AIResponseFormatError as exc:
             db.add_log(
-                "ERR-DB-501",
-                f"Пост {source}/{failed_post_id} уже отправлен в Telegram, "
-                f"но запись в SQLite не удалась ({db_error}); бот остановлен. "
-                "Перед перезапуском проверьте целевой канал.",
+                "WARN-404",
+                f"Пост {source}/{messages[0].id} не опубликован: AI вернул неверный формат ({exc}). Оставлен для повтора.",
             )
-            print(
-                f"!!! Публикация {source}/{failed_post_id} уже отправлена, "
-                "но не записана в SQLite. Бот остановлен; проверьте канал перед запуском."
+            queued = await _queue_source_draft_after_ai_failure(
+                source, messages, raw_text, cfg, str(exc)
             )
-        else:
-            if followup_queued:
+            if not queued:
+                print(f"!!! AI вернул неверный формат для {source}/{messages[0].id}; пост оставлен для повтора.")
+            return
+        except AIRewriteError as exc:
+            db.add_log(
+                "WARN-405",
+                f"Пост {source}/{messages[0].id} не опубликован: AI недоступен ({exc}). Повторим на следующем проходе.",
+            )
+            queued = await _queue_source_draft_after_ai_failure(
+                source, messages, raw_text, cfg, str(exc)
+            )
+            if not queued:
+                print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
+            return
+    else:
+        # Media-only source posts have no text to rewrite.
+        post_tags, final_text = [], ""
+
+    if isinstance(post_tags, str):
+        # Старые адаптеры отдают тему строкой, а не списком тегов.
+        post_tags = routing.parse_tag_list(post_tags)
+
+    if raw_text and not _rewrite_is_about_original(raw_text, final_text):
+        # Пересказ не связан с исходным постом — ИИ выдумал новость. Такая
+        # «новость» уехала бы в канал вместе с картинкой исходного поста.
+        # Публикуем исходный текст: он точно соответствует картинке.
+        db.add_log(
+            "WARN-410",
+            f"Пост {source}/{messages[0].id}: пересказ не связан с исходным "
+            "текстом, опубликован исходный текст поста.",
+        )
+        print(f"!!! Пересказ не связан с оригиналом для {source}/{messages[0].id}; публикуем исходный текст.")
+        post_tags, final_text = [], raw_text
+
+    if cfg["watermark"]:
+        final_text = f"{final_text}\n\n{cfg['watermark']}"
+    # Локальные модели часто игнорируют инструкцию по разметке и
+    # возвращают Markdown. Переводим его в HTML Telegram сами, чтобы пост
+    # выглядел одинаково независимо от послушности модели.
+    final_text = _sanitize_telegram_html(
+        text_format.markdown_to_telegram_html(final_text)
+    )
+
+
+    # Каналы определяются тегами: пост уходит во все каналы, у которых
+    # есть хотя бы один из его тегов.
+    routes = _effective_tag_routes(cfg)
+    matched_chats = routing.resolve_channels(routes, post_tags)
+    target_chats = [_target_chat_id(chat) for chat in matched_chats if chat]
+    target_chats = [chat for chat in target_chats if chat]
+    if not target_chats:
+        # Нет маршрута — это проблема настройки, а не повод выбрасывать
+        # пост. Он остаётся в ожидании: добавить маршрут и повторить.
+        db.add_log(
+            "WARN-400",
+            f"Для тегов [{', '.join(post_tags) or 'без тегов'}] не настроен целевой канал; "
+            f"пост {source}/{messages[0].id} оставлен для повтора. Настройте маршрут "
+            "с этими тегами или добавьте маршрут 'общее'.",
+        )
+        print(
+            f"!!! Целевой канал для тегов [{', '.join(post_tags) or 'без тегов'}] "
+            "не настроен; пост оставлен для повтора."
+        )
+        return
+
+    if not bot_running.is_set():
+        return
+
+    try:
+        media_list, temp_paths = await _download_media(messages, final_text)
+    except FloodWaitError:
+        # Let the main loop honor Telegram's required cooldown instead of
+        # retrying this download on every polling cycle.
+        raise
+    except Exception as exc:
+        db.add_log(
+            "WARN-501",
+            f"Пост {source}/{messages[0].id} не опубликован: {exc}. Оставлен для повтора.",
+        )
+        print(f"!!! Не удалось скачать вложение для {source}/{messages[0].id}; пост оставлен для повтора.")
+        return
+
+    MAX_TG_LEN = TG_MESSAGE_LIMIT
+    if len(final_text) > MAX_TG_LEN:
+        original_len = len(final_text)
+        final_text = _truncate_telegram_text(final_text, MAX_TG_LEN)
+        db.add_log(
+            "WARN-500",
+            f"Текст ответа ИИ обрезан с {original_len} до {len(final_text)} символов для Telegram.",
+        )
+
+
+    # Ручной режим: пост не публикуется сразу, а попадает в очередь,
+    # где его можно поправить, отложить, отправить или отменить.
+    if (cfg.get("publish_mode") or "auto") == "manual":
+        try:
+            _save_post_to_queue(
+                source, messages, final_text, target_chats,
+                ", ".join(post_tags), media_list, temp_paths,
+            )
+        except Exception as exc:
+            db.add_log(
+                "ERR-510",
+                f"Пост {source}/{messages[0].id} не попал в очередь: {exc}.",
+            )
+            print(f"!!! Не удалось сохранить пост {source}/{messages[0].id} в очередь: {exc}")
+            return
+        finally:
+            # Копии медиа уже лежат в очереди — временные файлы больше не
+            # нужны. Без этой очистки temp_media рос бы бесконечно.
+            for temp_path in temp_paths:
+                with contextlib.suppress(OSError):
+                    os.remove(temp_path)
+        db.add_log(
+            "OK-510",
+            f"Пост {source}/{messages[0].id} добавлен в очередь и ждёт подтверждения.",
+        )
+        print(
+            f"Пост {source}/{messages[0].id} -> очередь (цель: {', '.join(target_chats)})."
+        )
+        return
+
+    retry_delay_s = 0
+    secondary_send_error: Exception | None = None
+    secondary_text_to_send = ""
+    published_chats: list[str] = []
+    try:
+        for target_chat in target_chats:
+            sent, send_error = await _send_post_to_channel(
+                bot, target_chat, media_list, final_text
+            )
+            if sent:
+                published_chats.append(target_chat)
+                if send_error is not None and secondary_send_error is None:
+                    # Медиа доставлены, не доставился только хвост текста.
+                    secondary_send_error = send_error
+                    secondary_text_to_send = final_text
+                continue
+
+            assert send_error is not None
+            _log_send_error(send_error, target_chat)
+            retryable = isinstance(
+                send_error,
+                (
+                    asyncio.TimeoutError,
+                    aiohttp.ClientError,
+                    TelegramNetworkError,
+                    TelegramServerError,
+                    TelegramRetryAfter,
+                ),
+            )
+            if retryable:
+                retry_delay_s = max(
+                    retry_delay_s, int(getattr(send_error, "retry_after", 0))
+                )
+                db.add_log(
+                    "WARN-406",
+                    f"Пост {source}/{messages[0].id} не отправлен в {target_chat} из-за "
+                    f"временной ошибки ({type(send_error).__name__}); оставлен для повторной попытки.",
+                )
+            elif _is_post_level_send_error(send_error):
+                # Дефект конкретного поста (например, файл больше 50 МБ).
+                # Останавливать из-за него весь парсер нельзя: лента должна
+                # продолжаться. Пост помечается пропущенным и не повторяется.
+                _save_skipped_group(source, messages, "send_failed")
                 db.add_log(
                     "WARN-407",
-                    f"Основная публикация {source}/{messages[0].id} уже отправлена в {target_chat}, "
-                    f"но остаток текста не доставлен ({type(secondary_send_error).__name__}). "
-                    "Остаток атомарно сохранён в SQLite и будет повторно отправлен без дублирования медиа.",
+                    f"Пост {source}/{messages[0].id} не доставлен в {target_chat}: Telegram "
+                    f"отклонил медиа ({type(send_error).__name__}: {send_error}). "
+                    "Пост пропущен, парсер продолжает работу.",
                 )
-            db.add_log(
-                "OK-501",
-                f"Пост {source}/{messages[0].id} успешно опубликован в {target_chat} "
-                f"(тема: {topic}).",
-            )
-            print(f"УСПЕХ: → [{topic}] -> {target_chat}")
+                print(
+                    f"!!! [WARN-407] Пост {source}/{messages[0].id} отклонён Telegram "
+                    f"({send_error}); пропущен, парсер работает дальше."
+                )
+            else:
+                # A send rejection can be corrected (permissions, target, token, or
+                # malformed payload). Never turn a delivery failure into a permanent
+                # skip: stop the loop and leave the post pending for a deliberate retry.
+                bot_running.clear()
+                db.add_log(
+                    "ERR-408",
+                    f"Пост {source}/{messages[0].id} не доставлен в {target_chat} из-за "
+                    f"постоянной ошибки ({type(send_error).__name__}); пост оставлен для повтора, "
+                    "парсер остановлен. Исправьте токен/права/целевой канал и запустите "
+                    "парсер снова.",
+                )
+                print(
+                    f"!!! [ERR-408] Отправка поста {source}/{messages[0].id} отклонена; "
+                    "пост сохранён для повтора, парсер остановлен."
+                )
+                break
+
+        if published_chats:
+            failed_post_id = messages[0].id
+            followup_queued = False
+            try:
+                if secondary_send_error is not None:
+                    # Media is already published. Atomically save deduplication
+                    # markers and the undelivered text tail; never retry the whole
+                    # source post merely because its second message failed.
+                    save_with_followup = getattr(db, "save_posts_with_followup", None)
+                    if not callable(save_with_followup):
+                        raise DatabaseWriteError(
+                            "database adapter cannot atomically persist a failed text follow-up"
+                        )
+                    save_with_followup(
+                        source,
+                        [message.id for message in messages],
+                        published_chats[0],
+                        secondary_text_to_send,
+                    )
+                    followup_queued = True
+                else:
+                    # The real DB commits album/message-group deduplication records
+                    # atomically. Keep the fallback for older lightweight adapters.
+                    save_group = getattr(db, "save_posts", None)
+                    if callable(save_group):
+                        save_group(source, [message.id for message in messages])
+                    else:
+                        for m in messages:
+                            failed_post_id = m.id
+                            db.save_post(source, m.id)
+            except DatabaseWriteError as db_error:
+                # Telegram has already accepted the send. Stop before more posts can
+                # be emitted with missing deduplication records.
+                bot_running.clear()
+                db.add_log(
+                    "ERR-DB-501",
+                    f"Пост {source}/{failed_post_id} уже отправлен в Telegram, "
+                    f"но запись в SQLite не удалась ({db_error}); бот остановлен. "
+                    "Перед перезапуском проверьте целевой канал.",
+                )
+                print(
+                    f"!!! Публикация {source}/{failed_post_id} уже отправлена, "
+                    "но не записана в SQLite. Бот остановлен; проверьте канал перед запуском."
+                )
+            else:
+                if followup_queued:
+                    db.add_log(
+                        "WARN-407",
+                        f"Основная публикация {source}/{messages[0].id} уже отправлена в "
+                        f"{published_chats[0]}, но остаток текста не доставлен "
+                        f"({type(secondary_send_error).__name__}). Остаток атомарно сохранён "
+                        "в SQLite и будет повторно отправлен без дублирования медиа.",
+                    )
+                db.add_log(
+                    "OK-501",
+                    f"Пост {source}/{messages[0].id} успешно опубликован в "
+                    f"{', '.join(published_chats)} (теги: {', '.join(post_tags) or 'без тегов'}).",
+                )
+                print(f"УСПЕХ: → [{', '.join(post_tags) or 'общее'}] -> {', '.join(published_chats)}")
     finally:
         for p in temp_paths:
             with contextlib.suppress(OSError):
@@ -1802,8 +1875,21 @@ class AIResponseFormatError(AIRewriteError):
     """Successful AI response does not contain publishable structured content."""
 
 
-async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[str, str]:
-    topics = ", ".join(cfg["topic_channels"].keys()) or "общее"
+def _effective_tag_routes(cfg: dict) -> dict[str, list[str]]:
+    """Маршруты по тегам для текущей конфигурации.
+
+    Если маршруты по тегам не заданы, используются старые настройки
+    «категория → канал»: категория становится тегом своего канала.
+    """
+    routes = cfg.get("tag_routes") or {}
+    if routes:
+        return routes
+    return routing.parse_routes(cfg.get("topic_channels") or {})
+
+
+async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[list[str], str]:
+    routes = _effective_tag_routes(cfg)
+    tags = ", ".join(cfg.get("tag_routes_tags") or routing.all_tags(routes)) or routing.FALLBACK_TAG
     db_prompt = (db.get_setting("system_prompt", "") or "").strip()
     # За основу берём промпт пользователя, а если его нет — рекомендуемый.
     base_prompt = db_prompt or DEFAULT_SYSTEM_PROMPT
@@ -1811,7 +1897,7 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
     # голым текстом, без цитат, ссылок и акцентов.
     if "<blockquote>" not in base_prompt:
         base_prompt = f"{base_prompt}\n\n{TELEGRAM_FORMATTING_RULES}"
-    s_prompt = f"{base_prompt}\n\nДоступные темы: [{topics}]"
+    s_prompt = f"{base_prompt}\n\nДоступные теги: [{tags}]"
 
     if cfg["ai_mode"] == "LOCAL":
         url, model = cfg["local_url"], cfg["local_model"]
@@ -1841,9 +1927,9 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
                     db.add_log("ERR-400", failure_reason)
                     print("!!! [AI ERROR] Пустой ответ от AI endpoint")
                 else:
-                    topic, rewritten_text = _parse_ai_response(res, raw_text)
+                    ai_tags, rewritten_text = _parse_ai_response(res, raw_text)
                     if rewritten_text.strip():
-                        return topic, rewritten_text
+                        return ai_tags, rewritten_text
                     failure_reason = "AI вернул пустой текст после разбора"
                     db.add_log("ERR-400", failure_reason)
             else:
@@ -1990,7 +2076,7 @@ _AI_SECTIONS = ("ТЕМА", "ТЕКСТ", "ХЭШТЕГИ")
 #: иначе выделение текста рядом с меткой принято за метку.
 _AI_LABEL_RE = re.compile(
     r"(?P<mark>\*\*|__|\*|_|`)[ \t]*"
-    r"(?P<label>ТЕМА|ТЕКСТ|ХЭШТЕГИ)[ \t]*"
+    r"(?P<label>ТЕМА|ТЕКСТ|ХЭШТЕГИ|ТЕГИ)[ \t]*"
     r"(?::)?[ \t]*(?P=mark)(?::)?",
     re.IGNORECASE,
 )
@@ -2030,32 +2116,64 @@ def _extract_ai_topic(normalized: str) -> str:
     return "общее"
 
 
-def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
+def _parse_ai_response(res: str, raw_text: str) -> tuple[list[str], str]:
+    """Разбирает ответ модели: теги для маршрутизации и текст поста.
+
+    Теги нужны только для выбора канала — в самом посте их быть не
+    должно, поэтому они вырезаются из текста.
+    """
     if not isinstance(res, str) or not res.strip():
         raise AIResponseFormatError("пустой ответ")
 
     normalized = _normalize_ai_labels(res)
-    topic = _extract_ai_topic(normalized)
     c_m = re.search(r"ТЕКСТ[ \t]*:[ \t]*(.*)", normalized, re.DOTALL | re.IGNORECASE)
-    h_m = re.search(r"ХЭШТЕГИ[ \t]*:[ \t]*(.*)", normalized, re.DOTALL | re.IGNORECASE)
-
     if not c_m:
         raise AIResponseFormatError("отсутствует обязательный раздел ТЕКСТ:")
 
     full = c_m.group(1).strip()
-    clean = re.split(r"ХЭШТЕГИ[ \t]*:", full, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    # Секция тегов обрывает текст: дальше идут только теги.
+    clean = re.split(
+        r"(?:ХЭШТЕГИ|ТЕГИ)[ \t]*:", full, maxsplit=1, flags=re.IGNORECASE
+    )[0].strip()
     if not clean:
         raise AIResponseFormatError("раздел ТЕКСТ: пуст")
 
-    tags = ""
-    if h_m:
-        # Хештеги модель часто пишет в несколько строк — собираем их все.
-        tags = " ".join(
-            part.strip()
-            for part in h_m.group(1).splitlines()
-            if part.strip()
-        )
-    return topic, f"{clean}\n\n{tags}" if tags else clean
+    ai_tags = _collect_ai_tags(normalized)
+
+    # Хештеги, оставшиеся в самом тексте, тоже определяют маршрут —
+    # и тоже удаляются из поста.
+    inline_tags = routing.extract_tags(clean)
+    for tag in inline_tags:
+        if tag not in ai_tags:
+            ai_tags.append(tag)
+
+    return ai_tags, routing.strip_hashtags(clean)
+
+
+def _collect_ai_tags(normalized: str) -> list[str]:
+    """Собирает теги из разделов ТЕГИ, ХЭШТЕГИ или ТЕМА."""
+    tags: list[str] = []
+
+    def _add(values: list[str]) -> None:
+        for tag in values:
+            if tag and tag not in tags:
+                tags.append(tag)
+
+    for pattern in (
+        r"ХЭШТЕГИ[ \t]*:[ \t]*(.*)",
+        r"ТЕГИ[ \t]*:[ \t]*(.*)",
+        r"ТЕМА[ \t]*:[ \t]*([^\n]*)",
+    ):
+        match = re.search(pattern, normalized, re.DOTALL | re.IGNORECASE)
+        if not match:
+            continue
+        raw = match.group(1)
+        _add(routing.parse_tag_list(raw))
+        if tags:
+            # Теги из раздела ТЕМА — запасной источник: если раздел ТЕГИ
+            # пуст, берём тему.
+            break
+    return tags
 
 
 def _log_ai_http_error(status: int, cfg: dict, body: str) -> None:

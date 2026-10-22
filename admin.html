@@ -895,24 +895,24 @@
       <div class="page-head">
         <div>
           <h1 class="page-title">Маршруты публикации</h1>
-          <p class="page-desc">ИИ выбирает категорию для каждого поста, а категория определяет целевой канал. Нужна хотя бы одна пара «категория → канал», иначе посты не будут опубликованы.</p>
+          <p class="page-desc">ИИ определяет теги для каждого поста, а теги определяют, в какие каналы он уйдёт. Одному каналу можно задать несколько тегов. Нужен хотя бы один маршрут, иначе посты не будут опубликованы.</p>
         </div>
       </div>
 
       <div class="block">
         <div class="block-head">
-          <div class="block-title">Сопоставление категорий и каналов</div>
-          <div class="block-desc">Если категория не определена, пост уходит в категорию <code>общее</code>.</div>
+          <div class="block-title">Сопоставление тегов и каналов</div>
+          <div class="block-desc">Пост уходит во все каналы, у которых есть хотя бы один из его тегов. Если ни один тег не подошёл, пост уходит в канал с тегом <code>общее</code>.</div>
         </div>
         <div class="block-body">
           <div class="route-head">
-            <span>Категория</span>
             <span>Канал</span>
+            <span>Теги</span>
             <span></span>
           </div>
           <div class="route-list" id="topics-list"></div>
           <button type="button" class="btn btn-secondary btn-sm" id="add-topic" style="margin-top:12px;">
-            <svg class="icon icon-sm"><use href="#i-plus"/></svg>Добавить категорию
+            <svg class="icon icon-sm"><use href="#i-plus"/></svg>Добавить маршрут
           </button>
         </div>
       </div>
@@ -1670,17 +1670,19 @@ async function refreshAll(){
   }
 }
 
-// ---------- Маршруты «тема → канал» ----------
-function addTopicRow(topic = '', chat = ''){
+// ---------- Маршруты «канал → теги» ----------
+// Каждому каналу соответствует один или несколько тегов. Пост уходит
+// во все каналы, у которых есть хотя бы один из его тегов.
+function addTopicRow(chat = '', tags = ''){
   const list = $id('topics-list');
   if (!list) return;
   const row = document.createElement('div');
   row.className = 'route-row';
   row.innerHTML =
-    '<div><div class="route-label">Категория</div>' +
-      '<input type="text" class="topic-name" placeholder="например: технологии" value="' + escapeHtml(topic) + '"></div>' +
     '<div><div class="route-label">Канал</div>' +
       '<input type="text" class="topic-chat" placeholder="@mychannel или -100123456789" value="' + escapeHtml(chat) + '"></div>' +
+    '<div><div class="route-label">Теги</div>' +
+      '<input type="text" class="topic-name" placeholder="политика, срочное" value="' + escapeHtml(tags) + '"></div>' +
     '<button type="button" class="route-remove" title="Удалить маршрут" aria-label="Удалить маршрут">' +
       '<svg class="icon icon-sm"><use href="#i-x"/></svg></button>';
   row.querySelector('.route-remove').addEventListener('click', () => {
@@ -1700,18 +1702,24 @@ function loadTopics(obj){
   list.innerHTML = '';
   const entries = Object.entries(obj || {});
   if (!entries.length){
-    addTopicRow('общее', '');
+    addTopicRow('', 'общее');
     return;
   }
-  entries.forEach(([k, v]) => addTopicRow(k, v));
+  entries.forEach(([k, v]) => {
+    const tags = Array.isArray(v) ? v.join(', ') : String(v || '');
+    addTopicRow(k, tags);
+  });
 }
 
 function collectTopics(){
   const out = {};
   document.querySelectorAll('#topics-list .route-row').forEach(row => {
-    const name = row.querySelector('.topic-name').value.trim();
     const chat = row.querySelector('.topic-chat').value.trim();
-    if (name && chat) out[name.toLowerCase()] = chat;
+    const tags = row.querySelector('.topic-name').value.trim();
+    if (!chat || !tags) return;
+    const tagList = tags.split(/[,;]/).map(t => t.trim().toLowerCase()).filter(Boolean);
+    if (!tagList.length) return;
+    out[chat] = out[chat] ? out[chat].concat(tagList.filter(t => !out[chat].includes(t))) : tagList;
   });
   return out;
 }
@@ -1790,7 +1798,28 @@ function fillSettings(s){
   const topicsList = $id('topics-list');
   const topicsEdited = topicsList && topicsList.querySelector('.route-row');
   if (!topicsEdited || forceSecretRefresh){
-    loadTopics(parseTopics(String(s['topic_channels'] || '{}')));
+    // Маршруты по тегам. Если их ещё нет, показываем старые настройки
+    // «категория → канал», чтобы переход не был резким.
+    const rawRoutes = String(s['tag_routes'] || '');
+    loadTopics(rawRoutes ? parseTopics(rawRoutes) : legacyRoutesToTags(s['topic_channels']));
+  }
+}
+
+/** Старые маршруты «категория → канал» в виде «канал → [категория]». */
+function legacyRoutesToTags(raw){
+  try {
+    const obj = JSON.parse(raw || '{}');
+    const out = {};
+    Object.entries(obj || {}).forEach(([topic, chat]) => {
+      const key = String(chat || '').trim();
+      if (!key) return;
+      const tag = String(topic || '').trim().toLowerCase();
+      if (!tag) return;
+      out[key] = out[key] ? out[key].concat([tag]) : [tag];
+    });
+    return out;
+  } catch (e){
+    return {};
   }
 }
 
@@ -2401,7 +2430,7 @@ async function saveQuick(){
       payload[k] = el.value.trim();
     }
   }
-  payload['topic_channels'] = JSON.stringify(collectTopics());
+  payload['tag_routes'] = JSON.stringify(collectTopics());
   const modeRadio = $id('publish_mode_manual');
   payload['publish_mode'] = (modeRadio && modeRadio.checked) ? 'manual' : 'auto';
 

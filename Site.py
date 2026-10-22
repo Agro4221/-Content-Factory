@@ -51,6 +51,7 @@ from proxy_check import (
     normalize_mtproto_proxy_link,
     resolve_proxy_type,
 )
+import routing
 from state import bot_running
 import contextlib
 
@@ -247,6 +248,43 @@ def _normalize_validated_setting(key: str, value) -> str:
                 seen_topic_keys.add(canonical_topic)
                 normalized_topics[topic] = target
         return json.dumps(normalized_topics, ensure_ascii=False)
+
+    if key == "tag_routes":
+        # Маршруты по тегам: канал → список тегов. Один и тот же тег может
+        # стоять у нескольких каналов — тогда пост уйдёт во все.
+        try:
+            raw_routes = json.loads(raw or "{}")
+        except (TypeError, ValueError) as exc:
+            raise SettingsValidationError(
+                field=key,
+                msg="Маршруты должны содержать корректный JSON-объект.",
+            ) from exc
+        if not isinstance(raw_routes, dict):
+            raise SettingsValidationError(
+                field=key,
+                msg="Маршруты должны быть JSON-объектом «канал → теги».",
+            )
+        normalized_routes: dict[str, list[str]] = {}
+        for channel, tags in raw_routes.items():
+            if not isinstance(channel, str):
+                raise SettingsValidationError(
+                    field=key,
+                    msg="Названия каналов в маршрутах должны быть строками.",
+                )
+            try:
+                target = normalize_target_chat(channel.strip())
+            except ValueError as exc:
+                raise SettingsValidationError(field=key, msg=str(exc)) from exc
+            tag_list = routing.parse_tag_list(tags)
+            if not target or not tag_list:
+                continue
+            if target in normalized_routes:
+                for tag in tag_list:
+                    if tag not in normalized_routes[target]:
+                        normalized_routes[target].append(tag)
+            else:
+                normalized_routes[target] = tag_list
+        return routing.routes_to_json(normalized_routes)
 
     if key == "proxy_type":
         normalized = raw.lower()
@@ -1380,15 +1418,16 @@ def _build_posts_stats() -> dict:
     sources_count = len(sources_list)
     active_sources_24h = db.count_active_published_sources_since(h24_iso)
 
+    # Маршруты по тегам: канал → список тегов. Старые настройки
+    # «категория → канал» тоже считаются, чтобы статистика не обнулялась.
     try:
-        import json as _json
-        topics = _json.loads(settings.get("topic_channels") or "{}")
-        if not isinstance(topics, dict):
-            topics = {}
+        routes = routing.parse_routes(settings.get("tag_routes") or "")
+        if not routes:
+            routes = routing.parse_routes(settings.get("topic_channels") or "")
     except (TypeError, ValueError):
-        topics = {}
-    topics_count = len(topics)
-    topics_with_target = sum(1 for v in topics.values() if v)
+        routes = {}
+    topics_count = len(routes)
+    topics_with_target = sum(1 for tags in routes.values() if tags)
 
     return {
         "bot_running": bot_running.is_set(),

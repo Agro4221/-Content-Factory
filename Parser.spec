@@ -131,6 +131,7 @@ hiddenimports = [
     "main",
     "paths",
     "proxy_check",
+    "routing",
     "secrets_store",
     "Site",
     "startup",
