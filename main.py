@@ -1494,6 +1494,75 @@ def _stdin_is_interactive() -> bool:
         return False
 
 
+def _process_image_name(pid: int) -> str:
+    """Полный путь к исполняемому файлу процесса (пустая строка при ошибке)."""
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_wchar_p,
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        kernel32.QueryFullProcessImageNameW.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return ""
+        try:
+            size = ctypes.c_ulong(1024)
+            buffer = ctypes.create_unicode_buffer(1024)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return ""
+            return buffer.value
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return ""
+
+
+def _console_belongs_to_app() -> bool:
+    """True, если консолью пользуется только наше приложение.
+
+    У собранного .exe в консоли два процесса: загрузчик PyInstaller и сама
+    программа, поэтому одного процесса недостаточно, чтобы судить о
+    владельце консоли. Прячем окно только когда в консоли нет посторонних
+    процессов — тогда её создали для нас (например, двойным кликом по
+    файлу) и её никто другой не использует.
+    """
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetConsoleProcessList.argtypes = [
+            ctypes.POINTER(ctypes.c_ulong),
+            ctypes.c_ulong,
+        ]
+        kernel32.GetConsoleProcessList.restype = ctypes.c_ulong
+
+        buffer = (ctypes.c_ulong * 16)()
+        attached = kernel32.GetConsoleProcessList(buffer, 16)
+        if attached <= 0:
+            return False
+
+        own_name = os.path.basename(sys.executable).lower()
+        for index in range(attached):
+            image = _process_image_name(buffer[index])
+            if not image:
+                return False
+            if os.path.basename(image).lower() != own_name:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _hide_console_window() -> None:
     """Прячет окно консоли после успешного входа в Telegram.
 
@@ -1502,8 +1571,8 @@ def _hide_console_window() -> None:
     Само приложение продолжает работать, панель управления остаётся
     доступна по http://127.0.0.1:8000/.
 
-    Прячется только собственная консоль процесса: если приложение запущено
-    из уже открытого окна терминала, чужое окно не трогаем.
+    Прячется только собственная консоль приложения: если программа
+    запущена из уже открытого окна терминала, чужое окно не трогаем.
     """
     if sys.platform != "win32":
         return
@@ -1512,20 +1581,11 @@ def _hide_console_window() -> None:
 
         kernel32 = ctypes.windll.kernel32
         user32 = ctypes.windll.user32
-        kernel32.GetConsoleProcessList.argtypes = [
-            ctypes.POINTER(ctypes.c_ulong),
-            ctypes.c_ulong,
-        ]
-        kernel32.GetConsoleProcessList.restype = ctypes.c_ulong
         kernel32.GetConsoleWindow.restype = ctypes.c_void_p
         user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
         user32.ShowWindow.restype = ctypes.c_int
 
-        buffer = (ctypes.c_ulong * 8)()
-        attached = kernel32.GetConsoleProcessList(buffer, 8)
-        if attached != 1:
-            # Либо в консоли есть другие процессы (окно cmd), либо не удалось
-            # определить их число. В обоих случаях чужое окно не трогаем.
+        if not _console_belongs_to_app():
             return
 
         hwnd = kernel32.GetConsoleWindow()
