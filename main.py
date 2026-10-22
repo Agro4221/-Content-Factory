@@ -1032,6 +1032,71 @@ async def _publish_due_scheduled_posts(bot: Bot) -> int:
     return published
 
 
+async def _queue_source_draft_after_ai_failure(
+    source: str,
+    messages: list[Message],
+    raw_text: str,
+    cfg: dict,
+    reason: str,
+) -> bool:
+    """Keep a source post visible in the manual queue when its AI rewrite fails."""
+    if (cfg.get("publish_mode") or "auto") != "manual":
+        return False
+
+    topic = "общее"
+    target_chat = (cfg.get("topic_channels") or {}).get(topic) or ""
+    if target_chat:
+        try:
+            target_chat = _target_chat_id(target_chat)
+        except Exception:
+            target_chat = ""
+
+    media_list: list = []
+    temp_paths: list[str] = []
+    media_error = ""
+    try:
+        media_list, temp_paths = await _download_media(messages, raw_text)
+    except Exception as exc:
+        # The text draft is still useful even when a source attachment cannot
+        # be downloaded. The failure is exposed in the queue entry.
+        media_error = f"Медиа не сохранено: {type(exc).__name__}: {exc}"
+        media_list, temp_paths = [], []
+
+    try:
+        queue_id = _save_post_to_queue(
+            source, messages, raw_text, target_chat, topic, media_list, temp_paths
+        )
+        if not queue_id:
+            raise RuntimeError("database returned an empty queue ID")
+
+        detail = f"AI-рерайт не выполнен: {reason}. Сохранён исходный текст."
+        if media_error:
+            detail += f" {media_error}"
+        db.update_queued_post(queue_id, {"last_error": detail})
+        db.add_log(
+            "WARN-406",
+            f"Пост {source}/{messages[0].id} добавлен в очередь как черновик: {detail}",
+        )
+        print(
+            f"--> Пост {source}/{messages[0].id} сохранён в очереди как черновик "
+            "с исходным текстом; AI-рерайт можно повторить позже."
+        )
+        return True
+    except Exception as exc:
+        db.add_log(
+            "ERR-510",
+            f"Не удалось сохранить черновик {source}/{messages[0].id} в очередь: {exc}",
+        )
+        print(f"!!! Не удалось сохранить черновик {source}/{messages[0].id} в очередь: {exc}")
+        return False
+    finally:
+        for path in temp_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 async def _process_message_group(
     client: TelegramClient,
     source: str,
@@ -1087,14 +1152,22 @@ async def _process_message_group(
                 "WARN-404",
                 f"Пост {source}/{messages[0].id} не опубликован: AI вернул неверный формат ({exc}). Оставлен для повтора.",
             )
-            print(f"!!! AI вернул неверный формат для {source}/{messages[0].id}; пост оставлен для повтора.")
+            queued = await _queue_source_draft_after_ai_failure(
+                source, messages, raw_text, cfg, str(exc)
+            )
+            if not queued:
+                print(f"!!! AI вернул неверный формат для {source}/{messages[0].id}; пост оставлен для повтора.")
             return
         except AIRewriteError as exc:
             db.add_log(
                 "WARN-405",
                 f"Пост {source}/{messages[0].id} не опубликован: AI недоступен ({exc}). Повторим на следующем проходе.",
             )
-            print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
+            queued = await _queue_source_draft_after_ai_failure(
+                source, messages, raw_text, cfg, str(exc)
+            )
+            if not queued:
+                print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
             return
     else:
         # Media-only source posts have no text to rewrite.
@@ -1940,6 +2013,12 @@ async def _process_one_source(
         if not bot_running.is_set():
             break
 
+        is_post_queued = getattr(db, "is_post_queued", None)
+        if callable(is_post_queued) and is_post_queued(source, messages[0].id):
+            completed_groups[gid] = True
+            advance_cursor()
+            continue
+
         pending = [
             message for message in messages
             if not db.is_published(source, message.id)
@@ -1950,7 +2029,9 @@ async def _process_one_source(
                 client, source, pending, cfg, bot, ai_session
             )
 
-        completed_groups[gid] = all(
+        queued_check = getattr(db, "is_post_queued", None)
+        queued_group = callable(queued_check) and queued_check(source, messages[0].id)
+        completed_groups[gid] = queued_group or all(
             db.is_published(source, message.id)
             or db.is_skipped(source, message.id)
             for message in messages
