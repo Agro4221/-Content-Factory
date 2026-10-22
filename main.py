@@ -1020,6 +1020,16 @@ def _remove_stale_queue_media(raw_media_files: object, keep: list[str]) -> None:
 #: Момент последней автоочистки медиа (монотонное время, не зависит от часов).
 _last_media_cleanup_ts = 0.0
 
+#: Сколько раз пробуем обработать пост, прежде чем признать его битым.
+MAX_POST_ATTEMPTS = 5
+
+#: Сколько раз пробуем опубликовать отложенный пост, прежде чем снять его.
+MAX_PUBLISH_ATTEMPTS = 5
+
+#: Счётчик попыток по постам, которые не удалось обработать. Нужен, чтобы
+#: один битый пост не блокировал всю ленту источника навсегда.
+_POISON_ATTEMPTS: dict[str, int] = {}
+
 
 def _save_post_to_queue(
     source: str,
@@ -1320,9 +1330,35 @@ async def _publish_due_scheduled_posts(bot: Bot) -> int:
             db.add_log("OK-511", f"Отложенный пост {post['id']} опубликован в {post.get('target_chat')}.")
             published += 1
         else:
-            db.update_queued_post(post["id"], {"last_error": message})
-            db.add_log("ERR-511", f"Не удалось опубликовать отложенный пост {post['id']}: {message}")
+            # Пост, который не публикуется из-за постоянной ошибки, не
+            # должен повторяться вечно: после нескольких попыток он
+            # переводится в «ошибка» и перестаёт занимать очередь.
+            attempts = _post_publish_attempts(post) + 1
+            changes: dict = {"last_error": message, "publish_attempts": attempts}
+            if attempts >= MAX_PUBLISH_ATTEMPTS:
+                changes["status"] = "failed"
+            db.update_queued_post(post["id"], changes)
+            if changes.get("status") == "failed":
+                db.add_log(
+                    "ERR-511",
+                    f"Отложенный пост {post['id']} не опубликован после {attempts} попыток: "
+                    f"{message}. Пост помечен как ошибочный.",
+                )
+            else:
+                db.add_log(
+                    "ERR-511",
+                    f"Не удалось опубликовать отложенный пост {post['id']} "
+                    f"(попытка {attempts} из {MAX_PUBLISH_ATTEMPTS}): {message}",
+                )
     return published
+
+
+def _post_publish_attempts(post: dict) -> int:
+    """Сколько раз уже пытались опубликовать пост."""
+    try:
+        return max(0, int(post.get("publish_attempts") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 async def _queue_source_draft_after_ai_failure(
@@ -2651,8 +2687,30 @@ async def _process_one_source(
         )
         advance_cursor()
         if not completed_groups[gid]:
-            # Keep this message available for retry and don't advance over newer IDs.
+            # Пост не удалось обработать. Считаем попытки: без этого он
+            # повторялся бы вечно и блокировал всю ленту источника — новые
+            # посты до него не доходили.
+            attempt_key = f"{source}:{messages[0].id}"
+            attempts = _POISON_ATTEMPTS.get(attempt_key, 0) + 1
+            _POISON_ATTEMPTS[attempt_key] = attempts
+            if attempts >= MAX_POST_ATTEMPTS:
+                _save_skipped_group(source, messages, "retries_exhausted")
+                db.add_log(
+                    "WARN-409",
+                    f"Пост {source}/{messages[0].id} не обработан после {attempts} попыток; "
+                    "помечен как пропущенный, чтобы не блокировать ленту источника.",
+                )
+                print(
+                    f"!!! [WARN-409] Пост {source}/{messages[0].id} не обработан "
+                    f"за {attempts} попыток; пропущен."
+                )
+                completed_groups[gid] = True
+                advance_cursor()
+                continue
+            # Оставляем пост доступным для повтора и не двигаем курсор
+            # дальше: новые посты пока не обрабатываем.
             return False
+        _POISON_ATTEMPTS.pop(f"{source}:{messages[0].id}", None)
     return False
 
 

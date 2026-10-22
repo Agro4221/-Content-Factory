@@ -311,6 +311,25 @@ def _migration_v9(db: DB) -> None:
     )
 
 
+def _migration_v10(db: DB) -> None:
+    """v10: счётчик попыток публикации для постов очереди.
+
+    Пост, который не публикуется из-за постоянной ошибки, не должен
+    повторяться вечно: после нескольких попыток он переводится в
+    «ошибка» и перестаёт занимать очередь.
+    """
+    columns = {
+        row[1]
+        for row in db.conn.execute("PRAGMA table_info(post_queue)").fetchall()
+    }
+    if not columns:
+        return
+    if "publish_attempts" not in columns:
+        db.conn.execute(
+            "ALTER TABLE post_queue ADD COLUMN publish_attempts INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 # Регистрируем миграции
 MIGRATIONS.append((1, _migration_v1))
 MIGRATIONS.append((2, _migration_v2))
@@ -321,6 +340,7 @@ MIGRATIONS.append((6, _migration_v6))
 MIGRATIONS.append((7, _migration_v7))
 MIGRATIONS.append((8, _migration_v8))
 MIGRATIONS.append((9, _migration_v9))
+MIGRATIONS.append((10, _migration_v10))
 
 CURRENT_SCHEMA_VERSION: int = max(v for v, _ in MIGRATIONS)
 
@@ -1299,6 +1319,7 @@ class DB:
         sql = (
             "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
             "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
+            "publish_attempts, "
             "published_at, last_error, created_at, updated_at "
             "FROM post_queue"
         )
@@ -1315,7 +1336,8 @@ class DB:
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
             "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
-            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+            "scheduled_at", "published_at", "last_error", "publish_attempts",
+            "created_at", "updated_at",
         ]
         return [dict(zip(columns, row, strict=True)) for row in rows]
 
@@ -1341,6 +1363,7 @@ class DB:
             cur.execute(
                 "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
                 "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
+            "publish_attempts, "
                 "published_at, last_error, created_at, updated_at "
                 "FROM post_queue WHERE id = ?",
                 (int(post_id),),
@@ -1351,7 +1374,8 @@ class DB:
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
             "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
-            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+            "scheduled_at", "published_at", "last_error", "publish_attempts",
+            "created_at", "updated_at",
         ]
         return dict(zip(columns, row, strict=True))
 
@@ -1362,6 +1386,7 @@ class DB:
             cur.execute(
                 "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
                 "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
+            "publish_attempts, "
                 "published_at, last_error, created_at, updated_at "
                 "FROM post_queue WHERE source_name = ? AND post_id = ?",
                 (str(source), str(post_id)),
@@ -1372,14 +1397,16 @@ class DB:
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
             "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
-            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+            "scheduled_at", "published_at", "last_error", "publish_attempts",
+            "created_at", "updated_at",
         ]
         return dict(zip(columns, row, strict=True))
 
     def update_queued_post(self, post_id: int, changes: dict) -> bool:
         allowed = {
-            "publish_text", "category", "target_chat", "status", "scheduled_at",
-            "media_files", "media_kind", "last_error", "published_at",
+            "publish_text", "category", "target_chat", "target_chats", "status",
+            "scheduled_at", "media_files", "media_kind", "last_error", "published_at",
+            "publish_attempts",
         }
         fields = {k: v for k, v in changes.items() if k in allowed}
         if not fields:
@@ -1406,6 +1433,7 @@ class DB:
             cur.execute(
                 "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
                 "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
+            "publish_attempts, "
                 "published_at, last_error, created_at, updated_at "
                 "FROM post_queue WHERE status = 'scheduled' "
                 "AND scheduled_at IS NOT NULL AND scheduled_at <= ? "
@@ -1416,7 +1444,8 @@ class DB:
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
             "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
-            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+            "scheduled_at", "published_at", "last_error", "publish_attempts",
+            "created_at", "updated_at",
         ]
         return [dict(zip(columns, row, strict=True)) for row in rows]
 
