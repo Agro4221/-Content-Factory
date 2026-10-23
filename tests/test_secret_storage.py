@@ -321,6 +321,40 @@ def test_failed_secret_encryption_never_writes_plaintext(tmp_path, monkeypatch) 
         db.conn.close()
 
 
+
+def test_startup_fails_closed_when_legacy_secret_migration_fails(tmp_path, monkeypatch) -> None:
+    """Приложение не начинает работу, если старый секрет не удалось зашифровать."""
+    if not secrets_store.supported():
+        pytest.skip("DPAPI доступен только в Windows")
+
+    import sqlite3
+
+    path = tmp_path / "legacy-failure.db"
+    db = DB(str(path))
+    try:
+        db.conn.execute(
+            "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+            ("bot_token", "legacy-token-for-test"),
+        )
+    finally:
+        db.conn.close()
+
+    def fail_encryption(_value: str, _account: str = "") -> str:
+        raise secrets_store.SecretEncryptionError("simulated DPAPI failure")
+
+    monkeypatch.setattr("database._encrypt_secret", fail_encryption)
+    with pytest.raises(secrets_store.SecretEncryptionError, match="Запуск остановлен"):
+        DB(str(path))
+
+    # База остаётся целой для повторной попытки, но конструктор не возвращает
+    # объект DB, через который приложение могло бы использовать открытый секрет.
+    with sqlite3.connect(path) as raw_db:
+        stored = raw_db.execute(
+            "SELECT value FROM bot_settings WHERE key='bot_token'"
+        ).fetchone()[0]
+    assert stored == "legacy-token-for-test"
+
+
 def test_secret_write_is_rejected_without_system_encryption(tmp_path, monkeypatch) -> None:
     """На неподдерживаемой платформе новый секрет не сохраняется открытым текстом."""
     db = make_db(tmp_path)

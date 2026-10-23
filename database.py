@@ -427,9 +427,13 @@ class DB:
         self._ensure_created_at_columns()
         self._run_migrations()
         self._migrate_legacy_post_keys()  # для очень старых БД до версионирования
-        # Секреты, сохранённые до включения шифрования, переводятся в
-        # зашифрованный вид. Значения не выводятся никуда.
-        self.migrate_plaintext_secrets()
+        # Миграция должна завершиться до того, как приложение начнёт читать настройки.
+        # При ошибке закрываем соединение и останавливаем инициализацию.
+        try:
+            self.migrate_plaintext_secrets()
+        except Exception:
+            self.conn.close()
+            raise
         self._warn_if_secret_storage_unavailable()
 
     # ---------- init ----------
@@ -838,6 +842,7 @@ class DB:
             rows = cur.fetchall()
 
         migrated = 0
+        failed = 0
         for key, value in rows:
             if key not in SECRET_SETTING_KEYS:
                 continue
@@ -849,6 +854,7 @@ class DB:
             try:
                 encrypted = _encrypt_secret(value, key)
             except SecretEncryptionError as exc:
+                failed += 1
                 self._log_secret_failure("ERR-503", key, exc)
                 continue
             with self._lock, self.conn:
@@ -860,6 +866,12 @@ class DB:
         if migrated:
             _logger.info("[DB] Encrypted %d stored secret(s) with Windows DPAPI", migrated)
             self._purge_free_pages()
+        if failed:
+            raise SecretEncryptionError(
+                f"Не удалось зашифровать сохранённые секреты (ошибок: {failed}). "
+                "Запуск остановлен, чтобы не использовать открытые значения. "
+                "Проверьте системное шифрование и повторите запуск."
+            )
         return migrated
 
     def _purge_free_pages(self) -> None:
