@@ -2992,10 +2992,8 @@ async def main() -> None:
             or signature != connection_signature
             or not _client_is_connected(client)
         ):
-            # Соединение создаётся один раз и живёт между кругами. Пересоздаём
-            # его, только если сменились настройки или соединение отвалилось.
-            # Раньше клиент создавался заново каждый круг: файл сессии
-            # переписывался, а Telegram получал лишние переподключения.
+            # Клиент и связанные с ним сессии переиспользуются между циклами опроса.
+            # Переподключение требуется при изменении настроек или потере связи.
             await _close_clients(bot, client, ai_session, proxy)
             bot = client = ai_session = proxy = None
             connection_signature = None

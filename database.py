@@ -1,4 +1,3 @@
-# REFACTORED: navigation / UX / UI restructured per expert spec v2.0
 """
 SQLite-обёртка для проекта Content Factory.
 
