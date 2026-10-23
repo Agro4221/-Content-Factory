@@ -8,7 +8,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "release-windows.yml"
 
-remove ci skip explanation@requires_ci
 def test_windows_release_workflow_is_version_tag_and_manual_dispatch_driven() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
