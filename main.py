@@ -156,8 +156,8 @@ def _is_media_skippable(media) -> bool:
 
 
 def _is_downloadable_media(media) -> bool:
-    # Telethon normally represents videos as MessageMediaDocument; keep the
-    # explicit video name for compatible wrappers and test doubles.
+    # Обычно Telethon представляет видео как MessageMediaDocument.
+    # Отдельный тип оставлен для совместимых обёрток и тестовых заглушек.
     return type(media).__name__ in {
         "MessageMediaPhoto",
         "MessageMediaDocument",
@@ -166,13 +166,13 @@ def _is_downloadable_media(media) -> bool:
 
 
 def _save_skipped_group(source: str, messages: list[Message], reason: str) -> None:
-    """Record all IDs from one logical post together when supported by the DB."""
+    """Сохраняет идентификаторы всех сообщений логического поста одной операцией."""
     post_ids = [message.id for message in messages]
     save_group = getattr(db, "save_skipped_posts", None)
     if callable(save_group):
         save_group(source, post_ids, reason)
         return
-    # Compatibility for lightweight adapters and older DB implementations.
+    # Совместимость с упрощёнными адаптерами и старыми реализациями базы данных.
     for post_id in post_ids:
         db.save_skipped_post(source, post_id, reason)
 
@@ -193,7 +193,7 @@ def _classify_extension(path: str):
 
 
 def _prepare_media_group(media_list: list) -> list:
-    """Ensure a Telegram media group uses an API-supported homogeneous family."""
+    """Приводит альбом Telegram к совместимому с Bot API типу медиа."""
     if len(media_list) < 2:
         return media_list
 
@@ -203,8 +203,8 @@ def _prepare_media_group(media_list: list) -> list:
         for item in media_list
     )
     if has_document and has_visual:
-        # Bot API does not allow document items mixed with photo/video items in
-        # one album. Sending them all as documents preserves every file safely.
+        # Bot API не разрешает смешивать документы и фото/видео в одном альбоме.
+        # Отправка всех элементов как документов сохраняет каждый файл.
         return [
             InputMediaDocument(media=item.media, caption=getattr(item, "caption", None))
             for item in media_list
@@ -234,7 +234,7 @@ def _last_safe_text_space(value: str) -> int:
 
 
 def _media_caption_cut_index(text: str, max_chars: int = 1020) -> int:
-    """Choose one safe split point for both the caption and its continuation."""
+    """Определяет безопасную границу для подписи и продолжения текста."""
     if len(text) <= max_chars:
         return len(text)
 
@@ -245,7 +245,7 @@ def _media_caption_cut_index(text: str, max_chars: int = 1020) -> int:
             prefix = prefix[:space]
         cut = len(prefix)
 
-        # Never leave a partial tag or HTML entity at the end of the caption.
+        # Не оставляем незакрытый HTML-тег или HTML-сущность в конце подписи.
         last_open = prefix.rfind("<")
         last_close = prefix.rfind(">")
         if last_open > last_close:
@@ -258,9 +258,8 @@ def _media_caption_cut_index(text: str, max_chars: int = 1020) -> int:
 
     cut = raw_safe_cut(max_chars)
     while cut > 0:
-        # Balancing open HTML tags and escaping plain text can make the rendered
-        # prefix longer than its source slice. Account for that here so callers
-        # calculating the continuation receive this exact same split point.
+        # Закрытие HTML-тегов и экранирование текста могут увеличить длину результата.
+        # Возвращаем границу исходной строки, соответствующую этому префиксу.
         rendered_prefix = _sanitize_telegram_html(text[:cut].rstrip())
         if len(rendered_prefix) <= max_chars:
             return cut
@@ -270,7 +269,7 @@ def _media_caption_cut_index(text: str, max_chars: int = 1020) -> int:
 
 
 def _media_caption_split(text: str, max_chars: int = 1020) -> tuple[str, int]:
-    """Return a balanced caption prefix and the exact source index it consumes."""
+    """Возвращает корректную HTML-подпись и позицию, до которой использован исходный текст."""
     caption = (text or "").strip()
     if len(caption) <= max_chars:
         return caption, len(caption)
@@ -280,8 +279,8 @@ def _media_caption_split(text: str, max_chars: int = 1020) -> tuple[str, int]:
         raw_prefix = caption[:cut].rstrip()
         prefix = _sanitize_telegram_html(raw_prefix)
         if len(prefix) <= max_chars:
-            # Use this final cut for the remainder too. Sanitizing an open HTML
-            # fragment may add closing tags and require moving the cut backwards.
+            # Продолжение начинается с этой же границы исходного текста.
+            # Санитизация фрагмента может добавить закрывающие теги.
             return prefix, cut
         cut = _media_caption_cut_index(
             caption[:cut].rstrip(),
@@ -755,8 +754,8 @@ def _setup_proxy(cfg: dict) -> ProxySetup:
 
     proxy_type = (cfg.get("proxy_type") or "").strip().lower()
     mtproto_key = (cfg.get("mtproto_key") or "").strip()
-    # Respect an explicit UI selection; infer MTProto from its key only for
-    # legacy configs whose proxy_type is empty.
+    # Явно выбранный тип прокси имеет приоритет. Определяем MTProto по ключу
+    # только для старых настроек, в которых proxy_type не задан.
     if not proxy_type:
         proxy_type = "mtproto" if mtproto_key else "http"
 
@@ -936,7 +935,7 @@ class _TelegramHTMLSanitizer(HTMLParser):
         self.parts.append(html.escape(data, quote=False))
 
     def handle_comment(self, data: str) -> None:
-        # Telegram HTML does not support comments.
+        # Формат HTML в Telegram не поддерживает комментарии.
         return
 
     def result(self) -> str:
@@ -948,19 +947,19 @@ class _TelegramHTMLSanitizer(HTMLParser):
 
 
 def _sanitize_telegram_html(text: str) -> str:
-    """Preserve supported Telegram formatting while preventing malformed HTML."""
+    """Сохраняет поддерживаемое Telegram-форматирование и исправляет некорректный HTML."""
     parser = _TelegramHTMLSanitizer()
     try:
         parser.feed(text or "")
         parser.close()
     except Exception:
-        # A malformed HTML fragment must not make the publication loop crash.
+        # Некорректный HTML не должен останавливать цикл публикации.
         return html.escape(text or "", quote=False)
     return parser.result()
 
 
 def _truncate_telegram_text(text: str, max_length: int = 4096) -> str:
-    """Truncate text while preserving valid Telegram HTML and the full length cap."""
+    """Обрезает текст, сохраняя корректный HTML Telegram и ограничение длины."""
     marker = "\n\n[…обрезано…]"
     if len(text) <= max_length:
         return text
