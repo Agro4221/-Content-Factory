@@ -8,10 +8,11 @@ import console_setup
 
 
 def _configure_stdio_errors() -> None:
-    """Prevent non-ASCII log messages from crashing Windows builds on legacy code pages.
+    """Настраивает UTF-8 для стандартных потоков вывода.
 
-    Вывод переводится в UTF-8 с заменой непечатных символов: кириллица
-    выводится как есть, а не как \\uXXXX-escape-последовательности.
+    Это предотвращает ``UnicodeEncodeError`` при выводе кириллицы в Windows
+    с несовместимой кодовой страницей. Настройку потоков выполняет модуль
+    ``console_setup``.
     """
     console_setup.setup_console()
 

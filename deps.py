@@ -1,4 +1,4 @@
-"""Проверка и авто-установка зависимостей проекта в локальный .venv."""
+"""Проверка Python-зависимостей и подготовка окружения для запуска."""
 from __future__ import annotations
 
 import importlib.util
@@ -21,7 +21,7 @@ def venv_python_path() -> str:
 
 
 def _module_api_is_available(mod: str) -> bool:
-    """Check critical imports in addition to the top-level package name."""
+    """Проверяет наличие критических импортов, а не только основного пакета."""
     if mod != "aiogram":
         return True
     try:

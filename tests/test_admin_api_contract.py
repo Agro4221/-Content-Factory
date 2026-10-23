@@ -11,7 +11,7 @@ from config import SECRET_CLEAR_SIGNAL, SECRET_MASK
 
 
 class FakeDB:
-    """Минимальная замена боевой БД для проверки контракта API."""
+    """Тестовая реализация слоя данных для проверки контракта API."""
 
     def __init__(self) -> None:
         self.settings: dict[str, str] = {

@@ -60,7 +60,7 @@ def test_secret_is_stored_encrypted_and_read_back_decrypted(tmp_path) -> None:
         assert secrets_store.is_encrypted(stored)
         assert token not in stored
 
-        # Приложение читает значение как раньше — без ручного повторного ввода.
+        # После шифрования слой доступа к данным должен возвращать исходное значение.
         assert db.get_setting("bot_token") == token
         assert db.get_all_settings()["bot_token"] == token
     finally:
@@ -113,7 +113,7 @@ def test_legacy_plaintext_secret_is_readable_and_migrated(tmp_path) -> None:
         )
         assert raw_value(db, "bot_token") == "123456:AAExampleTokenValue"
 
-        # Значение читается как раньше.
+        # Незашифрованное значение остаётся доступным до выполнения миграции.
         assert db.get_setting("bot_token") == "123456:AAExampleTokenValue"
 
         # Миграция переводит его в зашифрованный вид.

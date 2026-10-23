@@ -1,11 +1,9 @@
-"""Общая настройка тестов Content Factory.
+"""Общие фикстуры тестов Content Factory.
 
-Тесты ходят по панели как «свой» клиент: имя хоста в служебном TestClient —
-``testserver``, а браузерных заголовков Origin/Sec-Fetch-Site у него нет.
-По умолчанию такие запросы считаются доверенными.
-
-Тесты, которые проверяют саму защиту, помечаются маркером
-``real_security`` — для них проверки остаются настоящими.
+FastAPI TestClient использует хост ``testserver`` и не добавляет браузерные
+заголовки ``Origin`` и ``Sec-Fetch-Site``. Для обычных тестов эти запросы
+считаются доверенными. Тесты безопасности помечаются маркером
+``real_security``; для них фикстура не подменяет проверку доверенности write-запросов.
 """
 from __future__ import annotations
 
@@ -18,7 +16,7 @@ _original_allowed_hosts = api_security.allowed_hosts
 
 @pytest.fixture(autouse=True)
 def _trusted_test_client(monkeypatch, request):
-    """Разрешает служебный хост TestClient и доверяет его запросам."""
+    """Настраивает обработку служебного хоста TestClient в тестах."""
     def patched_allowed_hosts(api_host: str) -> set[str]:
         hosts = _original_allowed_hosts(api_host)
         hosts.add("testserver")
