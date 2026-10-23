@@ -1,0 +1,12 @@
+changelog:
+  exclude:
+    labels:
+      - "skip-changelog"
+      - "duplicate"
+      - "invalid"
+    authors:
+      - "github-actions[bot]"
+  categories:
+    - title: "Changes"
+      labels:
+        - "*"
