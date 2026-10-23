@@ -1,9 +1,9 @@
 # Карта функций админ-панели Content Factory
 
-Снята перед редизайном. Редизайн не должен менять эти идентификаторы,
-названия функций и API-вызовы.
+Справочник описывает текущие идентификаторы интерфейса, функции JavaScript
+и API-вызовы, на которые опираются панель и автоматические проверки.
 
-## ID элементов (54)
+## ID элементов
 
 ### Статус (12)
 `card-bot` `val-bot` `sub-bot` · `card-ai` `val-ai` `sub-ai` ·
@@ -42,7 +42,7 @@
 ### Служебные (4)
 `toast-container` + `data-secret-toggle` / `data-secret-clear` / `data-secret-hint`
 
-## Функции JS (28)
+## Функции JavaScript
 `$id` `toast` `setCard` `refreshAll` `addTopicRow` `loadTopics` `collectTopics`
 `shouldSkipField` `applySecretState` `setupSecretControls` `fillSettings`
 `parseTopics` `saveQuick` `toggleBot` `testAI` `testProxy` `loadLogs`
@@ -50,13 +50,13 @@
 `toggleProxyFields` `escapeHtml` `restoreDefaultPrompt` `loadDefaults`
 `removePostMedia` `pickPostMedia` `uploadPostMedia` `saveLocalAiConnection`
 
-## API-вызовы (12)
+## API-вызовы
 `/api/ai/models?provider=` · `/api/logs/clear` · `/api/logs?limit=30`
 `/api/modules/posts/` · `/api/modules/status` · `/api/proxy/status`
 `/api/proxy/test` · `/api/settings` · `/api/stats/posts`
 `/api/settings/defaults` · `/api/posts/{id}/media` · `/api/posts/{id}/media/{i}`
 
-## Inline-обработчики (11)
+## Inline-обработчики
 `cancelClearLogs()` `confirmClearLogs()` `loadLogs()` `refreshAll()`
 `requestClearLogs()` `saveQuick()` `testAI()` `testProxy()` `restoreDefaultPrompt()`
 `toggleAIFields()` `toggleBot()`
