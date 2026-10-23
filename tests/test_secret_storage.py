@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 import secrets_store
@@ -265,8 +267,6 @@ def test_plain_secret_with_dpapi_looking_prefix_is_still_encrypted(tmp_path) -> 
     """Похожий на оболочку DPAPI текст не пропускается без проверки шифротекста."""
     if not secrets_store.supported():
         pytest.skip("DPAPI доступен только в Windows")
-    import base64
-
     db = make_db(tmp_path)
     try:
         original = secrets_store.PREFIX + base64.b64encode(b"not-a-dpapi-blob").decode("ascii")
