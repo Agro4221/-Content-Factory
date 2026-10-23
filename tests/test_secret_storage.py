@@ -279,6 +279,30 @@ def test_plain_secret_with_dpapi_looking_prefix_is_still_encrypted(tmp_path) -> 
         db.conn.close()
 
 
+def test_migration_encrypts_legacy_secret_with_dpapi_looking_prefix(tmp_path) -> None:
+    """Старый plaintext с префиксом DPAPI не должен быть пропущен миграцией."""
+    if not secrets_store.supported():
+        pytest.skip("DPAPI доступен только в Windows")
+    db = make_db(tmp_path)
+    original = secrets_store.PREFIX + base64.b64encode(b"not-a-dpapi-blob").decode("ascii")
+    try:
+        db.conn.execute(
+            "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+            ("bot_token", original),
+        )
+        assert raw_value(db, "bot_token") == original
+
+        assert db.migrate_plaintext_secrets() == 1
+
+        stored = raw_value(db, "bot_token")
+        assert stored != original
+        assert original not in stored
+        assert secrets_store.has_dpapi_blob_signature(stored)
+        assert db.get_setting("bot_token") == original
+    finally:
+        db.conn.close()
+
+
 def test_failed_secret_encryption_never_writes_plaintext(tmp_path, monkeypatch) -> None:
     """При ошибке системного шифрования открытое значение не записывается."""
     if not secrets_store.supported():
