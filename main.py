@@ -975,8 +975,8 @@ def _truncate_telegram_text(text: str, max_length: int = 4096) -> str:
             result = prefix + marker
             if len(result) <= max_length and _sanitize_telegram_html(result) == result:
                 return result
-        # Closing tags and escaping a partial entity can add characters, so
-        # reduce the source slice and retry rather than slicing the sanitized HTML.
+        # Закрывающие теги и экранирование сущности могут увеличить длину.
+        # Уменьшаем исходный фрагмент и повторяем проверку.
         next_limit = max(1, cut - max(8, len(prefix) - content_limit + 8))
         cut = _media_caption_cut_index(text[:cut], next_limit)
 
@@ -1472,8 +1472,8 @@ async def _queue_source_draft_after_ai_failure(
     try:
         media_list, temp_paths = await _download_media(messages, raw_text)
     except Exception as exc:
-        # The text draft is still useful even when a source attachment cannot
-        # be downloaded. The failure is exposed in the queue entry.
+        # Черновик с текстом полезен и без вложения, если медиа не удалось скачать.
+        # Причина ошибки сохраняется в записи очереди.
         media_error = f"Медиа не сохранено: {type(exc).__name__}: {exc}"
         media_list, temp_paths = [], []
 
@@ -1656,7 +1656,7 @@ async def _process_message_group(
                 print(f"!!! AI-рерайт не удался для {source}/{messages[0].id}; пост оставлен для повтора.")
             return
     else:
-        # Media-only source posts have no text to rewrite.
+        # Если в исходном посте нет текста, рерайт не требуется.
         post_tags, final_text = [], ""
 
     if isinstance(post_tags, str):
@@ -1712,8 +1712,8 @@ async def _process_message_group(
     try:
         media_list, temp_paths = await _download_media(messages, final_text)
     except FloodWaitError:
-        # Let the main loop honor Telegram's required cooldown instead of
-        # retrying this download on every polling cycle.
+        # Передаём FloodWait основному циклу, чтобы он выдержал паузу Telegram
+        # вместо повторения загрузки при каждом опросе.
         raise
     except Exception as exc:
         db.add_log(
@@ -1818,9 +1818,9 @@ async def _process_message_group(
                     f"({send_error}); пропущен, парсер работает дальше."
                 )
             else:
-                # A send rejection can be corrected (permissions, target, token, or
-                # malformed payload). Never turn a delivery failure into a permanent
-                # skip: stop the loop and leave the post pending for a deliberate retry.
+                # Отказ отправки может быть исправлен: причиной бывают права, канал, токен
+                # или формат данных. Не пропускаем такой пост навсегда — останавливаем
+                # цикл и оставляем его для повторной отправки.
                 bot_running.clear()
                 # Пост не должен пропасть: сохраняем его в очередь, чтобы
                 # после исправления отправить вручную из панели.
@@ -1846,9 +1846,8 @@ async def _process_message_group(
             followup_queued = False
             try:
                 if secondary_send_error is not None:
-                    # Media is already published. Atomically save deduplication
-                    # markers and the undelivered text tail; never retry the whole
-                    # source post merely because its second message failed.
+                    # Медиа уже опубликовано. Одной транзакцией сохраняем отметки дедупликации
+                    # и недоставленный остаток текста, чтобы не отправлять медиа повторно.
                     save_with_followup = getattr(db, "save_posts_with_followup", None)
                     if not callable(save_with_followup):
                         raise DatabaseWriteError(
@@ -1862,8 +1861,8 @@ async def _process_message_group(
                     )
                     followup_queued = True
                 else:
-                    # The real DB commits album/message-group deduplication records
-                    # atomically. Keep the fallback for older lightweight adapters.
+                    # Основная реализация базы атомарно фиксирует идентификаторы альбома.
+                    # Запасной путь поддерживает упрощённые адаптеры.
                     save_group = getattr(db, "save_posts", None)
                     if callable(save_group):
                         save_group(source, [message.id for message in messages])
@@ -1875,8 +1874,8 @@ async def _process_message_group(
                 # не ждёт отправки, иначе пользователь отправит его дважды.
                 _mark_queue_entry_published(source, messages)
             except DatabaseWriteError as db_error:
-                # Telegram has already accepted the send. Stop before more posts can
-                # be emitted with missing deduplication records.
+                # Telegram уже принял сообщение. Останавливаем парсер, чтобы не отправлять
+                # следующие посты без сохранённых записей дедупликации.
                 bot_running.clear()
                 db.add_log(
                     "ERR-DB-501",
@@ -2453,8 +2452,8 @@ async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
                 f"не доставлен ({type(send_error).__name__}); повтор отложен.",
             )
             if isinstance(send_error, TelegramRetryAfter):
-                # Honor the API's rate limit and avoid processing more queued
-                # messages in the same pass.
+                # Соблюдаем лимит Telegram и не обрабатываем новые сообщения очереди
+                # в том же цикле.
                 break
         else:
             try:
@@ -2478,7 +2477,7 @@ async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
 
 
 def _stdin_is_interactive() -> bool:
-    """Return whether a phone/code login prompt can be safely shown to the user."""
+    """Проверяет, можно ли безопасно запросить у пользователя телефон или код входа."""
     try:
         return bool(sys.stdin and sys.stdin.isatty())
     except (AttributeError, OSError, ValueError):
@@ -2592,7 +2591,7 @@ async def _connect_authorized_client(
     *,
     allow_interactive: bool = False,
 ) -> bool:
-    """Connect non-interactively by default; login prompts require an explicit TTY opt-in."""
+    """По умолчанию подключается без интерактивного входа; запрос кода разрешён только в явном TTY-режиме."""
     if allow_interactive:
         await client.start()
     else:
@@ -2646,19 +2645,17 @@ def _load_source_cursors() -> dict[str, int]:
             )
 
         source_key = source.strip()
-        # Earlier versions stored the exact user-entered link as the cursor
-        # key (for example, https://t.me/Channel/123). Runtime config now uses
-        # canonical @usernames/peer IDs; keep the old cursor so upgrading does
-        # not accidentally trigger the "first scan: latest ten posts" baseline.
-        # A stale cursor for a removed/malformed source should not block
-        # unrelated channels. It simply will not match a valid configured source.
+        # Ранее курсор сохранялся по введённой ссылке (например, https://t.me/Channel/123).
+        # Текущая конфигурация использует нормализованные имена и ID. Сохраняем
+        # прежний курсор, чтобы обновление не запускало первичное сканирование.
+        # Курсор удалённого или некорректного источника не должен блокировать
+        # остальные каналы; он не совпадёт ни с одним действующим источником.
         with contextlib.suppress(ValueError):
             source_key = normalize_target_chat(source_key) or source_key
 
         previous = normalized.get(source_key)
-        # If legacy aliases collide, rewind to the earliest known cursor. Already
-        # published IDs are deduplicated in SQLite; choosing the later cursor could
-        # skip posts that were pending when the aliases diverged.
+        # При совпадении старых псевдонимов выбираем самый ранний курсор. Уже опубликованные
+        # сообщения отсекаются по базе; поздний курсор мог бы пропустить ожидающие посты.
         normalized[source_key] = value if previous is None else min(previous, value)
     return normalized
 
@@ -2702,15 +2699,14 @@ async def _process_one_source(
     source_messages: list[Message] = []
     try:
         if cursor is None:
-            # Keep the established first-scan behaviour: seed from the latest ten
-            # posts rather than publishing an entire historical channel.
+            # При первом запуске начинаем с последних десяти сообщений, а не публикуем
+            # всю историю канала.
             async for message in client.iter_messages(_source_entity(source), limit=10):
                 source_messages.append(message)
             source_messages.sort(key=lambda message: message.id)
 
-            # The oldest of those ten may be in the middle of an album. Pull
-            # the remaining messages with that grouped_id before setting the
-            # initial cursor, otherwise older album items are never revisited.
+            # Первое из десяти сообщений может быть частью альбома. Получаем остальные
+            # элементы группы до установки курсора, чтобы не пропустить её начало.
             if source_messages and source_messages[0].grouped_id:
                 boundary_group = source_messages[0].grouped_id
                 async for earlier in client.iter_messages(
@@ -2722,14 +2718,14 @@ async def _process_one_source(
                         source_messages.append(earlier)
                 source_messages.sort(key=lambda message: message.id)
         else:
-            # Subsequent scans catch every newer message, not just the newest ten.
+            # При последующих опросах читаем все сообщения новее курсора, а не только десять последних.
             async for message in client.iter_messages(_source_entity(source), min_id=cursor, reverse=True):
                 source_messages.append(message)
     except (AuthKeyUnregisteredError, SessionPasswordNeededError) as e:
         db.add_log("ERR-203", f"Сессия Telegram невалидна ({type(e).__name__}): {e}")
         print(f"!!! [ERR-203] Сессия Telegram закрыта / требует 2FA: {e}")
-        # Reconnecting with the same revoked or 2FA-blocked session cannot fix
-        # this state. Stop the parser until the user supplies a valid session.
+        # Повторное подключение не исправит отозванную сессию или требование 2FA.
+        # Останавливаем парсер до восстановления действующей сессии.
         bot_running.clear()
         return False
     except (ChannelInvalidError, UsernameInvalidError, UsernameNotOccupiedError) as e:
@@ -2741,7 +2737,7 @@ async def _process_one_source(
         print(f"!!! Ошибка доступа к {source}: канал приватный или бот не подписан.")
         return False
     except FloodWaitError:
-        # Propagate to main(), which sleeps for the server-provided duration.
+        # Передаём исключение в main(), где выдерживается указанная Telegram пауза.
         raise
     except Exception as e:
         db.add_log("ERR-200", f"Не удалось прочитать {source}: {e}")
@@ -3006,8 +3002,8 @@ async def main() -> None:
                     session=proxy.bot_session,
                     default=DefaultBotProperties(parse_mode="HTML"),
                 )
-                # Drain text tails left by a successful media send before scanning
-                # sources. A tail retry must never resend the corresponding media.
+                # Сначала повторно отправляем остатки текста после успешной отправки медиа.
+                # Повтор не должен приводить к дублированию соответствующих файлов.
                 await _retry_pending_text_followups(bot)
                 if not bot_running.is_set():
                     continue
