@@ -101,15 +101,44 @@ def is_allowed_host(host_header: str | None, permitted: set[str]) -> bool:
     return name in permitted
 
 
-def _origin_matches_request(origin: str, host_header: str | None) -> bool:
-    """Совпадает ли Origin с хостом, к которому пришёл запрос."""
+def _origin_matches_request(
+    origin: str,
+    host_header: str | None,
+    request_scheme: str,
+) -> bool:
+    """Проверяет схему, имя хоста и порт в заголовке Origin."""
     try:
-        origin_host = urlsplit(origin).hostname
+        origin_parts = urlsplit(origin)
+        request_parts = urlsplit(f"//{host_header or ''}")
+        origin_host = origin_parts.hostname
+        request_host = request_parts.hostname
+        origin_port = origin_parts.port
+        request_port = request_parts.port
     except ValueError:
         return False
-    if not origin_host:
+
+    scheme = request_scheme.strip().lower()
+    origin_scheme = origin_parts.scheme.strip().lower()
+    if (
+        origin_scheme not in {"http", "https"}
+        or origin_scheme != scheme
+        or not origin_host
+        or not request_host
+        or origin_parts.username is not None
+        or origin_parts.password is not None
+        or origin_parts.path not in {"", "/"}
+        or origin_parts.query
+        or origin_parts.fragment
+    ):
         return False
-    return origin_host.strip().lower().strip("[]") == _host_name(host_header or "")
+
+    origin_host = origin_host.strip().lower().strip("[]")
+    request_host = request_host.strip().lower().strip("[]")
+    default_port = 443 if scheme == "https" else 80
+    return (
+        origin_host == request_host
+        and (origin_port or default_port) == (request_port or default_port)
+    )
 
 
 def is_trusted_write(request: Request, host_header: str | None) -> bool:
@@ -130,7 +159,7 @@ def is_trusted_write(request: Request, host_header: str | None) -> bool:
         return True
 
     origin = (request.headers.get("origin") or "").strip()
-    if origin and _origin_matches_request(origin, host_header):
+    if origin and _origin_matches_request(origin, host_header, request.url.scheme):
         return True
 
     return bool(request.headers.get(CLIENT_HEADER))
