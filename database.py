@@ -1,4 +1,3 @@
-# REFACTORED: navigation / UX / UI restructured per expert spec v2.0
 """
 SQLite-обёртка для проекта Content Factory.
 
@@ -748,8 +747,8 @@ class DB:
         if _is_encrypted_secret(text):
             return text
         if not _secret_storage_supported():
-            # Платформа без DPAPI: значение остаётся в базе как есть, чтобы
-            # приложение оставалось рабочим. Ограничение фиксируется в журнале.
+            # Если системное шифрование недоступно, сохраняем совместимость
+            # и сообщаем об ограничении через журнал.
             return text
         try:
             return _encrypt_secret(text, key)
