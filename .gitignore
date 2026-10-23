@@ -1,0 +1,42 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime data
+*.db
+*.db-*
+*.session
+temp_media/
+queue_media/
+logs/
+data/
+
+# Build artifacts
+build/
+dist/
+release/
+*.toc
+*.pyz
+*.zip
+warn-*.txt
+xref-*.html
+
+# Local verification artifacts
+_test_screenshots/
+_test_output.txt
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db

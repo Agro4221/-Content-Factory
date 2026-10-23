@@ -1,0 +1,196 @@
+"""Проверка и авто-установка зависимостей проекта в локальный .venv."""
+from __future__ import annotations
+
+import importlib.util
+import os
+import subprocess
+import sys
+
+import console_setup  # noqa: F401  (импорт сам настраивает вывод в UTF-8)
+from config import BASE_DIR, REQUIRED_PACKAGES
+from paths import is_frozen
+
+REQUIREMENTS_FILE = os.path.join(BASE_DIR, "requirements.txt")
+VENV_DIR = os.path.join(BASE_DIR, ".venv")
+
+
+def venv_python_path() -> str:
+    if sys.platform == "win32":
+        return os.path.join(VENV_DIR, "Scripts", "python.exe")
+    return os.path.join(VENV_DIR, "bin", "python")
+
+
+def _module_api_is_available(mod: str) -> bool:
+    """Check critical imports in addition to the top-level package name."""
+    if mod != "aiogram":
+        return True
+    try:
+        module = importlib.import_module("aiogram.client.default")
+        return hasattr(module, "DefaultBotProperties")
+    except (ImportError, AttributeError):
+        # aiogram 3.0–3.6 has no DefaultBotProperties, which main.py requires.
+        return False
+
+
+def find_missing_packages() -> list[str]:
+    """Возвращает отсутствующие или несовместимые pip-пакеты."""
+    missing: list[str] = []
+    seen: set[str] = set()
+    for mod, pip_name in REQUIRED_PACKAGES.items():
+        module_missing = importlib.util.find_spec(mod) is None
+        api_missing = not module_missing and not _module_api_is_available(mod)
+        if (module_missing or api_missing) and pip_name not in seen:
+            missing.append(pip_name)
+            seen.add(pip_name)
+    return missing
+
+
+def _import_check_script() -> str:
+    lines = [f"import {mod}" for mod in REQUIRED_PACKAGES]
+    # A package can be importable but still too old for the API used by main.py.
+    lines.append("from aiogram.client.default import DefaultBotProperties")
+    return "; ".join(lines)
+
+def _pip_install(python: str, packages: list[str], *, use_requirements: bool = False) -> None:
+    cmd = [python, "-m", "pip", "install", "--upgrade"]
+    if use_requirements and os.path.isfile(REQUIREMENTS_FILE):
+        cmd.extend(["-r", REQUIREMENTS_FILE])
+    else:
+        cmd.extend(packages)
+    subprocess.check_call(cmd)
+
+
+def ensure_venv() -> str:
+    python = venv_python_path()
+    if not os.path.isfile(python):
+        subprocess.check_call([sys.executable, "-m", "venv", VENV_DIR])
+    return python
+
+
+def _packages_ok(python: str) -> bool:
+    try:
+        subprocess.check_call(
+            [python, "-c", _import_check_script()],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, OSError):
+        return False
+
+
+def try_reexec_via_venv() -> bool:
+    """Если .venv уже содержит зависимости — перезапускаем процесс через него."""
+    venv_python = venv_python_path()
+    if not os.path.isfile(venv_python):
+        return False
+    if os.path.realpath(sys.executable) == os.path.realpath(venv_python):
+        return False
+    if not _packages_ok(venv_python):
+        return False
+    print("--> [СИСТЕМА] Перезапуск через локальное окружение .venv ...")
+    try:
+        os.execv(venv_python, [venv_python, *sys.argv])
+    except OSError as exc:
+        print(f"!!! [СИСТЕМА] Не удалось перейти в .venv: {exc}")
+        return False
+
+
+def ensure_dependencies_installed(packages: list[str]) -> None:
+    """Устанавливает перечисленные пакеты в текущее окружение.
+
+    Используется самопроверкой окружения (tools/doctor.py) и запуском
+    приложения. Если системный pip недоступен, пакеты ставятся в локальное
+    окружение .venv рядом с проектом.
+    """
+    if not packages:
+        return
+    print("--> [СИСТЕМА] Устанавливаем: " + ", ".join(packages))
+    try:
+        _pip_install(sys.executable, packages)
+        if not _packages_ok(sys.executable):
+            raise subprocess.CalledProcessError(1, "pip")
+        print("--> [СИСТЕМА] Готово.")
+        return
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
+    print("--> [СИСТЕМА] Системный pip недоступен. Создаю .venv рядом с приложением...")
+    try:
+        venv_python = ensure_venv()
+        _pip_install(venv_python, packages, use_requirements=True)
+        if not _packages_ok(venv_python):
+            _pip_install(venv_python, packages)
+        print("--> [СИСТЕМА] Зависимости установлены в .venv.")
+    except Exception as exc:
+        raise RuntimeError(
+            "Не удалось установить зависимости: "
+            f"{exc}. Установите их вручную: "
+            f"{sys.executable} -m pip install -r {REQUIREMENTS_FILE}"
+        ) from exc
+
+
+def check_and_install_dependencies() -> None:
+    """
+    Если не хватает библиотек — устанавливает их через pip в текущее окружение
+    или создаёт .venv рядом с проектом и перезапускает процесс.
+    """
+    if is_frozen():
+        missing = find_missing_packages()
+        if missing:
+            print(
+                "!!! [ОШИБКА] В сборке .exe не хватает модулей: "
+                + ", ".join(missing)
+            )
+            sys.exit(1)
+        return
+
+    missing = find_missing_packages()
+    if not missing:
+        _reload_env_after_deps()
+        return
+
+    if try_reexec_via_venv():
+        return
+
+    print(f"--> [СИСТЕМА] Не хватает библиотек: {', '.join(missing)}")
+    print("--> [СИСТЕМА] Устанавливаю через pip...")
+    try:
+        _pip_install(sys.executable, missing)
+        if not _packages_ok(sys.executable):
+            raise subprocess.CalledProcessError(1, "pip")
+        print("--> [СИСТЕМА] Готово.\n")
+        _reload_env_after_deps()
+        # config.py may have been imported before python-dotenv was installed.
+        # Restart so all import-time settings are re-evaluated with .env loaded.
+        print("--> [СИСТЕМА] Перезапуск для повторной загрузки конфигурации...")
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+        return
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
+    print("--> [СИСТЕМА] Системный pip недоступен. Создаю .venv рядом с приложением...")
+    try:
+        venv_python = ensure_venv()
+        _pip_install(venv_python, missing, use_requirements=True)
+        if not _packages_ok(venv_python):
+            _pip_install(venv_python, missing)
+        print("--> [СИСТЕМА] Зависимости установлены в .venv. Перезапуск...")
+        os.execv(venv_python, [venv_python, *sys.argv])
+    except Exception as exc:
+        print(f"!!! [ОШИБКА] Установка не удалась: {exc}")
+        print("!!! Создайте окружение вручную: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt")
+        sys.exit(1)
+
+
+def _reload_env_after_deps() -> None:
+    """Повторно читает .env после установки python-dotenv."""
+    try:
+        from env_loader import load_environment
+
+        load_environment()
+    except Exception:
+        pass
+
+
+ensure_dependencies = check_and_install_dependencies
