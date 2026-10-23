@@ -3,21 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "release-windows.yml"
 
-# В сборке для другой платформы папки .github нет — проверки CI там не
-# применимы, и падать из-за их отсутствия незачем.
-requires_ci = pytest.mark.skipif(
-    not WORKFLOW.is_file(),
-    reason="в этой сборке нет пайплайнов GitHub",
-)
-
-
-@requires_ci
+remove ci skip explanation@requires_ci
 def test_windows_release_workflow_is_version_tag_and_manual_dispatch_driven() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
@@ -26,7 +17,6 @@ def test_windows_release_workflow_is_version_tag_and_manual_dispatch_driven() ->
     assert "contents: write" in workflow
 
 
-@requires_ci
 def test_release_validates_tests_before_packaging_or_publishing() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     tests = workflow.index("Run complete regression suite")
@@ -45,7 +35,6 @@ def test_release_validates_tests_before_packaging_or_publishing() -> None:
     assert r"^v\d+\.\d+\.\d+(\.\d+)?$" in workflow
 
 
-@requires_ci
 def test_release_workflow_has_no_corrupted_duplicate_fragments() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
@@ -55,8 +44,6 @@ def test_release_workflow_has_no_corrupted_duplicate_fragments() -> None:
     assert "Release tags must look like v1.2.3 or v1.2.3.4" in workflow
 
 
-
-@requires_ci
 def test_release_workflow_is_valid_yaml_with_expected_job_structure() -> None:
     workflow = yaml.load(
         WORKFLOW.read_text(encoding="utf-8"),
@@ -74,8 +61,6 @@ def test_release_workflow_is_valid_yaml_with_expected_job_structure() -> None:
     assert names.index("Smoke-test built Windows executable") < names.index("Publish GitHub Release")
 
 
-
-@requires_ci
 def test_windows_smoke_script_checks_runtime_api_and_bundled_assets() -> None:
     script = (ROOT / "tools" / "smoke_test_windows.ps1").read_text(encoding="utf-8")
 
@@ -84,7 +69,6 @@ def test_windows_smoke_script_checks_runtime_api_and_bundled_assets() -> None:
     assert "favicon.png" in script
     assert "Stop-Process" in script
 
-@requires_ci
 def test_release_and_regression_workflows_check_all_source_syntax() -> None:
     regression = (ROOT / ".github" / "workflows" / "local-bugfix-regression.yml").read_text(encoding="utf-8")
     release = WORKFLOW.read_text(encoding="utf-8")
