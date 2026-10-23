@@ -260,6 +260,55 @@ def test_secret_storage_is_supported_only_on_windows(monkeypatch) -> None:
     assert secrets_store.supported() is False
 
 
+
+def test_plain_secret_with_dpapi_looking_prefix_is_still_encrypted(tmp_path) -> None:
+    """Похожий на оболочку DPAPI текст не пропускается без проверки шифротекста."""
+    if not secrets_store.supported():
+        pytest.skip("DPAPI доступен только в Windows")
+    import base64
+
+    db = make_db(tmp_path)
+    try:
+        original = secrets_store.PREFIX + base64.b64encode(b"not-a-dpapi-blob").decode("ascii")
+        db.set_setting("bot_token", original)
+        stored = raw_value(db, "bot_token")
+        assert stored != original
+        assert original not in stored
+        assert db.get_setting("bot_token") == original
+    finally:
+        db.conn.close()
+
+
+def test_failed_secret_encryption_never_writes_plaintext(tmp_path, monkeypatch) -> None:
+    """При ошибке системного шифрования открытое значение не записывается."""
+    if not secrets_store.supported():
+        pytest.skip("DPAPI доступен только в Windows")
+    db = make_db(tmp_path)
+
+    def fail_encryption(_value: str, _account: str = "") -> str:
+        raise secrets_store.SecretEncryptionError("simulated failure")
+
+    monkeypatch.setattr("database._encrypt_secret", fail_encryption)
+    try:
+        with pytest.raises(secrets_store.SecretEncryptionError):
+            db.set_setting("bot_token", "example-secret-for-test")
+        assert raw_value(db, "bot_token") == ""
+    finally:
+        db.conn.close()
+
+
+def test_secret_write_is_rejected_without_system_encryption(tmp_path, monkeypatch) -> None:
+    """На неподдерживаемой платформе новый секрет не сохраняется открытым текстом."""
+    db = make_db(tmp_path)
+    monkeypatch.setattr("database._secret_storage_supported", lambda: False)
+    try:
+        with pytest.raises(secrets_store.SecretEncryptionError):
+            db.set_setting("bot_token", "example-secret-for-test")
+        assert raw_value(db, "bot_token") == ""
+    finally:
+        db.conn.close()
+
+
 def test_every_secret_key_is_covered() -> None:
     """Список секретных настроек содержит все ключи, которые нельзя показывать."""
     for key in ("bot_token", "tg_api_hash", "remote_api_key", "proxy_pass", "mtproto_key"):

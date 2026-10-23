@@ -154,7 +154,15 @@ def encrypt(value: str, account: str = "") -> str:
     if not isinstance(value, str) or value == "":
         return value
     if is_encrypted(value):
-        return value
+        try:
+            raw = base64.b64decode(value[len(PREFIX):], validate=True)
+            _unprotect(raw)
+        except (SecretDecryptionError, binascii.Error, ValueError):
+            # A matching prefix and Base64 payload do not prove that the value
+            # is a valid DPAPI blob. Encrypt it as plain input when validation fails.
+            pass
+        else:
+            return value
 
     if not supported():
         raise SecretEncryptionError(
