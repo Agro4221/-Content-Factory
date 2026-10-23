@@ -149,8 +149,7 @@ def _unprotect(data: bytes) -> bytes:
 def encrypt(value: str, account: str = "") -> str:
     """Шифрует строку. Пустая строка возвращается как есть.
 
-    ``account`` — имя настройки: секрет кладётся в системное хранилище под
-    своим именем, а в базу кладётся только ссылка на него.
+    Параметр ``account`` сохранён для совместимости с вызывающим кодом.
     """
     if not isinstance(value, str) or value == "":
         return value
@@ -175,7 +174,6 @@ def decrypt(value: str, account: str = "") -> str:
         return value
     if not is_encrypted(value):
         return value
-
 
     if not supported():
         raise SecretDecryptionError("Шифрование секретов доступно только в Windows.")
