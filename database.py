@@ -32,7 +32,6 @@ from secrets_store import (
 from secrets_store import decrypt as _decrypt_secret
 from secrets_store import encrypt as _encrypt_secret
 from secrets_store import has_dpapi_blob_signature as _has_dpapi_blob_signature
-from secrets_store import is_encrypted as _is_encrypted_secret
 from secrets_store import supported as _secret_storage_supported
 
 
