@@ -21,7 +21,12 @@ def test_stats_endpoint_returns_http_500_without_fake_zero_counters(
 
     assert isinstance(response, JSONResponse)
     assert response.status_code == 500
-    assert json.loads(response.body) == {"error": "database unavailable"}
+    # Внутренние подробности (имена таблиц, SQL, пути) в ответ не
+    # попадают: о них пользователю знать не нужно, а машину он выдать может.
+    payload = json.loads(response.body)
+    assert payload["status"] == "error"
+    assert "database unavailable" not in payload["msg"]
+    assert "database unavailable" not in json.dumps(payload)
 
 
 def test_stats_endpoint_preserves_success_payload(monkeypatch) -> None:

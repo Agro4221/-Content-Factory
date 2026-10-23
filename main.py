@@ -1036,7 +1036,7 @@ def _save_post_to_queue(
     source: str,
     messages: list[Message],
     publish_text: str,
-    target_chats: list[str],
+    target_chats: list[str | int],
     category: str,
     media_list: list,
     temp_paths: list[str],
@@ -1398,7 +1398,7 @@ def _keep_post_for_manual_publish(
     source: str,
     messages: list[Message],
     text: str,
-    target_chats: list[str],
+    target_chats: list[str | int],
     tags: list[str],
     reason: str,
 ) -> bool:
@@ -1458,7 +1458,7 @@ async def _queue_source_draft_after_ai_failure(
     routes = _effective_tag_routes(cfg)
     # Канал для черновика: запасной маршрут (тег «общее»). Без него
     # пользователь укажет канал вручную в панели.
-    target_chats: list[str] = []
+    target_chats: list[str | int] = []
     for chat in routing.fallback_channels(routes):
         try:
             resolved = _target_chat_id(chat)
@@ -1513,7 +1513,7 @@ async def _queue_source_draft_after_ai_failure(
 
 async def _send_post_to_channel(
     bot: Bot,
-    target_chat: str,
+    target_chat: str | int,
     media_list: list,
     final_text: str,
 ) -> tuple[bool, Exception | None]:
@@ -1625,6 +1625,7 @@ async def _process_message_group(
         return
 
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
+    post_tags: list[str]
     if raw_text and not _significant_words(raw_text):
         # Подпись без единого значимого слова — обычно одни эмодзи или тег.
         # Переписывать нечего, а ИИ на таком материале выдумывает новость.
@@ -1759,14 +1760,15 @@ async def _process_message_group(
             f"Пост {source}/{messages[0].id} добавлен в очередь и ждёт подтверждения.",
         )
         print(
-            f"Пост {source}/{messages[0].id} -> очередь (цель: {', '.join(target_chats)})."
+            f"Пост {source}/{messages[0].id} -> очередь "
+            f"(цель: {', '.join(str(chat) for chat in target_chats)})."
         )
         return
 
     retry_delay_s = 0
     secondary_send_error: Exception | None = None
     secondary_text_to_send = ""
-    published_chats: list[str] = []
+    published_chats: list[str | int] = []
     try:
         for target_chat in target_chats:
             sent, send_error = await _send_post_to_channel(
@@ -1899,9 +1901,13 @@ async def _process_message_group(
                 db.add_log(
                     "OK-501",
                     f"Пост {source}/{messages[0].id} успешно опубликован в "
-                    f"{', '.join(published_chats)} (теги: {', '.join(post_tags) or 'без тегов'}).",
+                    f"{', '.join(str(chat) for chat in published_chats)} "
+                    f"(теги: {', '.join(post_tags) or 'без тегов'}).",
                 )
-                print(f"УСПЕХ: → [{', '.join(post_tags) or 'общее'}] -> {', '.join(published_chats)}")
+                print(
+                f"УСПЕХ: → [{', '.join(post_tags) or 'общее'}] -> "
+                f"{', '.join(str(chat) for chat in published_chats)}"
+            )
     finally:
         for p in temp_paths:
             with contextlib.suppress(OSError):
@@ -2084,9 +2090,12 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
     }
 
     failure_reason = "неизвестная ошибка AI"
+    request_timeout = aiohttp.ClientTimeout(
+        total=cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
+    )
     try:
         async with session_ai.post(url, json=payload, headers=headers,
-                                   timeout=cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S) as r:
+                                   timeout=request_timeout) as r:
             if r.status == 200:
                 data = await r.json()
                 res = _strip_reasoning_blocks(_extract_ai_content(data))
@@ -2108,9 +2117,25 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
         db.add_log("ERR-400", f"Ответ AI не соответствует формату публикации: {e}")
         print(f"!!! [AI ERROR] Некорректный формат ответа: {e}")
         raise
+    except aiohttp.ClientProxyConnectionError as e:
+        # Прокси не отвечает: об этом полезно знать отдельно, потому что
+        # причина в настройке, а не в самом ИИ.
+        _log_ai_network_error(e, cfg)
+        failure_reason = "Не удалось подключиться к AI через прокси"
     except aiohttp.ClientConnectorError as e:
         _log_ai_network_error(e, cfg)
         failure_reason = "AI endpoint недоступен"
+    except aiohttp.ClientPayloadError as e:
+        # Сервер ответил, но прислал не тот JSON: например, это прокси,
+        # который вместо ответа вернул свою страницу с ошибкой.
+        db.add_log("ERR-404", f"AI вернул ответ, который не разбирается: {e}")
+        failure_reason = "AI вернул некорректный ответ (не JSON)"
+    except aiohttp.ServerDisconnectedError as e:
+        _log_ai_network_error(e, cfg)
+        failure_reason = "AI закрыл соединение"
+    except aiohttp.ClientError as e:
+        _log_ai_network_error(e, cfg)
+        failure_reason = f"Ошибка связи с AI: {type(e).__name__}"
     except TimeoutError:
 
         timeout_value = cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
@@ -2399,7 +2424,9 @@ async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
             return
         followup_id = int(item["id"])
         try:
-            await bot.send_message(
+            await _send_with_retry(
+                bot,
+                "send_message",
                 chat_id=item["target_chat"],
                 text=item["text"],
             )

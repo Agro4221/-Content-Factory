@@ -45,6 +45,16 @@ load_environment()
 APP_VERSION = "1.30.0.0"
 
 API_HOST = os.environ.get("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
+#: Панель управления не имеет пароля: доступ к ней даёт полный контроль над
+#: ботом. Поэтому она по умолчанию слушает только сам компьютер, а выставить
+#: её в сеть можно лишь осознанно.
+API_EXPOSED_TO_NETWORK = API_HOST not in {"127.0.0.1", "localhost", "::1"}
+if API_EXPOSED_TO_NETWORK:
+    print(
+        "[WARN] Панель управления слушает не только localhost "
+        f"({API_HOST}). Любой, кто достанется до этого адреса, сможет "
+        "управлять ботом. Если это не нужно — верните API_HOST = 127.0.0.1."
+    )
 API_PORT = _env_int("API_PORT", 8000, minimum=1, maximum=65535)
 API_LOG_LEVEL = os.environ.get("API_LOG_LEVEL", "warning").strip().lower()
 if API_LOG_LEVEL not in {"critical", "error", "warning", "info", "debug", "trace"}:
@@ -154,7 +164,7 @@ ENV_DEFAULT_SETTINGS: dict[str, str] = {
 }
 
 SETTING_KEYS = frozenset({
-    "tg_api_id", "tg_api_hash", "bot_token", "target_channel",
+    "tg_api_id", "tg_api_hash", "bot_token",
     "ai_mode", "local_ai_provider", "local_host", "local_port", "local_model",
     "remote_url", "remote_api_key", "remote_model", "system_prompt",
     "sources", "topic_channels", "tag_routes", "ads_words", "watermark_text",

@@ -34,10 +34,12 @@ from config import (
     LOCAL_AI_PROVIDERS,
     LOGS_PAGE_SIZE,
     MAX_PROXY_PORT,
+    MEDIA_RETENTION_DAYS,
     MIN_PROXY_PORT,
     MODULE_POSTS,
     POLL_DELAY_MAX,
     POLL_DELAY_MIN,
+    PUBLISH_MODES,
     SECRET_CLEAR_SIGNAL,
     SECRET_MASK,
     SECRET_SETTING_KEYS,
@@ -418,6 +420,39 @@ def _normalize_validated_setting(key: str, value) -> str:
     if key == "tg_api_id":
         return _normalize_int_range("tg_api_id", raw, min_value=1, allow_empty=True)
 
+    if key == "media_retention_days":
+        # Хранить медиа можно 0, 1, 2, 3, 7 дней (0 — не удалять вовсе).
+        # Произвольное значение приводило к падению при разборе.
+        return _normalize_int_range(
+            "media_retention_days",
+            raw,
+            min_value=min(MEDIA_RETENTION_DAYS),
+            max_value=max(MEDIA_RETENTION_DAYS),
+            allow_empty=True,
+        )
+
+    if key == "publish_mode":
+        normalized_mode = raw.strip().lower()
+        if not normalized_mode:
+            return ""
+        if normalized_mode not in PUBLISH_MODES:
+            raise SettingsValidationError(
+                field=key,
+                msg="Режим публикации должен быть auto или manual.",
+            )
+        return normalized_mode
+
+    if key == "media_cleanup_enabled":
+        normalized_flag = raw.strip().lower()
+        if normalized_flag in {"1", "true", "yes", "on"}:
+            return "1"
+        if normalized_flag in {"0", "false", "no", "off", ""}:
+            return "0"
+        raise SettingsValidationError(
+            field=key,
+            msg="media_cleanup_enabled должно быть логическим значением",
+        )
+
     return "" if value is None else str(value)
 
 
@@ -525,12 +560,12 @@ def _stop_module(module_id: str) -> bool:
 
 
 @app.get("/api/modules/status")
-async def api_modules_status() -> dict:
+async def api_modules_status():
     return _build_modules_payload()
 
 
 @app.post("/api/modules/start-all")
-async def api_modules_start_all() -> dict:
+async def api_modules_start_all():
     started: list[str] = []
     for module_id in MODULE_ORDER:
         if _start_module(module_id):
@@ -541,7 +576,7 @@ async def api_modules_start_all() -> dict:
 
 
 @app.post("/api/modules/stop-all")
-async def api_modules_stop_all() -> dict:
+async def api_modules_stop_all():
     stopped: list[str] = []
     for module_id in MODULE_ORDER:
         if _stop_module(module_id):
@@ -552,7 +587,7 @@ async def api_modules_stop_all() -> dict:
 
 
 @app.post("/api/modules/{module_id}/start")
-async def api_module_start(module_id: str) -> dict:
+async def api_module_start(module_id: str):
     meta = _module_runtime_meta(module_id)
     if not bool(meta.get("available")):
         payload = _module_status_payload(module_id)
@@ -567,7 +602,7 @@ async def api_module_start(module_id: str) -> dict:
 
 
 @app.post("/api/modules/{module_id}/stop")
-async def api_module_stop(module_id: str) -> dict:
+async def api_module_stop(module_id: str):
     _module_runtime_meta(module_id)
     _stop_module(module_id)
     payload = _module_status_payload(module_id)
@@ -576,7 +611,7 @@ async def api_module_stop(module_id: str) -> dict:
 
 
 @app.get("/api/bot/status")
-async def api_bot_status() -> dict:
+async def api_bot_status():
     status = _module_status_payload(MODULE_POSTS)
     return {
         "status": status["status"],
@@ -586,7 +621,7 @@ async def api_bot_status() -> dict:
 
 
 @app.post("/api/bot/toggle")
-async def api_bot_toggle() -> dict:
+async def api_bot_toggle():
     if bot_running.is_set():
         _stop_module(MODULE_POSTS)
     else:
@@ -596,7 +631,7 @@ async def api_bot_toggle() -> dict:
 
 # === Настройки ===
 @app.get("/api/settings/defaults")
-async def api_get_settings_defaults() -> dict:
+async def api_get_settings_defaults():
     """Рекомендуемые значения настроек, которые можно вернуть одним нажатием."""
     return {
         "system_prompt": DEFAULT_SYSTEM_PROMPT,
@@ -605,7 +640,7 @@ async def api_get_settings_defaults() -> dict:
 
 
 @app.get("/api/settings")
-async def api_get_settings(module: str | None = Query(default=None)) -> dict:
+async def api_get_settings():
     # Секреты не покидают бэкенд в открытом виде: панель получает маску и
     # может заменить значение или удалить его, но не прочитать текущее.
     masked_getter = getattr(db, "get_masked_settings", None)
@@ -625,6 +660,11 @@ _proxy_runtime_status: dict = {
     "message": "",
     "checked_at": None,
 }
+
+#: Проверка прокси занимает до 20 секунд. Эта блокировка не даёт запустить
+#: несколько проверок одновременно: панель опрашивает статус часто, а
+#: каждая проверка — это соединение с внешним сервером.
+_proxy_check_lock = asyncio.Lock()
 
 # Как долго кэшируется результат проверки прокси для карточки статуса.
 PROXY_STATUS_TTL = 30.0
@@ -669,16 +709,22 @@ async def refresh_proxy_runtime_status(settings: dict | None = None) -> dict:
             "proxy_type": "",
         }
     else:
-        _proxy_runtime_status.update(
-            {
-                "state": "checking",
-                "reachable": False,
-                "proxy_type": resolve_proxy_type(cfg).upper(),
-                "message": "Проверка соединения…",
-                "checked_at": time.time(),
-            }
-        )
-        result = await check_proxy(cfg)
+        # Проверка идёт до 20 секунд. Пока она идёт, новую не запускаем:
+        # иначе десяток параллельных запросов поднимут десяток соединений
+        # и исчерпают файловые дескрипторы.
+        if _proxy_check_lock.locked():
+            return get_proxy_runtime_status()
+        async with _proxy_check_lock:
+            _proxy_runtime_status.update(
+                {
+                    "state": "checking",
+                    "reachable": False,
+                    "proxy_type": resolve_proxy_type(cfg).upper(),
+                    "message": "Проверка соединения…",
+                    "checked_at": time.time(),
+                }
+            )
+            result = await check_proxy(cfg)
 
     _proxy_runtime_status.update(
         {
@@ -698,7 +744,7 @@ async def _on_startup_refresh_proxy() -> None:
 
 
 @app.post("/api/settings")
-async def api_post_settings(request: Request, background_tasks: BackgroundTasks) -> dict:
+async def api_post_settings(request: Request, background_tasks: BackgroundTasks):
     data = await _read_json_object(request)
 
     rejected: list[str] = []
@@ -723,9 +769,15 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
         try:
             accepted[key] = _normalize_validated_setting(key, value)
         except SettingsValidationError as e:
+            # Ничего не сохраняем: пользователь поправит поле и сохранит
+            # снова. Введённые значения при этом остаются в форме.
             return JSONResponse(
                 status_code=422,
-                content={"status": "error", "field": e.field, "msg": e.msg},
+                content={
+                    "status": "error",
+                    "field": e.field,
+                    "msg": f"Поле «{e.field}» не принято: {e.msg}",
+                },
             )
 
     if accepted.keys() & PROXY_SETTING_KEYS:
@@ -803,6 +855,20 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
     if kept_secrets:
         kept_secrets = [key for key in kept_secrets if key not in accepted]
 
+    # Ключ облачного ИИ привязан к адресу API. Если адрес сменился, сохранённый
+    # ключ нельзя оставлять: приложение отправило бы его чужому серверу.
+    if "remote_api_key" in kept_secrets:
+        previous_url = str(db.get_setting("remote_url", "") or "").strip()
+        new_url = str(accepted.get("remote_url", previous_url) or "").strip()
+        if new_url and previous_url and new_url != previous_url:
+            kept_secrets = [key for key in kept_secrets if key != "remote_api_key"]
+            accepted.pop("remote_api_key", None)
+            db.add_log(
+                "WARN-402",
+                "Адрес облачного API изменился, поэтому сохранённый ключ сброшен: "
+                "введите ключ заново, иначе он ушёл бы на новый сервер.",
+            )
+
     if accepted:
         save_settings_batch = getattr(db, "set_settings", None)
         try:
@@ -836,7 +902,7 @@ async def api_post_settings(request: Request, background_tasks: BackgroundTasks)
 
 
 @app.get("/api/ai/providers")
-async def api_ai_providers() -> dict:
+async def api_ai_providers():
     """Список локальных провайдеров AI с их адресами по умолчанию.
 
     Панель использует значения отсюда, чтобы при выборе провайдера
@@ -860,7 +926,7 @@ async def api_ai_models(
     provider: str = Query(default="ollama"),
     port: int | None = Query(default=None, ge=1, le=65535),
     host: str = Query(default="127.0.0.1"),
-) -> dict:
+):
     """List models from a provider on loopback, using a validated port.
 
     The host is deliberately fixed to loopback so this endpoint cannot become
@@ -890,6 +956,26 @@ async def api_ai_models(
                 "provider": provider_name,
                 "models": [],
                 "detail": "Список моделей запрашивается только у локального сервера (127.0.0.1).",
+            },
+        )
+
+    # Порт — только штатный для этого провайдера (или тот, что сохранён
+    # в настройках). Произвольный порт превращал бы эндпоинт в сканер
+    # localhost: по коду ответа можно было бы перебирать открытые порты.
+    allowed_ports = {int(default_port)}
+    stored_port = str(db.get_setting("local_port", "") or "").strip()
+    if stored_port.isascii() and stored_port.isdigit():
+        allowed_ports.add(int(stored_port))
+    if target_port not in allowed_ports:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "provider": provider_name,
+                "models": [],
+                "detail": (
+                    f"Порт {target_port} для этого провайдера не используется. "
+                    f"Ожидается {default_port}."
+                ),
             },
         )
 
@@ -951,7 +1037,7 @@ async def api_ai_models(
 
 
 @app.get("/api/proxy/status")
-async def api_proxy_status() -> dict:
+async def api_proxy_status():
     # Статус прокси кэшируется на PROXY_STATUS_TTL: проверка может длиться до
     # 20 секунд, и без кэша панель подвисала бы на каждом автообновлении.
     # Истёкший TTL принудительно перепроверяется, чтобы карточка показывала
@@ -964,19 +1050,32 @@ async def api_proxy_status() -> dict:
 
 
 @app.post("/api/proxy/test")
-async def api_proxy_test(request: Request) -> dict:
+async def api_proxy_test(request: Request):
     data = await _read_json_object(request)
 
     cfg = {key: str(data.get(key, "")) for key in PROXY_SETTING_KEYS}
 
     # Панель не знает сохранённые секреты (вместо них маска), поэтому пустое
     # или замаскированное поле означает «использовать сохранённое значение».
+    # Но только если адрес прокси не менялся: иначе сохранённый пароль ушёл
+    # бы на чужой сервер, а это и есть кража секрета.
     stored = db.get_all_settings()
-    for key in PROXY_SETTING_KEYS & SECRET_SETTING_KEYS:
-        if cfg.get(key, "") in ("", SECRET_MASK):
-            saved_value = str(stored.get(key, "") or "")
-            if saved_value:
-                cfg[key] = saved_value
+    same_endpoint = (
+        str(cfg.get("proxy_host") or "").strip().lower()
+        == str(stored.get("proxy_host") or "").strip().lower()
+        and str(cfg.get("proxy_port") or "").strip()
+        == str(stored.get("proxy_port") or "").strip()
+    )
+    if same_endpoint:
+        for key in PROXY_SETTING_KEYS & SECRET_SETTING_KEYS:
+            if cfg.get(key, "") in ("", SECRET_MASK):
+                saved_value = str(stored.get(key, "") or "")
+                if saved_value:
+                    cfg[key] = saved_value
+    else:
+        for key in PROXY_SETTING_KEYS & SECRET_SETTING_KEYS:
+            if cfg.get(key, "") in ("", SECRET_MASK):
+                cfg[key] = ""
 
     try:
         cfg = normalize_mtproto_proxy_link(cfg)
@@ -989,7 +1088,11 @@ async def api_proxy_test(request: Request) -> dict:
             "proxy_type": "MTProto",
         }
     else:
-        result = await check_proxy(cfg)
+        # Явная проверка из панели дожидается своей очереди: пользователь
+        # нажал кнопку и ждёт результат. Параллельные запросы при этом
+        # не плодят соединения — очередь у блокировки одна.
+        async with _proxy_check_lock:
+            result = await check_proxy(cfg)
     _proxy_runtime_status.update(
         {
             "state": result.get("state", "unknown"),
@@ -1070,7 +1173,7 @@ async def api_list_posts(
 
 
 @app.get("/api/posts/media-stats")
-async def api_media_stats() -> dict:
+async def api_media_stats():
     """Сводка по медиафайлам очереди: сколько постов с медиа и сколько места занято."""
     media_dir = os.path.join(BASE_DIR, POST_MEDIA_DIR)
     total_bytes = 0
@@ -1118,7 +1221,7 @@ def _delete_media_files(names: list[str]) -> tuple[int, int]:
 
 
 @app.post("/api/posts/cleanup")
-async def api_cleanup_posts(request: Request) -> dict:
+async def api_cleanup_posts(request: Request):
     """Очищает медиа: по сроку хранения (retention) либо всё (scope=all)."""
     data = await _read_json_object(request)
     scope = str(data.get("scope") or "retention").strip().lower()
@@ -1166,15 +1269,40 @@ async def api_cleanup_posts(request: Request) -> dict:
 
 
 @app.get("/api/posts/{post_id}")
-async def api_get_post(post_id: int) -> dict:
+async def api_get_post(post_id: int):
     row = db.get_queued_post(post_id)
     if not row:
         raise HTTPException(status_code=404, detail="Пост не найден.")
     return _post_row_to_dict(row)
 
 
+#: Формат отложенной публикации в базе. Сравнение строк идёт лексикографически,
+#: поэтому произвольная строка означала бы «опубликовать немедленно» или
+#: «никогда».
+SCHEDULED_AT_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _normalize_scheduled_at(raw: str) -> str:
+    """Проверяет и приводит время отложенной публикации.
+
+    Принимается полный формат «ГГГГ-ММ-ДД ЧЧ:ММ:СС» и вариант с «T»
+    вместо пробела (так приходит из HTML-поля типа datetime-local).
+    """
+    text = str(raw or "").strip().replace("T", " ")
+    if not text:
+        return ""
+    try:
+        parsed = datetime.strptime(text, SCHEDULED_AT_FORMAT)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Неверное время отложенной публикации. Ожидается ГГГГ-ММ-ДД ЧЧ:ММ:СС.",
+        ) from exc
+    return parsed.strftime(SCHEDULED_AT_FORMAT)
+
+
 @app.post("/api/posts/{post_id}")
-async def api_update_post(post_id: int, request: Request) -> dict:
+async def api_update_post(post_id: int, request: Request):
     """Правка текста, категории, канала и времени публикации."""
     data = await _read_json_object(request)
     if not db.get_queued_post(post_id):
@@ -1186,11 +1314,22 @@ async def api_update_post(post_id: int, request: Request) -> dict:
     if "category" in data:
         changes["category"] = str(data.get("category") or "").strip().lower()
     if "target_chat" in data:
-        changes["target_chat"] = str(data.get("target_chat") or "").strip()
+        raw_chat = str(data.get("target_chat") or "").strip()
+        if raw_chat:
+            # Канал должен быть настоящим: иначе пост ушёл бы туда,
+            # куда не следует, и подписчик потерял бы контент.
+            try:
+                changes["target_chat"] = normalize_target_chat(raw_chat)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"Некорректный канал: {exc}"
+                ) from exc
+        else:
+            changes["target_chat"] = ""
     if "scheduled_at" in data:
         raw = str(data.get("scheduled_at") or "").strip()
         if raw:
-            changes["scheduled_at"] = raw
+            changes["scheduled_at"] = _normalize_scheduled_at(raw)
             changes["status"] = "scheduled"
         else:
             changes["scheduled_at"] = ""
@@ -1210,7 +1349,7 @@ async def api_update_post(post_id: int, request: Request) -> dict:
 
 
 @app.post("/api/posts/{post_id}/cancel")
-async def api_cancel_post(post_id: int) -> dict:
+async def api_cancel_post(post_id: int):
     """Отменяет публикацию поста."""
     if not db.get_queued_post(post_id):
         raise HTTPException(status_code=404, detail="Пост не найден.")
@@ -1220,7 +1359,7 @@ async def api_cancel_post(post_id: int) -> dict:
 
 
 @app.post("/api/posts/{post_id}/delete")
-async def api_delete_post(post_id: int) -> dict:
+async def api_delete_post(post_id: int):
     """Удаляет пост из очереди."""
     if not db.delete_queued_post(post_id):
         raise HTTPException(status_code=404, detail="Пост не найден.")
@@ -1252,7 +1391,7 @@ async def api_get_post_media(post_id: int, index: int) -> FileResponse:
 
 
 @app.post("/api/posts/{post_id}/media")
-async def api_add_post_media(post_id: int, request: Request) -> dict:
+async def api_add_post_media(post_id: int, request: Request):
     """Прикрепляет файл к посту в очереди.
 
     Файл приходит телом запроса, имя — параметром ``name``. Так не нужна
@@ -1304,7 +1443,13 @@ async def api_add_post_media(post_id: int, request: Request) -> dict:
         with open(os.path.join(media_dir, file_name), "wb") as handle:
             handle.write(body)
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Не удалось сохранить файл: {exc}") from exc
+        # Подробности ошибки — в журнал: пользователю достаточно знать,
+        # что файл не сохранён.
+        db.add_log("ERR-515", f"Не удалось сохранить загруженный файл: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Не удалось сохранить файл. Проверьте свободное место на диске.",
+        ) from exc
 
     files.append(file_name)
     db.update_queued_post(
@@ -1321,7 +1466,7 @@ async def api_add_post_media(post_id: int, request: Request) -> dict:
 
 
 @app.delete("/api/posts/{post_id}/media/{index}")
-async def api_delete_post_media(post_id: int, index: int) -> dict:
+async def api_delete_post_media(post_id: int, index: int):
     """Убирает один медиафайл из поста."""
     row = db.get_queued_post(post_id)
     if not row:
@@ -1353,7 +1498,7 @@ async def api_delete_post_media(post_id: int, index: int) -> dict:
 
 
 @app.post("/api/posts/{post_id}/publish")
-async def api_publish_post(post_id: int) -> dict:
+async def api_publish_post(post_id: int):
     """Публикует пост из очереди прямо сейчас."""
     row = db.get_queued_post(post_id)
     if not row:
@@ -1404,7 +1549,7 @@ async def api_publish_post(post_id: int) -> dict:
 
 
 @app.post("/api/posts/{post_id}/clear-media")
-async def api_clear_post_media(post_id: int) -> dict:
+async def api_clear_post_media(post_id: int):
     """Убирает медиа у конкретного поста и удаляет файлы."""
     if not db.get_queued_post(post_id):
         raise HTTPException(status_code=404, detail="Пост не найден.")
@@ -1454,7 +1599,7 @@ async def api_get_logs(
 
 
 @app.post("/api/logs/clear")
-async def api_clear_logs(request: Request) -> dict:
+async def api_clear_logs(request: Request):
     """Удаляет записи журнала.
 
     Требует явного подтверждения (`confirm: true`), чтобы случайный запрос
@@ -1572,13 +1717,19 @@ def _build_posts_stats() -> dict:
 
 
 @app.get("/api/stats/posts")
-async def api_stats_posts() -> dict:
+async def api_stats_posts():
     try:
         return _build_posts_stats()
     except Exception as e:
+        # Внутренние подробности (имена таблиц, SQL, пути) пользователю не
+        # нужны и могут многоего выдать о машине. Подробности — в журнал.
+        db.add_log("ERR-516", f"Не удалось собрать статистику постов: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": str(e)},
+            content={
+                "status": "error",
+                "msg": "Не удалось собрать статистику. Подробности — в журнале.",
+            },
         )
 
 
