@@ -103,6 +103,33 @@ def test_foreign_origin_post_is_rejected(client: TestClient) -> None:
     assert response.status_code == 403
 
 
+def test_origin_from_same_loopback_host_but_different_port_is_rejected(
+    client: TestClient,
+) -> None:
+    """Одинаковое имя хоста не означает один источник при разных портах."""
+    response = client.post(
+        "/api/settings",
+        json={"poll_delay": "60"},
+        headers={
+            "Host": "127.0.0.1:8000",
+            "Origin": "http://127.0.0.1:9999",
+        },
+    )
+    assert response.status_code == 403
+
+
+def test_origin_with_different_scheme_is_rejected(client: TestClient) -> None:
+    response = client.post(
+        "/api/settings",
+        json={"poll_delay": "60"},
+        headers={
+            "Host": "127.0.0.1:8000",
+            "Origin": "https://127.0.0.1:8000",
+        },
+    )
+    assert response.status_code == 403
+
+
 def test_get_is_not_blocked_by_csrf_rules(client: TestClient) -> None:
     """Чтение не меняет состояние — CSRF к нему неприменим."""
     response = client.get("/api/settings")
