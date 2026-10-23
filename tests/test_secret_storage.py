@@ -252,6 +252,14 @@ def test_masked_settings_keep_empty_secret_empty(tmp_path) -> None:
         db.conn.close()
 
 
+def test_secret_storage_is_supported_only_on_windows(monkeypatch) -> None:
+    """Системное шифрование секретов включено только для целевой платформы."""
+    monkeypatch.setattr(secrets_store.sys, "platform", "win32")
+    assert secrets_store.supported() is True
+    monkeypatch.setattr(secrets_store.sys, "platform", "linux")
+    assert secrets_store.supported() is False
+
+
 def test_every_secret_key_is_covered() -> None:
     """Список секретных настроек содержит все ключи, которые нельзя показывать."""
     for key in ("bot_token", "tg_api_hash", "remote_api_key", "proxy_pass", "mtproto_key"):
