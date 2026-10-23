@@ -546,7 +546,7 @@ class DB:
                 )
                 """
             )
-            # post_key — составной (source:id), post_id — оригинал для отладки
+            # post_key объединяет источник и ID сообщения; post_id хранит исходный ID.
             self.conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS skipped_posts (
