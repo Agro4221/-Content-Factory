@@ -22,7 +22,7 @@ except ImportError:
 
 
 def format_proxy_host(host: str) -> str:
-    """Bracket IPv6 literals when they are embedded in proxy URLs."""
+    """Заключает IPv6-адрес в квадратные скобки при формировании URL прокси."""
     normalized = (host or "").strip()
     if normalized.startswith("[") and normalized.endswith("]"):
         return normalized
@@ -51,8 +51,8 @@ def _truthy(value: object) -> bool:
 
 
 def resolve_proxy_type(cfg: dict) -> str:
-    # An explicit type chosen in the UI wins over a stale hidden MTProto key.
-    # Older configs with an empty type can still infer MTProto from the key.
+    # Явно выбранный в интерфейсе тип имеет приоритет над сохранённым ключом MTProto.
+    # Для старых настроек без типа протокол определяется по наличию ключа.
     configured = (cfg.get("proxy_type") or "").strip().lower()
     if configured in {"http", "socks5", "socks4", "mtproto"}:
         return configured
@@ -62,7 +62,7 @@ def resolve_proxy_type(cfg: dict) -> str:
 
 
 def normalize_mtproto_proxy_link(cfg: dict) -> dict:
-    """Expand t.me/proxy or tg://proxy links into host, port and secret fields."""
+    """Извлекает хост, порт и секрет из ссылок t.me/proxy и tg://proxy."""
     normalized = dict(cfg)
     configured_type = (normalized.get("proxy_type") or "").strip().lower()
     raw_host = (normalized.get("proxy_host") or "").strip()

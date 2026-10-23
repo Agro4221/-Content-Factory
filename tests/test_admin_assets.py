@@ -1,4 +1,4 @@
-"""The admin page and its separate CSS/JS assets are served consistently."""
+"""Проверяет самодостаточность веб-панели и её обязательные элементы."""
 from __future__ import annotations
 
 import re
@@ -20,10 +20,9 @@ def client(monkeypatch):
 
 
 def test_admin_page_is_self_contained(client: TestClient) -> None:
-    """Панель единым файлом: стили и скрипт встроены в admin.html.
+    """Панель должна содержать CSS и JavaScript внутри ``admin.html``.
 
-    Раньше панель подключала внешние /admin.css и /admin.js. Сейчас она
-    самодостаточна, поэтому внешних ссылок на стили/скрипты в разметке нет.
+    Внешние файлы ``admin.css`` и ``admin.js`` не используются.
     """
     response = client.get("/")
     assert response.status_code == 200
