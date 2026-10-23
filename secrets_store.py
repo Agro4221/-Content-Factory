@@ -17,6 +17,9 @@ from ctypes import wintypes
 #: Префикс зашифрованного значения в базе.
 PREFIX = "dpapi:v1:"
 
+#: Начальные байты стандартного DPAPI-блока Windows: версия и GUID провайдера.
+_DPAPI_BLOB_HEADER = bytes.fromhex("01000000d08c9ddf0115d1118c7a00c04fc297eb")
+
 #: Энтропия — дополнительная привязка блоба к приложению (сама по себе не секрет).
 _ENTROPY = b"ContentFactory.settings.v1"
 
@@ -48,7 +51,7 @@ def supported() -> bool:
 
 
 def is_encrypted(value: object) -> bool:
-    """Проверяет, имеет ли значение формат DPAPI."""
+    """Проверяет, имеет ли значение форматированный префикс и Base64."""
     if not isinstance(value, str) or not value.startswith(PREFIX):
         return False
     payload = value[len(PREFIX):]
@@ -59,6 +62,21 @@ def is_encrypted(value: object) -> bool:
     except (binascii.Error, ValueError):
         return False
     return True
+
+
+def has_dpapi_blob_signature(value: object) -> bool:
+    """Проверяет сигнатуру стандартного DPAPI-блока без его расшифровки.
+
+    Это отличает DPAPI-блоб от обычного текста, который случайно начинается
+    с dpapi:v1: и содержит корректную Base64-строку.
+    """
+    if not isinstance(value, str) or not value.startswith(PREFIX):
+        return False
+    try:
+        payload = base64.b64decode(value[len(PREFIX):], validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    return payload.startswith(_DPAPI_BLOB_HEADER)
 
 
 def _to_blob(data: bytes) -> tuple[_DATA_BLOB, object]:
