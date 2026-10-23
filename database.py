@@ -715,9 +715,8 @@ class DB:
         with contextlib.suppress(Exception):
             self.add_log(
                 "WARN-503",
-                "Шифрование секретов недоступно на этой платформе "
-                "Системное хранилище секретов на этой платформе недоступно. "
-                "Токены и ключи хранятся в базе открытым текстом — защищайте папку приложения.",
+                "Защищённое хранение секретов недоступно. "
+                "Новые значения не будут сохранены; проверьте целевую Windows-среду.",
             )
 
     # ---------- settings ----------
@@ -740,23 +739,25 @@ class DB:
             return ""
 
     def _encode_setting(self, key: str, value: Any) -> str:
-        """Шифрует значение секретной настройки перед записью в базу."""
+        """Encrypt a secret before writing it; never store the original on failure."""
         text = "" if value is None else str(value)
         if key not in SECRET_SETTING_KEYS or not text:
             return text
-        if _is_encrypted_secret(text):
-            return text
+
         if not _secret_storage_supported():
-            # Если системное шифрование недоступно, сохраняем совместимость
-            # и сообщаем об ограничении через журнал.
-            return text
+            exc = SecretEncryptionError(
+                "Защищённое хранение секретов доступно только в целевой Windows-среде."
+            )
+            self._log_secret_failure("ERR-503", key, exc)
+            raise exc
+
         try:
             return _encrypt_secret(text, key)
         except SecretEncryptionError as exc:
-            # Значение нельзя потерять, поэтому сохраняем как есть и явно
-            # сообщаем об этом в журнале (без самого значения).
             self._log_secret_failure("ERR-503", key, exc)
-            return text
+            raise SecretEncryptionError(
+                "Не удалось зашифровать секрет. Значение не сохранено."
+            ) from exc
 
     def _log_secret_failure(self, log_type: str, key: str, exc: Exception) -> None:
         """Пишет в журнал факт проблемы с секретом, не раскрывая его значение."""
