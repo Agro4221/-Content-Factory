@@ -38,4 +38,5 @@ _test_output.txt
 
 # Editors and OS
 .vscode/
-.idea/Thumbs.db
+.idea/
+Thumbs.db
