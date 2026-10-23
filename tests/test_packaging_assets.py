@@ -5,10 +5,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-# В сборке для другой платформы spec-файл лежит уровнем выше: там, откуда
-# запускается сборка.
-SPEC_CANDIDATES = (ROOT / "Parser.spec", ROOT.parent / "Parser.spec")
-SPEC_PATH = next((path for path in SPEC_CANDIDATES if path.is_file()), SPEC_CANDIDATES[0])
+SPEC_PATH = ROOT / "Parser.spec"
 
 REQUIRED_ASSETS = {
     "admin.html",
