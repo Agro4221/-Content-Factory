@@ -13,20 +13,27 @@ SQLite-обёртка для проекта Content Factory.
     Каждое изменение схемы — новая запись в _MIGRATIONS с номером версии.
     При открытии БД автоматически применяются миграции от текущей до
     последней версии. Идемпотентно, безопасно для отката к старой версии.
-  - **Секреты шифруются** средствами Windows DPAPI (см. secrets_store.py).
+  - **Секреты шифруются** системным хранилищем ОС (см. secrets_store.py).
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
+import contextlib
 import json
 import logging
-import os
-import re
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
+
+from config import DB_PATH, SECRET_MASK, SECRET_SETTING_KEYS, make_post_key
+from secrets_store import (
+    SecretDecryptionError,
+    SecretEncryptionError,
+)
+from secrets_store import decrypt as _decrypt_secret
+from secrets_store import encrypt as _encrypt_secret
+from secrets_store import is_encrypted as _is_encrypted_secret
+from secrets_store import supported as _secret_storage_supported
 
 
 def _local_now_str() -> str:
@@ -83,15 +90,6 @@ def _parse_sqlite_modifier(modifier: str) -> int:
     }
     return sign * value * multipliers.get(unit, 1)
 
-from config import DB_PATH, SECRET_MASK, SECRET_SETTING_KEYS, make_post_key
-from secrets_store import (
-    SecretDecryptionError,
-    SecretEncryptionError,
-    decrypt as _decrypt_secret,
-    encrypt as _encrypt_secret,
-    is_encrypted as _is_encrypted_secret,
-    supported as _secret_storage_supported,
-)
 
 _logger = logging.getLogger("database")
 if not _logger.handlers:
@@ -111,16 +109,16 @@ if not _logger.handlers:
 # Миграция получает db и сама выполняет свои SQL/изменения. Должна быть
 # идемпотентной (повторный запуск не ломает БД) — на случай если процесс
 # упал посреди применения.
-MIGRATIONS: list[tuple[int, Callable[["DB"], None]]] = []
+MIGRATIONS: list[tuple[int, Callable[[DB], None]]] = []
 
 
-def _migration_v1(db: "DB") -> None:
+def _migration_v1(db: DB) -> None:
     """v1: начальная схема — все 4 таблицы, дефолтные настройки, составной ключ."""
     db._create_initial_tables()
     db._init_default_settings()
 
 
-def _migration_v2(db: "DB") -> None:
+def _migration_v2(db: DB) -> None:
     """v2: created_at + индексы для дашбордов.
 
     Добавляет в published_posts и skipped_posts колонку created_at
@@ -150,16 +148,11 @@ def _migration_v2(db: "DB") -> None:
 
     # 3) Индексы. CREATE INDEX IF NOT EXISTS — идемпотентно на уровне SQLite.
     indexes = (
-        "CREATE INDEX IF NOT EXISTS idx_published_created_at "
-        "ON published_posts(created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
-        "ON published_posts(source_name, created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_skipped_created_at "
-        "ON skipped_posts(created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_skipped_reason "
-        "ON skipped_posts(reason)",
-        "CREATE INDEX IF NOT EXISTS idx_logs_type_timestamp "
-        "ON system_logs(type, timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_published_created_at ON published_posts(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_published_source_created_at ON published_posts(source_name, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_skipped_created_at ON skipped_posts(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_skipped_reason ON skipped_posts(reason)",
+        "CREATE INDEX IF NOT EXISTS idx_logs_type_timestamp ON system_logs(type, timestamp)",
     )
     with db.conn:
         for stmt in indexes:
@@ -178,21 +171,21 @@ def _migration_v2(db: "DB") -> None:
         )
 
 
-def _migration_v3(db: "DB") -> None:
+def _migration_v3(db: DB) -> None:
     """v3: reserved for future modules.
 
     The modules were removed from the project, so the migration creates
     nothing. The version number is kept so existing databases stay valid.
     """
-    return None
+    return
 
 
-def _migration_v4(db: "DB") -> None:
+def _migration_v4(db: DB) -> None:
     """v4: reserved - the reviews module was removed, schema is unchanged."""
-    return None
+    return
 
 
-def _migration_v5(db: "DB") -> None:
+def _migration_v5(db: DB) -> None:
     """v5: старые system_logs были в UTC (CURRENT_TIMESTAMP) — переводим в локальное."""
     if db.get_setting("logs_utc_to_local_done") == "1":
         return
@@ -205,7 +198,7 @@ def _migration_v5(db: "DB") -> None:
     db.set_setting("logs_utc_to_local_done", "1")
 
 
-def _migration_v6(db: "DB") -> None:
+def _migration_v6(db: DB) -> None:
     """v6: normalize legacy UTC post timestamps to the local convention used by stats."""
     if db._get_schema_version() >= 6:
         return
@@ -235,7 +228,7 @@ def _migration_v6(db: "DB") -> None:
         raise
 
 
-def _migration_v7(db: "DB") -> None:
+def _migration_v7(db: DB) -> None:
     """v7: durable retry queue for caption text sent after media."""
     db.conn.execute(
         """
@@ -259,7 +252,7 @@ def _migration_v7(db: "DB") -> None:
     )
 
 
-def _migration_v8(db: "DB") -> None:
+def _migration_v8(db: DB) -> None:
     """v8: очередь постов для ручного контроля, отложенной публикации и правок."""
     db.conn.execute(
         """
@@ -294,6 +287,49 @@ def _migration_v8(db: "DB") -> None:
     )
 
 
+def _migration_v9(db: DB) -> None:
+    """v9: список целевых каналов для поста.
+
+    Один пост может уйти сразу в несколько каналов: теги совпали с
+    маршрутами нескольких каналов. Старая колонка target_chat остаётся
+    основным каналом — по ней видно, куда пост ушёл.
+    """
+    columns = {
+        row[1]
+        for row in db.conn.execute("PRAGMA table_info(post_queue)").fetchall()
+    }
+    if not columns:
+        return
+    if "target_chats" not in columns:
+        db.conn.execute(
+            "ALTER TABLE post_queue ADD COLUMN target_chats TEXT NOT NULL DEFAULT '[]'"
+        )
+    # Для старых записей список каналов совпадает с основным каналом.
+    db.conn.execute(
+        "UPDATE post_queue SET target_chats = '[]' "
+        "WHERE target_chats IS NULL OR target_chats = ''"
+    )
+
+
+def _migration_v10(db: DB) -> None:
+    """v10: счётчик попыток публикации для постов очереди.
+
+    Пост, который не публикуется из-за постоянной ошибки, не должен
+    повторяться вечно: после нескольких попыток он переводится в
+    «ошибка» и перестаёт занимать очередь.
+    """
+    columns = {
+        row[1]
+        for row in db.conn.execute("PRAGMA table_info(post_queue)").fetchall()
+    }
+    if not columns:
+        return
+    if "publish_attempts" not in columns:
+        db.conn.execute(
+            "ALTER TABLE post_queue ADD COLUMN publish_attempts INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 # Регистрируем миграции
 MIGRATIONS.append((1, _migration_v1))
 MIGRATIONS.append((2, _migration_v2))
@@ -303,6 +339,8 @@ MIGRATIONS.append((5, _migration_v5))
 MIGRATIONS.append((6, _migration_v6))
 MIGRATIONS.append((7, _migration_v7))
 MIGRATIONS.append((8, _migration_v8))
+MIGRATIONS.append((9, _migration_v9))
+MIGRATIONS.append((10, _migration_v10))
 
 CURRENT_SCHEMA_VERSION: int = max(v for v, _ in MIGRATIONS)
 
@@ -417,16 +455,12 @@ class DB:
         """
         table_indexes = {
             "published_posts": (
-                "CREATE INDEX IF NOT EXISTS idx_published_created_at "
-                "ON published_posts(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_published_source_created_at "
-                "ON published_posts(source_name, created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_published_created_at ON published_posts(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_published_source_created_at ON published_posts(source_name, created_at)",
             ),
             "skipped_posts": (
-                "CREATE INDEX IF NOT EXISTS idx_skipped_created_at "
-                "ON skipped_posts(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_skipped_reason "
-                "ON skipped_posts(reason)",
+                "CREATE INDEX IF NOT EXISTS idx_skipped_created_at ON skipped_posts(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_skipped_reason ON skipped_posts(reason)",
             ),
         }
         schema_version = self._get_schema_version()
@@ -496,10 +530,10 @@ class DB:
                     migration_fn(self)
                 self._set_schema_version(version)
                 _logger.info("[DB] Applied migration v%d", version)
-            except sqlite3.Error as e:
+            except sqlite3.Error:
                 # Не получилось — БД остаётся на старой версии, при следующем
                 # запуске миграция повторится.
-                _logger.error("[DB] Migration v%d failed: %s", version, e)
+                _logger.exception("[DB] Migration v%d failed", version)
                 raise
 
     def _create_initial_tables(self) -> None:
@@ -552,7 +586,7 @@ class DB:
         try:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(published_posts)").fetchall()]
         except sqlite3.Error as exc:
-            _logger.error("Could not inspect published_posts before legacy migration: %s", exc)
+            _logger.exception("Could not inspect published_posts before legacy migration")
             raise RuntimeError(
                 "Cannot inspect the legacy published_posts schema; database startup aborted."
             ) from exc
@@ -603,7 +637,7 @@ class DB:
                     )
                     _logger.info("Migrated published_posts to composite key")
             except sqlite3.Error as e:
-                _logger.error("Migration of published_posts failed; aborting startup: %s", e)
+                _logger.exception("Migration of published_posts failed; aborting startup")
                 raise RuntimeError(
                     "Legacy published_posts migration failed; refusing to run with an incompatible database."
                 ) from e
@@ -613,7 +647,7 @@ class DB:
         try:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(skipped_posts)").fetchall()]
         except sqlite3.Error as exc:
-            _logger.error("Could not inspect skipped_posts before legacy migration: %s", exc)
+            _logger.exception("Could not inspect skipped_posts before legacy migration")
             raise RuntimeError(
                 "Cannot inspect the legacy skipped_posts schema; database startup aborted."
             ) from exc
@@ -663,7 +697,7 @@ class DB:
                     )
                     _logger.info("Migrated skipped_posts to composite key")
             except sqlite3.Error as e:
-                _logger.error("Migration of skipped_posts failed; aborting startup: %s", e)
+                _logger.exception("Migration of skipped_posts failed; aborting startup")
                 raise RuntimeError(
                     "Legacy skipped_posts migration failed; refusing to run with an incompatible database."
                 ) from e
@@ -680,14 +714,13 @@ class DB:
         """Сообщает, если секреты не удаётся шифровать на этой платформе."""
         if _secret_storage_supported():
             return
-        try:
+        with contextlib.suppress(Exception):
             self.add_log(
                 "WARN-503",
-                "Шифрование секретов недоступно на этой платформе (DPAPI — только Windows). "
+                "Шифрование секретов недоступно на этой платформе "
+                "Системное хранилище секретов на этой платформе недоступно. "
                 "Токены и ключи хранятся в базе открытым текстом — защищайте папку приложения.",
             )
-        except Exception:
-            pass
 
     # ---------- settings ----------
     def _decode_setting(self, key: str, value: Any) -> Any:
@@ -703,7 +736,7 @@ class DB:
         if not value:
             return value
         try:
-            return _decrypt_secret(value)
+            return _decrypt_secret(value, key)
         except SecretDecryptionError as exc:
             self._log_secret_failure("ERR-502", key, exc)
             return ""
@@ -720,7 +753,7 @@ class DB:
             # приложение оставалось рабочим. Ограничение фиксируется в журнале.
             return text
         try:
-            return _encrypt_secret(text)
+            return _encrypt_secret(text, key)
         except SecretEncryptionError as exc:
             # Значение нельзя потерять, поэтому сохраняем как есть и явно
             # сообщаем об этом в журнале (без самого значения).
@@ -729,14 +762,12 @@ class DB:
 
     def _log_secret_failure(self, log_type: str, key: str, exc: Exception) -> None:
         """Пишет в журнал факт проблемы с секретом, не раскрывая его значение."""
-        try:
+        with contextlib.suppress(Exception):
             self.add_log(
                 log_type,
                 f"Настройка «{key}»: не удалось обработать сохранённый секрет "
                 f"({type(exc).__name__}). Введите значение заново в панели управления.",
             )
-        except Exception:
-            pass
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self._lock:
@@ -748,12 +779,11 @@ class DB:
 
     def set_setting(self, key: str, value: Any) -> None:
         stored = self._encode_setting(key, value)
-        with self._lock:
-            with self.conn:
-                self.conn.execute(
-                    "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
-                    (key, stored),
-                )
+        with self._lock, self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+                (key, stored),
+            )
 
     def get_all_settings(self) -> dict[str, str]:
         with self._lock:
@@ -796,7 +826,7 @@ class DB:
                         self.conn.rollback()
                 except sqlite3.Error:
                     pass
-                _logger.error("set_settings batch failed (%d keys): %s", len(rows), exc)
+                _logger.exception("set_settings batch failed (%d keys)", len(rows))
                 raise RuntimeError("could not save settings batch; transaction rolled back") from exc
 
     def migrate_plaintext_secrets(self) -> int:
@@ -819,16 +849,15 @@ class DB:
             if not value or _is_encrypted_secret(value):
                 continue
             try:
-                encrypted = _encrypt_secret(value)
+                encrypted = _encrypt_secret(value, key)
             except SecretEncryptionError as exc:
                 self._log_secret_failure("ERR-503", key, exc)
                 continue
-            with self._lock:
-                with self.conn:
-                    self.conn.execute(
-                        "UPDATE bot_settings SET value = ? WHERE key = ?",
-                        (encrypted, key),
-                    )
+            with self._lock, self.conn:
+                self.conn.execute(
+                    "UPDATE bot_settings SET value = ? WHERE key = ?",
+                    (encrypted, key),
+                )
             migrated += 1
         if migrated:
             _logger.info("[DB] Encrypted %d stored secret(s) with Windows DPAPI", migrated)
@@ -884,23 +913,22 @@ class DB:
                         (post_key,),
                     ).fetchone()
                 except sqlite3.Error as check_error:
-                    _logger.error(
-                        "save_post failed for %s/%s while checking duplicate: %s",
+                    _logger.exception(
+                        "save_post failed for %s/%s while checking duplicate",
                         source,
                         post_id,
-                        check_error,
                     )
                     raise DatabaseWriteError(
                         f"could not verify publication record for {source}/{post_id}"
                     ) from check_error
                 if existing:
                     return
-                _logger.error("save_post integrity failure for %s/%s: %s", source, post_id, exc)
+                _logger.exception("save_post integrity failure for %s/%s", source, post_id)
                 raise DatabaseWriteError(
                     f"could not record publication for {source}/{post_id}"
                 ) from exc
             except sqlite3.Error as exc:
-                _logger.error("save_post failed for %s/%s: %s", source, post_id, exc)
+                _logger.exception("save_post failed for %s/%s", source, post_id)
                 raise DatabaseWriteError(
                     f"could not record publication for {source}/{post_id}"
                 ) from exc
@@ -939,11 +967,10 @@ class DB:
                         self.conn.rollback()
                 except sqlite3.Error:
                     pass
-                _logger.error(
-                    "save_posts failed for group %s (%s IDs): %s",
+                _logger.exception(
+                    "save_posts failed for group %s (%s IDs)",
                     source,
                     len(post_ids),
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not record publication group for {source}"
@@ -1007,11 +1034,10 @@ class DB:
                         self.conn.rollback()
                 except sqlite3.Error:
                     pass
-                _logger.error(
-                    "save_posts_with_followup failed for %s/%s: %s",
+                _logger.exception(
+                    "save_posts_with_followup failed for %s/%s",
                     source,
                     post_ids[0],
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not atomically record publication and text follow-up for {source}/{post_ids[0]}"
@@ -1139,11 +1165,10 @@ class DB:
                         self.conn.rollback()
                 except sqlite3.Error:
                     pass
-                _logger.error(
-                    "save_skipped_posts failed for group %s (%s IDs): %s",
+                _logger.exception(
+                    "save_skipped_posts failed for group %s (%s IDs)",
                     source,
                     len(post_ids),
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not record skipped group for {source}"
@@ -1165,32 +1190,29 @@ class DB:
                         (make_post_key(source, post_id),),
                     ).fetchone()
                 except sqlite3.Error as check_error:
-                    _logger.error(
-                        "save_skipped_post failed for %s/%s while checking duplicate: %s",
+                    _logger.exception(
+                        "save_skipped_post failed for %s/%s while checking duplicate",
                         source,
                         post_id,
-                        check_error,
                     )
                     raise DatabaseWriteError(
                         f"could not verify skipped record for {source}/{post_id}"
                     ) from check_error
                 if existing:
                     return
-                _logger.error(
-                    "save_skipped_post integrity failure for %s/%s: %s",
+                _logger.exception(
+                    "save_skipped_post integrity failure for %s/%s",
                     source,
                     post_id,
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not record skipped post for {source}/{post_id}"
                 ) from exc
             except sqlite3.Error as exc:
-                _logger.error(
-                    "save_skipped_post failed for %s/%s: %s",
+                _logger.exception(
+                    "save_skipped_post failed for %s/%s",
                     source,
                     post_id,
-                    exc,
                 )
                 raise DatabaseWriteError(
                     f"could not record skipped post for {source}/{post_id}"
@@ -1198,12 +1220,11 @@ class DB:
 
     # ---------- logs ----------
     def add_log(self, log_type: str, message: str) -> None:
-        with self._lock:
-            with self.conn:
-                self.conn.execute(
-                    "INSERT INTO system_logs (timestamp, type, message) VALUES (?, ?, ?)",
-                    (_local_now_str(), log_type, message),
-                )
+        with self._lock, self.conn:
+            self.conn.execute(
+                "INSERT INTO system_logs (timestamp, type, message) VALUES (?, ?, ?)",
+                (_local_now_str(), log_type, message),
+            )
 
     def get_logs(self, limit: int = 30, offset: int = 0) -> list[tuple[str, str, str]]:
         with self._lock:
@@ -1249,14 +1270,26 @@ class DB:
                     """
                     INSERT INTO post_queue (
                         source_name, post_id, group_id, original_text, publish_text,
-                        media_files, media_kind, category, target_chat, status,
+                        media_files, media_kind, category, target_chat, target_chats, status,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
                     ON CONFLICT(source_name, post_id) DO UPDATE SET
                         original_text = excluded.original_text,
+                        publish_text = excluded.publish_text,
                         media_files = excluded.media_files,
                         media_kind = excluded.media_kind,
-                        updated_at = excluded.updated_at
+                        category = excluded.category,
+                        target_chat = excluded.target_chat,
+                        target_chats = excluded.target_chats,
+                        updated_at = excluded.updated_at,
+                        -- Ошибка снимается: содержимое изменилось, значит
+                        -- пост снова можно публиковать. Отменённый и уже
+                        -- опубликованный пост не трогаем: отмена — решение
+                        -- пользователя, а повторная публикация не нужна.
+                        status = CASE post_queue.status
+                            WHEN 'failed' THEN 'draft'
+                            ELSE post_queue.status
+                        END
                     """,
                     (
                         str(post.get("source_name", "")),
@@ -1268,6 +1301,7 @@ class DB:
                         str(post.get("media_kind", "")),
                         str(post.get("category", "")),
                         str(post.get("target_chat", "")),
+                        str(post.get("target_chats", "[]")),
                         now,
                         now,
                     ),
@@ -1285,7 +1319,8 @@ class DB:
         """Список постов очереди. Пустой status — все статусы."""
         sql = (
             "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
-            "media_files, media_kind, category, target_chat, status, scheduled_at, "
+            "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
+            "publish_attempts, "
             "published_at, last_error, created_at, updated_at "
             "FROM post_queue"
         )
@@ -1301,17 +1336,24 @@ class DB:
             rows = cur.fetchall()
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
-            "media_files", "media_kind", "category", "target_chat", "status",
-            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+            "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
+            "scheduled_at", "published_at", "last_error", "publish_attempts",
+            "created_at", "updated_at",
         ]
-        return [dict(zip(columns, row)) for row in rows]
+        return [dict(zip(columns, row, strict=True)) for row in rows]
 
     def is_post_queued(self, source: str, post_id: int | str) -> bool:
-        """Return whether a source post already has a durable queue entry."""
+        """Return whether a source post already has a pending queue entry.
+
+        Only entries that still need work count: a draft waiting for the
+        user, a scheduled post, or one the user cancelled. A failed entry
+        does not block the source — such a post is worth another try.
+        """
         with self._lock:
             cur = self.conn.cursor()
             cur.execute(
-                "SELECT 1 FROM post_queue WHERE source_name = ? AND post_id = ? LIMIT 1",
+                "SELECT 1 FROM post_queue WHERE source_name = ? AND post_id = ? "
+                "AND status IN ('draft', 'scheduled', 'cancelled') LIMIT 1",
                 (str(source), str(post_id)),
             )
             return cur.fetchone() is not None
@@ -1321,7 +1363,8 @@ class DB:
             cur = self.conn.cursor()
             cur.execute(
                 "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
-                "media_files, media_kind, category, target_chat, status, scheduled_at, "
+                "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
+            "publish_attempts, "
                 "published_at, last_error, created_at, updated_at "
                 "FROM post_queue WHERE id = ?",
                 (int(post_id),),
@@ -1331,28 +1374,52 @@ class DB:
             return None
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
-            "media_files", "media_kind", "category", "target_chat", "status",
-            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+            "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
+            "scheduled_at", "published_at", "last_error", "publish_attempts",
+            "created_at", "updated_at",
         ]
-        return dict(zip(columns, row))
+        return dict(zip(columns, row, strict=True))
+
+    def get_queued_post_by_source(self, source: str, post_id: int | str) -> dict | None:
+        """Черновик поста по источнику и идентификатору сообщения."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
+                "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
+            "publish_attempts, "
+                "published_at, last_error, created_at, updated_at "
+                "FROM post_queue WHERE source_name = ? AND post_id = ?",
+                (str(source), str(post_id)),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        columns = [
+            "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
+            "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
+            "scheduled_at", "published_at", "last_error", "publish_attempts",
+            "created_at", "updated_at",
+        ]
+        return dict(zip(columns, row, strict=True))
 
     def update_queued_post(self, post_id: int, changes: dict) -> bool:
         allowed = {
-            "publish_text", "category", "target_chat", "status", "scheduled_at",
-            "media_files", "media_kind", "last_error", "published_at",
+            "publish_text", "category", "target_chat", "target_chats", "status",
+            "scheduled_at", "media_files", "media_kind", "last_error", "published_at",
+            "publish_attempts",
         }
         fields = {k: v for k, v in changes.items() if k in allowed}
         if not fields:
             return False
         assignments = ", ".join(f"{name} = ?" for name in fields)
         params = list(fields.values()) + [_local_now_str(), int(post_id)]
-        with self._lock:
-            with self.conn:
-                cur = self.conn.execute(
-                    f"UPDATE post_queue SET {assignments}, updated_at = ? WHERE id = ?",
-                    params,
-                )
-                return cur.rowcount > 0
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                f"UPDATE post_queue SET {assignments}, updated_at = ? WHERE id = ?",
+                params,
+            )
+            return cur.rowcount > 0
 
     def delete_queued_post(self, post_id: int) -> bool:
         with self._lock:
@@ -1366,7 +1433,8 @@ class DB:
             cur = self.conn.cursor()
             cur.execute(
                 "SELECT id, source_name, post_id, group_id, original_text, publish_text, "
-                "media_files, media_kind, category, target_chat, status, scheduled_at, "
+                "media_files, media_kind, category, target_chat, target_chats, status, scheduled_at, "
+            "publish_attempts, "
                 "published_at, last_error, created_at, updated_at "
                 "FROM post_queue WHERE status = 'scheduled' "
                 "AND scheduled_at IS NOT NULL AND scheduled_at <= ? "
@@ -1376,10 +1444,11 @@ class DB:
             rows = cur.fetchall()
         columns = [
             "id", "source_name", "post_id", "group_id", "original_text", "publish_text",
-            "media_files", "media_kind", "category", "target_chat", "status",
-            "scheduled_at", "published_at", "last_error", "created_at", "updated_at",
+            "media_files", "media_kind", "category", "target_chat", "target_chats", "status",
+            "scheduled_at", "published_at", "last_error", "publish_attempts",
+            "created_at", "updated_at",
         ]
-        return [dict(zip(columns, row)) for row in rows]
+        return [dict(zip(columns, row, strict=True)) for row in rows]
 
     def count_queued_posts(self) -> dict[str, int]:
         """Счётчики постов по статусам для панели."""
@@ -1434,7 +1503,7 @@ class DB:
         self.update_queued_post(post_id, {"media_files": "[]", "media_kind": ""})
         return names
 
-    def total_media_size(self) -> tuple[int, int]:
+    def total_media_size(self) -> tuple[int, list[tuple[Any, Any]]]:
         """Суммарный размер и количество медиафайлов очереди (для оценки места)."""
         with self._lock:
             cur = self.conn.cursor()
@@ -1488,18 +1557,18 @@ class DB:
             cur = self.conn.cursor()
             if since_iso is None:
                 cur.execute(
-                    f"SELECT COUNT(*) FROM system_logs WHERE "
+                    "SELECT COUNT(*) FROM system_logs WHERE "
                     + " OR ".join(["type LIKE ?"] * len(types)),
                     tuple(f"{t}%" for t in types),
                 )
             else:
                 cur.execute(
-                    f"SELECT COUNT(*) FROM system_logs WHERE "
+                    "SELECT COUNT(*) FROM system_logs WHERE "
                     + " AND ".join(
                         ["(" + " OR ".join(["type LIKE ?"] * len(types)) + ")"]
                     )
                     + " AND timestamp >= ?",
-                    tuple(list(f"{t}%" for t in types) + [since_iso]),
+                    tuple([f"{t}%" for t in types] + [since_iso]),
                 )
             row = cur.fetchone()
             return int(row[0]) if row else 0
@@ -1672,10 +1741,8 @@ class DB:
 
     # ---------- lifecycle ----------
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.conn.close()
-        except Exception:
-            pass
 
 
 # === Singleton ===

@@ -11,6 +11,7 @@ Telegram Bot API принимает в `sendVideo` только MP4 (H.264). Ф�
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -132,10 +133,8 @@ def convert_to_mp4(source: str, ffmpeg: str | None = None) -> str | None:
 
 
 def _remove_quietly(path: str) -> None:
-    try:
+    with contextlib.suppress(OSError):
         os.remove(path)
-    except OSError:
-        pass
 
 
 def ffmpeg_version() -> str:

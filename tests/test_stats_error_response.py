@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import json
 
-import Site
 from fastapi.responses import JSONResponse
+
+import Site
 
 
 def test_stats_endpoint_returns_http_500_without_fake_zero_counters(

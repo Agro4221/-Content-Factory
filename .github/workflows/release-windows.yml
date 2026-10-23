@@ -46,6 +46,9 @@ jobs:
       - name: Compile all Python sources
         run: python -m compileall -q .
 
+      - name: Run static analysis
+        run: python -m ruff check .
+
       - name: Check admin panel JavaScript syntax
         run: python tools/check_frontend.py
 

@@ -42,7 +42,6 @@ def test_start_of_year_returns_january_first_at_midnight(db_without_connection: 
 def test_relative_time_modifier_keeps_existing_behavior(db_without_connection: DB) -> None:
     before = datetime.now()
     result = parse_result(db_without_connection, "-24 hours")
-    after = datetime.now()
 
     expected = before - timedelta(hours=24)
     difference = abs((result - expected).total_seconds())

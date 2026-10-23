@@ -4,55 +4,72 @@ FastAPI-приложение: HTML-админка, JSON API для управл�
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import ipaddress
+import json
 import os
 import re
 import time
-import asyncio
-import aiohttp
-import json
-import ipaddress
 from datetime import datetime
 from urllib.parse import urlsplit
-from typing import Optional
 
+import aiohttp
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+import api_security
+import media_marker
+import routing
+from config import (
+    ADMIN_HTML_PATH,
+    AI_REQUEST_TIMEOUT_S,
+    AI_TIMEOUT_MAX_S,
+    AI_TIMEOUT_MIN_S,
+    API_LOG_LEVEL,
+    BASE_DIR,
+    BUNDLE_DIR,
+    DEFAULT_LOCAL_AI_PROVIDER,
+    DEFAULT_SYSTEM_PROMPT,
+    LOCAL_AI_PROVIDERS,
+    LOGS_PAGE_SIZE,
+    MAX_PROXY_PORT,
+    MIN_PROXY_PORT,
+    MODULE_POSTS,
+    POLL_DELAY_MAX,
+    POLL_DELAY_MIN,
+    SECRET_CLEAR_SIGNAL,
+    SECRET_MASK,
+    SECRET_SETTING_KEYS,
+    SETTING_KEYS,
+    is_truthy,
+    normalize_target_chat,
+)
+from database import format_display_timestamp, get_db
 from deps import check_and_install_dependencies
-check_and_install_dependencies()
-
 from proxy_check import (
     check_proxy,
     decode_mtproto_secret_full,
     normalize_mtproto_proxy_link,
     resolve_proxy_type,
 )
-from config import (
-    ADMIN_HTML_PATH,
-    APP_VERSION,
-    BASE_DIR,
-    BUNDLE_DIR,
-    API_LOG_LEVEL,
-    LOGS_PAGE_SIZE,
-    MAX_PROXY_PORT,
-    MIN_PROXY_PORT,
-    MODULE_POSTS,
-    POLL_DELAY_MAX,
-    normalize_target_chat,
-    POLL_DELAY_MIN,
-    DEFAULT_LOCAL_AI_PROVIDER,
-    LOCAL_AI_PROVIDERS,
-    SECRET_CLEAR_SIGNAL,
-    SECRET_MASK,
-    SECRET_SETTING_KEYS,
-    SETTING_KEYS,
-    is_truthy,
-)
-from database import format_display_timestamp, get_db
 from state import bot_running
 
 db = get_db()
-app = FastAPI(title="API Panel Marej")
+# Документация API отключена: локальный сервер не должен отдавать схему
+# всех эндпоинтов любому процессу и любому сайту из браузера.
+app = FastAPI(
+    title="Content Factory",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+
+
+@app.middleware("http")
+async def _local_api_guard(request: Request, call_next):
+    """Защита локального API: чужой Host, CSRF, размер тела, заголовки."""
+    return await api_security.local_api_guard(request, call_next)
 
 
 def _is_loopback_host(host: str | None) -> bool:
@@ -232,6 +249,43 @@ def _normalize_validated_setting(key: str, value) -> str:
                 normalized_topics[topic] = target
         return json.dumps(normalized_topics, ensure_ascii=False)
 
+    if key == "tag_routes":
+        # Маршруты по тегам: канал → список тегов. Один и тот же тег может
+        # стоять у нескольких каналов — тогда пост уйдёт во все.
+        try:
+            raw_routes = json.loads(raw or "{}")
+        except (TypeError, ValueError) as exc:
+            raise SettingsValidationError(
+                field=key,
+                msg="Маршруты должны содержать корректный JSON-объект.",
+            ) from exc
+        if not isinstance(raw_routes, dict):
+            raise SettingsValidationError(
+                field=key,
+                msg="Маршруты должны быть JSON-объектом «канал → теги».",
+            )
+        normalized_routes: dict[str, list[str]] = {}
+        for channel, tags in raw_routes.items():
+            if not isinstance(channel, str):
+                raise SettingsValidationError(
+                    field=key,
+                    msg="Названия каналов в маршрутах должны быть строками.",
+                )
+            try:
+                target = normalize_target_chat(channel.strip())
+            except ValueError as exc:
+                raise SettingsValidationError(field=key, msg=str(exc)) from exc
+            tag_list = routing.parse_tag_list(tags)
+            if not target or not tag_list:
+                continue
+            if target in normalized_routes:
+                for tag in tag_list:
+                    if tag not in normalized_routes[target]:
+                        normalized_routes[target].append(tag)
+            else:
+                normalized_routes[target] = tag_list
+        return routing.routes_to_json(normalized_routes)
+
     if key == "proxy_type":
         normalized = raw.lower()
         if not normalized:
@@ -260,6 +314,19 @@ def _normalize_validated_setting(key: str, value) -> str:
             raw,
             min_value=POLL_DELAY_MIN,
             max_value=POLL_DELAY_MAX,
+        )
+
+    if key == "ai_timeout":
+        if not raw:
+            # Пустое поле = «использовать значение приложения по умолчанию».
+            # Значение по умолчанию намеренно не записывается в базу: иначе
+            # после первого сохранения настройка из .env перестала бы влиять.
+            return ""
+        return _normalize_int_range(
+            "ai_timeout",
+            raw,
+            min_value=AI_TIMEOUT_MIN_S,
+            max_value=AI_TIMEOUT_MAX_S,
         )
 
     if key == "local_ai_provider":
@@ -303,12 +370,12 @@ def _normalize_validated_setting(key: str, value) -> str:
         else:
             try:
                 ipaddress.ip_address(host_value)
-            except ValueError:
+            except ValueError as exc:
                 if ":" in host_value or not re.fullmatch(r"[A-Za-z0-9.-]+", host_value):
                     raise SettingsValidationError(
                         field=key,
                         msg="local_host должен быть корректным именем хоста или IP-адресом.",
-                    )
+                    ) from exc
         return raw
 
     if key == "remote_url":
@@ -373,7 +440,7 @@ async def index() -> HTMLResponse:
             content="<h1>Ошибка: admin.html не найден рядом с исполняемым файлом</h1>",
             status_code=500,
         )
-    with open(ADMIN_HTML_PATH, "r", encoding="utf-8") as f:
+    with open(ADMIN_HTML_PATH, encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
 
@@ -528,15 +595,21 @@ async def api_bot_toggle() -> dict:
 
 
 # === Настройки ===
+@app.get("/api/settings/defaults")
+async def api_get_settings_defaults() -> dict:
+    """Рекомендуемые значения настроек, которые можно вернуть одним нажатием."""
+    return {
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "ai_timeout": AI_REQUEST_TIMEOUT_S,
+    }
+
+
 @app.get("/api/settings")
-async def api_get_settings(module: Optional[str] = Query(default=None)) -> dict:
+async def api_get_settings(module: str | None = Query(default=None)) -> dict:
     # Секреты не покидают бэкенд в открытом виде: панель получает маску и
     # может заменить значение или удалить его, но не прочитать текущее.
     masked_getter = getattr(db, "get_masked_settings", None)
-    if callable(masked_getter):
-        settings = dict(masked_getter())
-    else:
-        settings = dict(db.get_all_settings())
+    settings = dict(masked_getter()) if callable(masked_getter) else dict(db.get_all_settings())
     settings["use_proxy"] = "1" if is_truthy(settings.get("use_proxy", "0")) else "0"
     return settings
 
@@ -557,7 +630,7 @@ _proxy_runtime_status: dict = {
 PROXY_STATUS_TTL = 30.0
 
 
-def _proxy_cfg_from_settings(settings: Optional[dict] = None) -> dict:
+def _proxy_cfg_from_settings(settings: dict | None = None) -> dict:
     src = settings if settings is not None else db.get_all_settings()
     return {
         "use_proxy": src.get("use_proxy", "0"),
@@ -574,7 +647,7 @@ def get_proxy_runtime_status() -> dict:
     return dict(_proxy_runtime_status)
 
 
-async def refresh_proxy_runtime_status(settings: Optional[dict] = None) -> dict:
+async def refresh_proxy_runtime_status(settings: dict | None = None) -> dict:
     cfg = _proxy_cfg_from_settings(settings)
     use_proxy = is_truthy(cfg.get("use_proxy", "0"))
     host = (cfg.get("proxy_host") or "").strip()
@@ -838,7 +911,7 @@ async def api_ai_models(
                         },
                     )
                 payload = await response.json(content_type=None)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return JSONResponse(
             status_code=503,
             content={
@@ -933,6 +1006,18 @@ async def api_proxy_test(request: Request) -> dict:
 POST_STATUSES = {"draft", "scheduled", "published", "cancelled", "failed"}
 POST_MEDIA_DIR = "queue_media"
 
+#: Расширения файлов, которые разрешено прикреплять к посту. Ровно те же,
+#: что Telegram принимает в постах.
+ALLOWED_MEDIA_EXTENSIONS = frozenset({
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".heic",
+    ".mp4", ".mov", ".mkv", ".webm", ".avi",
+    ".pdf", ".txt", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".zip", ".rar", ".7z", ".csv", ".json", ".xml",
+})
+
+#: Предельный размер прикрепляемого файла — как в Telegram.
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 
 def _post_row_to_dict(row: dict) -> dict:
     """Готовит запись очереди к отдаче в панель."""
@@ -946,6 +1031,10 @@ def _post_row_to_dict(row: dict) -> dict:
         "id": row.get("id"),
         "source_name": row.get("source_name") or "",
         "post_id": row.get("post_id") or "",
+        # Метка поста: по ней видно, какому посту принадлежит медиа.
+        "media_marker": media_marker.media_marker(
+            row.get("source_name") or "", row.get("post_id") or ""
+        ),
         "original_text": row.get("original_text") or "",
         "publish_text": row.get("publish_text") or "",
         "media_files": media_files,
@@ -991,10 +1080,8 @@ async def api_media_stats() -> dict:
             full = os.path.join(media_dir, name)
             if os.path.isfile(full):
                 file_count += 1
-                try:
+                with contextlib.suppress(OSError):
                     total_bytes += os.path.getsize(full)
-                except OSError:
-                    pass
     settings = db.get_all_settings()
     retention = str(settings.get("media_retention_days", "3") or "3")
     posts_with_media, _ = db.total_media_size()
@@ -1164,6 +1251,107 @@ async def api_get_post_media(post_id: int, index: int) -> FileResponse:
     return FileResponse(full)
 
 
+@app.post("/api/posts/{post_id}/media")
+async def api_add_post_media(post_id: int, request: Request) -> dict:
+    """Прикрепляет файл к посту в очереди.
+
+    Файл приходит телом запроса, имя — параметром ``name``. Так не нужна
+    дополнительная библиотека для разбора multipart-форм.
+    """
+    row = db.get_queued_post(post_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Пост не найден.")
+    status = str(row.get("status") or "")
+    if status in {"published", "cancelled"}:
+        raise HTTPException(status_code=409, detail="К этому посту уже нельзя прикреплять медиа.")
+
+    raw_name = str(request.query_params.get("name") or "").strip()
+    safe_name = os.path.basename(raw_name.replace("\\", "/"))
+    if not safe_name or safe_name != raw_name:
+        raise HTTPException(status_code=400, detail="Некорректное имя файла.")
+    extension = os.path.splitext(safe_name)[1].lower()
+    if extension not in ALLOWED_MEDIA_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Такой тип файла не поддерживается: {extension or 'без расширения'}.",
+        )
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Файл пуст.")
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Файл больше {MAX_UPLOAD_BYTES // (1024 * 1024)} МБ — Telegram столько не примет.",
+        )
+
+    try:
+        files = json.loads(row.get("media_files") or "[]")
+    except (TypeError, ValueError):
+        files = []
+    if not isinstance(files, list):
+        files = []
+
+    media_dir = os.path.join(BASE_DIR, POST_MEDIA_DIR)
+    os.makedirs(media_dir, exist_ok=True)
+    marker = media_marker.media_marker(
+        row.get("source_name") or "", row.get("post_id") or ""
+    )
+    file_name = media_marker.media_file_name(
+        marker, int(time.time() * 1000), len(files), extension
+    )
+    try:
+        with open(os.path.join(media_dir, file_name), "wb") as handle:
+            handle.write(body)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить файл: {exc}") from exc
+
+    files.append(file_name)
+    db.update_queued_post(
+        post_id,
+        {"media_files": json.dumps(files, ensure_ascii=False)},
+    )
+    db.add_log("OK-514", f"К посту {post_id} прикреплён файл {safe_name}.")
+    updated = db.get_queued_post(post_id)
+    return {
+        "status": "success",
+        "file": safe_name,
+        "post": _post_row_to_dict(updated) if updated else {},
+    }
+
+
+@app.delete("/api/posts/{post_id}/media/{index}")
+async def api_delete_post_media(post_id: int, index: int) -> dict:
+    """Убирает один медиафайл из поста."""
+    row = db.get_queued_post(post_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Пост не найден.")
+    status = str(row.get("status") or "")
+    if status in {"published", "cancelled"}:
+        raise HTTPException(status_code=409, detail="Медиа опубликованного поста менять нельзя.")
+
+    try:
+        files = json.loads(row.get("media_files") or "[]")
+    except (TypeError, ValueError):
+        files = []
+    if not isinstance(files, list) or index < 0 or index >= len(files):
+        raise HTTPException(status_code=404, detail="Медиафайл не найден.")
+
+    removed_name = str(files.pop(index) or "")
+    changes: dict = {"media_files": json.dumps(files, ensure_ascii=False)}
+    if not files:
+        changes["media_kind"] = ""
+    db.update_queued_post(post_id, changes)
+    _delete_media_files([removed_name])
+    db.add_log("OK-514", f"У поста {post_id} удалён медиафайл {removed_name}.")
+    updated = db.get_queued_post(post_id)
+    return {
+        "status": "success",
+        "removed": removed_name,
+        "post": _post_row_to_dict(updated) if updated else {},
+    }
+
+
 @app.post("/api/posts/{post_id}/publish")
 async def api_publish_post(post_id: int) -> dict:
     """Публикует пост из очереди прямо сейчас."""
@@ -1194,10 +1382,8 @@ async def api_publish_post(post_id: int) -> dict:
     try:
         ok, message = await parser_module.publish_queued_post(bot, row)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await bot.session.close()
-        except Exception:
-            pass
 
     if not ok:
         db.update_queued_post(post_id, {"status": "failed", "last_error": message})
@@ -1247,14 +1433,11 @@ MAX_LOGS_OFFSET = 1_000_000
 async def api_get_logs(
     limit: int = LOGS_PAGE_SIZE,
     page: int = 1,
-    module: Optional[str] = Query(default=None),
+    module: str | None = Query(default=None),
 ) -> list[dict]:
-    if limit < 1:
-        limit = 1
-    if limit > 200:
-        limit = 200
-    if page < 1:
-        page = 1
+    limit = max(limit, 1)
+    limit = min(limit, 200)
+    page = max(page, 1)
     offset = (page - 1) * limit
     if offset > MAX_LOGS_OFFSET:
         return []
@@ -1349,15 +1532,16 @@ def _build_posts_stats() -> dict:
     sources_count = len(sources_list)
     active_sources_24h = db.count_active_published_sources_since(h24_iso)
 
+    # Маршруты по тегам: канал → список тегов. Старые настройки
+    # «категория → канал» тоже считаются, чтобы статистика не обнулялась.
     try:
-        import json as _json
-        topics = _json.loads(settings.get("topic_channels") or "{}")
-        if not isinstance(topics, dict):
-            topics = {}
+        routes = routing.parse_routes(settings.get("tag_routes") or "")
+        if not routes:
+            routes = routing.parse_routes(settings.get("topic_channels") or "")
     except (TypeError, ValueError):
-        topics = {}
-    topics_count = len(topics)
-    topics_with_target = sum(1 for v in topics.values() if v)
+        routes = {}
+    topics_count = len(routes)
+    topics_with_target = sum(1 for tags in routes.values() if tags)
 
     return {
         "bot_running": bot_running.is_set(),
@@ -1374,6 +1558,7 @@ def _build_posts_stats() -> dict:
         "published_24h": int(published_24h),
         "skipped_total": int(skipped_total),
         "skipped_today": int(skipped_today),
+        "skipped_24h": int(skipped_24h),
         "skipped_by_reason": skipped_by_reason,
         "successes_24h": int(successes_24h),
         "errors_24h": int(errors_24h),
@@ -1405,5 +1590,11 @@ async def _api_startup_tasks() -> None:
 
 if __name__ == "__main__":
     import uvicorn
+
+    # Зависимости проверяются только в точке входа. Вызов на этапе импорта
+    # мог перезапустить процесс (os.execv) внутри pytest или другого
+    # приложения, которое импортирует Site.
+    check_and_install_dependencies()
+
     from config import API_HOST, API_PORT
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level=API_LOG_LEVEL)

@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import sys
 
 
@@ -31,12 +32,10 @@ def setup_console() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
             continue
-        try:
+        # Поток может быть закрыт, перенаправлен или не поддерживать
+        # перенастройку — в этом случае продолжаем как есть.
+        with contextlib.suppress(Exception):
             reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            # Поток может быть закрыт, перенаправлен или не поддерживать
-            # перенастройку — в этом случае продолжаем как есть.
-            pass
 
 
 setup_console()

@@ -4,15 +4,16 @@
 обработчиками (inline-атрибутами, addEventListener или функциями раздела)
 и сообщает о неподключённых элементах.
 """
-from pathlib import Path
 import re
+from pathlib import Path
 
 PATH = str(Path(__file__).resolve().parents[1] / "admin.html")
-html = open(PATH, encoding="utf-8").read()
+with open(PATH, encoding="utf-8") as _admin_file:
+    html = _admin_file.read()
 # В документе несколько блоков <script>: основной логики — самый крупный.
-script_blocks = re.findall(r"<script>(.*?)</script>", html, re.S)
+script_blocks = re.findall(r"<script>(.*?)</script>", html, re.DOTALL)
 script = max(script_blocks, key=len) if script_blocks else ""
-style_blocks = re.findall(r"<style>(.*?)</style>", html, re.S)
+style_blocks = re.findall(r"<style>(.*?)</style>", html, re.DOTALL)
 style = max(style_blocks, key=len) if style_blocks else ""
 
 # Функции, объявленные в скрипте.
@@ -71,7 +72,7 @@ for m in re.finditer(r"<(input|select|textarea)\b([^>]*)>", html):
 
 print(f"{'тип':<18}{'id':<26}{'обработчики':<44}источник")
 print("-" * 100)
-for tag, ident, cls, inline, src in rows:
+for tag, ident, _cls, inline, src in rows:
     handlers = ", ".join(inline) if inline else ""
     if src == "из скрипта":
         handlers = "добавляется из скрипта"
@@ -97,14 +98,14 @@ referenced |= set(re.findall(r"\$\w*\(['\"]([^'\"]+)['\"]\)", script))
 present = set(re.findall(r'id="([^"]+)"', html))
 missing = sorted(referenced - present)
 print("Ссылок из скрипта:", len(referenced))
-print("Отсутствуют в разметке:", missing if missing else "нет")
+print("Отсутствуют в разметке:", missing or "нет")
 
 # Проверка: нет ли остаточных emoji в интерфейсе.
 print()
 print("=" * 70)
 print("EMOJI В ИНТЕРФЕЙСЕ")
 print("=" * 70)
-body = re.sub(r"<script>.*?</script>", "", html, flags=re.S)
-body = re.sub(r"<style>.*?</style>", "", body, flags=re.S)
+body = re.sub(r"<script>.*?</script>", "", html, flags=re.DOTALL)
+body = re.sub(r"<style>.*?</style>", "", body, flags=re.DOTALL)
 emoji = re.findall(r"[\U0001F300-\U0001FAFF\u2600-\u27BF\ufe0f]", body)
 print("Найдено:", len(emoji), "->", sorted(set(emoji)) if emoji else "нет")

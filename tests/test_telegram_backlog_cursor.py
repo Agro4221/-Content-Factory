@@ -9,7 +9,6 @@ import pytest
 
 import main
 
-
 CURSOR_KEY = "_internal_source_cursors_json"
 SOURCE = "@sample"
 

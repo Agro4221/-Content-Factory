@@ -4,20 +4,22 @@
 имитирует состояние «секреты сохранены открытым текстом» и проверяет,
 что после запуска приложения секреты зашифрованы и всё ещё читаются.
 """
-from pathlib import Path
 import os
 import shutil
 import sqlite3
 import sys
 import tempfile
+from pathlib import Path
 
 SRC_DB = str(Path(__file__).resolve().parents[1] / "bot_storage.db")
 PROJECT = str(Path(__file__).resolve().parents[1])
 
 sys.path.insert(0, PROJECT)
 
-import secrets_store  # noqa: E402
-from database import DB  # noqa: E402
+import contextlib
+
+import secrets_store
+from database import DB
 
 FAKE_TOKEN = "123456789:AAFakeTokenForMigrationCheckNotARealToken"
 FAKE_AI_KEY = "sk-fake-key-for-migration-check"
@@ -92,10 +94,8 @@ def main() -> int:
             finally:
                 db2.conn.close()
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 db.conn.close()
-            except Exception:
-                pass
 
         # 7. Секрет не должен утечь в сам файл базы.
         with open(copy, "rb") as fh:

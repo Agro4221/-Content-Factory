@@ -44,8 +44,8 @@ def test_socks_without_aiohttp_socks_does_not_fall_back_to_direct(monkeypatch) -
 
 
 def test_disabled_proxy_keeps_direct_connection_mode() -> None:
-    assert main._setup_proxy(_cfg(use_proxy=False, proxy_host="", proxy_port="")) == (
-        None,
-        None,
-        None,
-    )
+    setup = main._setup_proxy(_cfg(use_proxy=False, proxy_host="", proxy_port=""))
+    assert setup == main.ProxySetup()
+    assert setup.bot_session is None
+    assert setup.ai_proxy_url is None
+    assert setup.covers_all_traffic is False

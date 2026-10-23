@@ -36,7 +36,7 @@ def test_existing_dependencies_do_not_force_restart(monkeypatch) -> None:
     events: list[str] = []
 
     monkeypatch.setattr(deps, "is_frozen", lambda: False)
-    monkeypatch.setattr(deps, "find_missing_packages", lambda: [])
+    monkeypatch.setattr(deps, "find_missing_packages", list)
     monkeypatch.setattr(deps, "_reload_env_after_deps", lambda: events.append("reload-env"))
     monkeypatch.setattr(
         deps.os,

@@ -5,12 +5,13 @@ import Site
 
 
 class FakeStatsDB:
-    def __init__(self, topic_channels: str) -> None:
+    def __init__(self, topic_channels: str, tag_routes: str = "") -> None:
         self.settings = {
             "ai_mode": "LOCAL",
             "local_model": "test-model",
             "sources": "@source1\n@source2",
             "topic_channels": topic_channels,
+            "tag_routes": tag_routes,
         }
 
     def sqlite_datetime(self, modifier: str) -> str:
@@ -80,5 +81,20 @@ def test_valid_topic_object_keeps_topic_counts(monkeypatch) -> None:
 
     stats = Site._build_posts_stats()
 
-    assert stats["topics_count"] == 2
+    # Маршрут без тегов бессмыслен: такой канал не получит ни одного поста.
+    assert stats["topics_count"] == 1
     assert stats["topics_with_target"] == 1
+
+
+def test_tag_routes_are_counted(monkeypatch) -> None:
+    """Маршруты по тегам считаются, старые настройки — как запасной вариант."""
+    monkeypatch.setattr(
+        Site,
+        "db",
+        FakeStatsDB('{"news":"@target"}', tag_routes='{"@a":["политика"],"@b":["спорт"]}'),
+    )
+
+    stats = Site._build_posts_stats()
+
+    assert stats["topics_count"] == 2
+    assert stats["topics_with_target"] == 2

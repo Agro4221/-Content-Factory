@@ -40,10 +40,10 @@ check_and_install_dependencies()
 # ОСНОВНОЙ КОД БОТА
 # ==========================================
 import asyncio
-import json
+import contextlib
 import html
 import ipaddress
-from html.parser import HTMLParser
+import json
 import os
 import re
 import shutil
@@ -51,36 +51,48 @@ import sys
 import threading
 import time
 import webbrowser
+from dataclasses import dataclass
+from html.parser import HTMLParser
+from typing import ClassVar
 from urllib.parse import quote, urlsplit
-from typing import Optional
 
 import aiohttp
 import uvicorn
 from aiogram import Bot
-from aiogram.utils.token import TokenValidationError, validate_token
+from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramEntityTooLarge,
     TelegramNetworkError,
     TelegramRetryAfter,
     TelegramServerError,
 )
-from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.types import FSInputFile, InputMediaDocument, InputMediaPhoto, InputMediaVideo
+from aiogram.types import (
+    FSInputFile,
+    InputMediaDocument,
+    InputMediaPhoto,
+    InputMediaVideo,
+)
+from aiogram.utils.token import TokenValidationError, validate_token
 from telethon import TelegramClient
 from telethon.errors import (
     ApiIdInvalidError,
-    FloodWaitError,
     AuthKeyUnregisteredError,
-    SessionPasswordNeededError,
     ChannelInvalidError,
     ChannelPrivateError,
     ChatForbiddenError,
+    FloodWaitError,
+    SessionPasswordNeededError,
     UsernameInvalidError,
     UsernameNotOccupiedError,
 )
 from telethon.tl.custom.message import Message
 
 import media_convert
+import media_marker
+import routing
+import text_format
 from config import (
     AI_REQUEST_TIMEOUT_S,
     AI_TEMPERATURE,
@@ -89,38 +101,43 @@ from config import (
     BASE_DIR,
     BROWSER_OPEN_DELAY_S,
     BROWSER_OPEN_ON_START,
+    DEFAULT_SYSTEM_PROMPT,
     MAX_PROXY_PORT,
     MEDIA_CLEANUP_INTERVAL_HOURS,
     MIN_AD_WORD_LEN,
     MIN_PROXY_PORT,
-    REWRITE_INVENTION_LENGTH_RATIO,
-    REWRITE_MIN_SHARED_WORDS,
-    SIGNIFICANT_WORD_MIN_LEN,
-    TG_CAPTION_LIMIT,
     POLL_DELAY_DEFAULT,
     POLL_DELAY_MAX,
     POLL_DELAY_MIN,
     POLL_PAUSE_S,
+    REWRITE_INVENTION_LENGTH_RATIO,
+    REWRITE_MIN_SHARED_WORDS,
     SESSION_PATH,
+    SIGNIFICANT_WORD_MIN_LEN,
     SLEEP_API_ERROR_S,
     SLEEP_BETWEEN_POSTS_S,
     SLEEP_DB_ERROR_S,
     SLEEP_FLOOD_POLL_S,
     SLEEP_NO_CONFIG_S,
+    TELEGRAM_FORMATTING_RULES,
     TEMP_DIR,
-    MODULE_POSTS,
+    TG_CAPTION_LIMIT,
+    TG_MESSAGE_LIMIT,
     is_truthy,
-    make_post_key,
     normalize_target_chat,
     warn_if_defaults,
 )
 from database import DatabaseWriteError, get_db
+from proxy_check import (
+    build_mtproto_client_kwargs,
+    format_proxy_host,
+    normalize_mtproto_proxy_link,
+)
 from Site import app
 from state import bot_running
-from proxy_check import build_mtproto_client_kwargs, format_proxy_host, normalize_mtproto_proxy_link
 
 try:
-    from aiohttp_socks import ProxyConnector as SocksConnector
+    from aiohttp_socks import ProxyConnector as SocksConnector  # noqa: F401
     _HAS_SOCKS = True
 except ImportError:
     _HAS_SOCKS = False
@@ -321,6 +338,66 @@ def _meaningful_text_length(text: str) -> int:
     return sum(1 for ch in text if ch.isalnum())
 
 
+#: Сколько раз повторять отправку, если не удалось подключиться к Telegram.
+SEND_CONNECT_RETRIES = 3
+
+#: Пауза перед первой повторной попыткой отправки, секунды.
+SEND_RETRY_DELAY_S = 5
+
+
+def _is_connect_failure(exc: BaseException) -> bool:
+    """Не удалось подключиться — отправку можно повторить безопасно.
+
+    Повторяем только ошибки соединения: запрос в этом случае точно не
+    дошёл до Telegram. Ошибки по таймауту не повторяем — там запрос
+    мог дойти, и повтор продублировал бы сообщение.
+    """
+    if isinstance(exc, (aiohttp.ClientConnectorError, aiohttp.ClientProxyConnectionError)):
+        return True
+    if isinstance(exc, TelegramNetworkError):
+        inner = getattr(exc, "__cause__", None) or getattr(exc, "original", None)
+        if inner is not None:
+            return _is_connect_failure(inner)
+    return False
+
+
+async def _send_with_retry(bot, method: str, **kwargs) -> None:
+    """Отправляет сообщение, повторяя при обрыве соединения.
+
+    Прямое подключение к Bot API у провайдеров часто обрывается, и без
+    повтора пост ждал бы следующего прохода цикла — минуты. Повторяем
+    только неудачные подключения, они безопасны.
+    """
+    delay = SEND_RETRY_DELAY_S
+    for attempt in range(1, SEND_CONNECT_RETRIES + 1):
+        try:
+            await getattr(bot, method)(**kwargs)
+            return
+        except Exception as exc:
+            if attempt >= SEND_CONNECT_RETRIES or not _is_connect_failure(exc):
+                raise
+            print(
+                f"!!! Отправка не прошла ({type(exc).__name__}), "
+                f"повтор {attempt}/{SEND_CONNECT_RETRIES - 1} через {delay} с"
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 20)
+
+
+def _ai_timeout_seconds(raw: object = None) -> int:
+    """Таймаут запроса к ИИ в секундах (настройка панели или .env)."""
+    if raw is None:
+        raw = db.get_setting("ai_timeout", "")
+    if raw in (None, ""):
+        return AI_REQUEST_TIMEOUT_S
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return AI_REQUEST_TIMEOUT_S
+    if value < 10:
+        return AI_REQUEST_TIMEOUT_S
+    return min(value, 3600)
+
 def _significant_words(text: str) -> set[str]:
     """Значимые слова текста: буквы длиной от 4 символов.
 
@@ -365,6 +442,35 @@ class ProxyConfigurationError(RuntimeError):
     """Enabled proxy settings cannot be applied safely."""
 
 
+@dataclass(frozen=True)
+class ProxySetup:
+    """Как именно применяется включённый прокси.
+
+    Прокси в проекте не один: разные виды трафика уходят разными
+    протоколами, и не каждый вид прокси умеет их все.
+
+    * ``telethon_proxy`` — параметры для TelegramClient (чтение каналов).
+    * ``mtproto_kwargs`` — параметры для TelegramClient в режиме MTProto.
+    * ``bot_session`` — сессия aiogram для Bot API (публикация).
+    * ``ai_proxy_url`` — адрес прокси для запросов к ИИ. ``None`` означает,
+      что эти запросы идут напрямую (MTProxy не умеет HTTP).
+    * ``ai_proxy_kind`` — ``"http"``, ``"socks"`` или ``None``.
+    * ``covers_all_traffic`` — True, если через прокси уходит весь внешний
+      трафик. Панель показывает это пользователю.
+    """
+
+    telethon_proxy: dict | None = None
+    mtproto_kwargs: dict | None = None
+    bot_session: AiohttpSession | None = None
+    ai_proxy_url: str | None = None
+    ai_proxy_kind: str | None = None
+
+    @property
+    def covers_all_traffic(self) -> bool:
+        """True, если через прокси идёт и трафик к ИИ, и трафик Telegram."""
+        return self.ai_proxy_url is not None and self.mtproto_kwargs is None
+
+
 def _make_socks_session(cfg: dict) -> AiohttpSession:
     if not _HAS_SOCKS:
         raise ProxyConfigurationError(
@@ -382,10 +488,11 @@ def _make_socks_session(cfg: dict) -> AiohttpSession:
 
     user = cfg.get("proxy_user") or ""
     password = cfg.get("proxy_pass") or ""
-    if user or password:
-        auth = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
-    else:
-        auth = ""
+    auth = (
+        f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
+        if (user or password)
+        else ""
+    )
 
     url_host = format_proxy_host(host)
     proxy_url = f"{proxy_type}://{auth}{url_host}:{port}"
@@ -397,7 +504,7 @@ def _make_socks_session(cfg: dict) -> AiohttpSession:
         ) from exc
 
 
-def _validate_port(port_str: str) -> Optional[int]:
+def _validate_port(port_str: str) -> int | None:
     if (
         not port_str
         or not port_str.isascii()
@@ -486,11 +593,11 @@ def _load_config() -> dict:
     else:
         try:
             ipaddress.ip_address(host_value)
-        except ValueError:
+        except ValueError as exc:
             if ":" in host_value or not re.fullmatch(r"[A-Za-z0-9.-]+", host_value):
                 raise ValueError(
                     "local_host должен быть корректным именем хоста или IP-адресом."
-                )
+                ) from exc
     if local_port is None:
         raise ValueError("local_port должен быть целым числом от 1 до 65535.")
 
@@ -545,37 +652,35 @@ def _load_config() -> dict:
     ads_raw = get_setting("ads_words", "")
     ads_words = [w.strip() for w in ads_raw.split("\n") if w.strip()] if ads_raw else []
 
+    # Маршруты: канал → список тегов. Старый формат «категория → канал»
+    # читается как маршрут «канал → [категория]», поэтому старые настройки
+    # продолжают работать без ручного переноса.
+    raw_routes = get_setting("tag_routes", "") or ""
+    if not raw_routes.strip():
+        raw_routes = get_setting("topic_channels", "{}") or "{}"
     try:
-        raw_topics = json.loads(get_setting("topic_channels", "{}") or "{}")
-    except (TypeError, ValueError) as exc:
+        tag_routes = routing.parse_routes(raw_routes)
+    except ValueError as exc:
         raise ValueError(
-            "topic_channels содержит повреждённый JSON; настройки не применены, "
-            "чтобы не отправлять посты в неверный канал."
+            "Маршруты (tag_routes / topic_channels) содержат повреждённый JSON; "
+            "настройки не применены, чтобы не отправлять посты в неверный канал."
         ) from exc
-    if not isinstance(raw_topics, dict):
-        raise ValueError(
-            "topic_channels должен быть JSON-объектом категорий; настройки не применены."
-        )
 
-    topic_channels: dict[str, str] = {}
-    for key, value in raw_topics.items():
-        if key is None or value is None:
-            continue
-        norm_key = str(key).strip().lower()
+    normalized_routes: dict[str, list[str]] = {}
+    for channel, tags in tag_routes.items():
         try:
-            norm_val = normalize_target_chat(str(value).strip())
+            norm_chat = normalize_target_chat(str(channel).strip())
         except ValueError as exc:
             raise ValueError(
-                f"Некорректный целевой канал для категории {norm_key!r}: {exc}"
+                f"Некорректный целевой канал в маршрутах ({channel!r}): {exc}"
             ) from exc
-        if norm_key and norm_val:
-            if norm_key in topic_channels:
-                raise ValueError(
-                    "topic_channels содержит дублирующиеся категории после "
-                    f"нормализации регистра: {norm_key!r}. Исправьте маршруты, "
-                    "чтобы посты не отправлялись в неверный канал."
-                )
-            topic_channels[norm_key] = norm_val
+        if norm_chat:
+            normalized_routes[norm_chat] = list(tags)
+    tag_routes = normalized_routes
+
+    # Старые настройки остаются в базе, но больше не используются: категории
+    # заменены тегами.
+    topic_channels = {tag: channel for channel, tags in tag_routes.items() for tag in tags[:1]}
 
     poll_delay_raw = str(
         get_setting("poll_delay", str(POLL_DELAY_DEFAULT)) or ""
@@ -609,6 +714,8 @@ def _load_config() -> dict:
         "remote_model": get_setting("remote_model", ""),
         "sources": sources,
         "topic_channels": topic_channels,
+        "tag_routes": tag_routes,
+        "tag_routes_tags": routing.all_tags(tag_routes),
         "ads_words": ads_words,
         "poll_delay": poll_delay,
         "use_proxy": is_truthy(get_setting("use_proxy", "0")),
@@ -620,12 +727,13 @@ def _load_config() -> dict:
         "mtproto_key": get_setting("mtproto_key", ""),
         "publish_mode": (get_setting("publish_mode", "auto") or "auto").strip().lower(),
         "watermark": get_setting("watermark_text", ""),
+        "ai_timeout": _ai_timeout_seconds(get_setting("ai_timeout", "")),
     }
 
 
-def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[AiohttpSession]]:
+def _setup_proxy(cfg: dict) -> ProxySetup:
     if not cfg["use_proxy"]:
-        return None, None, None
+        return ProxySetup()
 
     try:
         cfg = normalize_mtproto_proxy_link(cfg)
@@ -665,9 +773,10 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
             ) from exc
         db.add_log(
             "WARN-300",
-            "MTProto-прокси применяется только для чтения каналов; бот-отправщик подключается напрямую.",
+            "MTProto-прокси применяется только для чтения каналов; бот-отправщик "
+            "и запросы к ИИ подключаются напрямую.",
         )
-        return None, mtproto_kwargs, None
+        return ProxySetup(mtproto_kwargs=mtproto_kwargs)
     if proxy_type not in ("http", "socks5", "socks4"):
         raise ProxyConfigurationError(
             f"Неподдерживаемый тип прокси: {proxy_type!r}. Прямое подключение не будет использоваться."
@@ -694,10 +803,63 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
             raise ProxyConfigurationError(
                 f"Не удалось инициализировать HTTP-прокси: {exc}. Прямое подключение не будет использоваться."
             ) from exc
-    else:
-        bot_session = _make_socks_session(cfg)
+        return ProxySetup(
+            telethon_proxy=telethon_proxy,
+            bot_session=bot_session,
+            ai_proxy_url=proxy_url,
+            ai_proxy_kind="http",
+        )
 
-    return telethon_proxy, None, bot_session
+    bot_session = _make_socks_session(cfg)
+    return ProxySetup(
+        telethon_proxy=telethon_proxy,
+        bot_session=bot_session,
+        ai_proxy_url=_socks_proxy_url(cfg),
+        ai_proxy_kind="socks",
+    )
+
+
+def _socks_proxy_url(cfg: dict) -> str:
+    """Адрес SOCKS-прокси в виде URL для клиента aiohttp."""
+    proxy_type = (cfg.get("proxy_type") or "socks5").strip().lower()
+    host = (cfg.get("proxy_host") or "").strip()
+    port = _validate_port(str(cfg.get("proxy_port") or ""))
+    if port is None:
+        raise ProxyConfigurationError("Для SOCKS-прокси нужны корректные host и port.")
+    user = cfg.get("proxy_user") or ""
+    password = cfg.get("proxy_pass") or ""
+    auth = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@" if (user or password) else ""
+    url_host = format_proxy_host(host)
+    return f"{proxy_type}://{auth}{url_host}:{port}"
+
+
+def _make_ai_session(proxy: ProxySetup, timeout: int) -> aiohttp.ClientSession:
+    """Сессия для запросов к ИИ.
+
+    Через прокси уходит весь внешний трафик, если прокси это умеет
+    (HTTP или SOCKS). Для MTProxy это невозможно: протокол MTProxy
+    пропускает только Telegram-трафик, обычный HTTPS через него не идёт.
+    """
+    client_timeout = aiohttp.ClientTimeout(total=timeout)
+    if not proxy.ai_proxy_url:
+        return aiohttp.ClientSession(timeout=client_timeout)
+
+    if proxy.ai_proxy_kind == "http":
+        return aiohttp.ClientSession(timeout=client_timeout, proxy=proxy.ai_proxy_url)
+
+    # SOCKS: aiohttp сам по себе SOCKS не поддерживает, нужен коннектор
+    # из aiohttp-socks — того же пакета, что используется для Bot API.
+    if not _HAS_SOCKS:
+        raise ProxyConfigurationError(
+            "Для SOCKS-прокси нужен пакет aiohttp-socks; запросы к ИИ не пойдут через прокси."
+        )
+    try:
+        connector = SocksConnector.from_url(proxy.ai_proxy_url)
+    except Exception as exc:
+        raise ProxyConfigurationError(
+            f"Не удалось инициализировать SOCKS-подключение для ИИ: {exc}"
+        ) from exc
+    return aiohttp.ClientSession(timeout=client_timeout, connector=connector)
 
 # ==========================================
 # ОБРАБОТКА ПОСТОВ
@@ -705,7 +867,7 @@ def _setup_proxy(cfg: dict) -> tuple[Optional[dict], Optional[dict], Optional[Ai
 class _TelegramHTMLSanitizer(HTMLParser):
     """Keep only Telegram-supported HTML and always emit balanced, escaped markup."""
 
-    _ALLOWED_TAGS = {
+    _ALLOWED_TAGS: ClassVar[set[str]] = {
         "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
         "code", "pre", "a", "blockquote", "tg-spoiler", "tg-emoji",
     }
@@ -827,21 +989,61 @@ def _queue_media_dir() -> str:
     return os.path.join(BASE_DIR, "queue_media")
 
 
+def _remove_stale_queue_media(raw_media_files: object, keep: list[str]) -> None:
+    """Удаляет копии медиа, на которые больше не ссылается очередь.
+
+    При повторной постановке поста в очередь база получает новый список
+    файлов, а прежние копии остаются в queue_media навсегда — диск растёт,
+    а в панели они не видны.
+    """
+    if not raw_media_files:
+        return
+    try:
+        previous = json.loads(raw_media_files) if isinstance(raw_media_files, str) else []
+    except (TypeError, ValueError):
+        return
+    if not isinstance(previous, list):
+        return
+
+    keep_set = {str(name) for name in keep}
+    queue_dir = _queue_media_dir()
+    for name in previous:
+        file_name = str(name or "")
+        if not file_name or file_name in keep_set:
+            continue
+        safe_name = os.path.basename(file_name.replace("\\", "/"))
+        if safe_name != file_name:
+            continue
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(queue_dir, safe_name))
+
+
 #: Момент последней автоочистки медиа (монотонное время, не зависит от часов).
 _last_media_cleanup_ts = 0.0
+
+#: Сколько раз пробуем обработать пост, прежде чем признать его битым.
+MAX_POST_ATTEMPTS = 5
+
+#: Сколько раз пробуем опубликовать отложенный пост, прежде чем снять его.
+MAX_PUBLISH_ATTEMPTS = 5
+
+#: Счётчик попыток по постам, которые не удалось обработать. Нужен, чтобы
+#: один битый пост не блокировал всю ленту источника навсегда.
+_POISON_ATTEMPTS: dict[str, int] = {}
 
 
 def _save_post_to_queue(
     source: str,
     messages: list[Message],
     publish_text: str,
-    target_chat: str,
+    target_chats: list[str],
     category: str,
     media_list: list,
     temp_paths: list[str],
 ) -> int:
     """Сохраняет пост в очередь ручной публикации вместе с медиа."""
     os.makedirs(_queue_media_dir(), exist_ok=True)
+    marker = media_marker.media_marker(source, messages[0].id)
     media_files: list[str] = []
     media_kind = ""
     for path in temp_paths:
@@ -849,8 +1051,11 @@ def _save_post_to_queue(
             continue
         try:
             # Уникальное имя не даёт разным постам перезаписать один файл.
-            stem, ext = os.path.splitext(os.path.basename(path))
-            name = f"{int(time.time() * 1000)}_{len(media_files)}{ext}"
+            # В имени есть метка поста: по ней видно, чьё это медиа.
+            ext = os.path.splitext(os.path.basename(path))[1]
+            name = media_marker.media_file_name(
+                marker, int(time.time() * 1000), len(media_files), ext
+            )
             target_path = os.path.join(_queue_media_dir(), name)
             shutil.copy2(path, target_path)
             media_files.append(name)
@@ -875,6 +1080,20 @@ def _save_post_to_queue(
             group_id = str(candidate)
             break
 
+    # Прежние копии медиа этого поста больше не нужны: база сейчас получит
+    # новый список файлов, а старые иначе остались бы в queue_media навсегда.
+    previous = None
+    getter = getattr(db, "get_queued_post_by_source", None)
+    if callable(getter):
+        try:
+            previous = getter(source, messages[0].id)
+        except Exception:
+            previous = None
+    if previous:
+        _remove_stale_queue_media(previous.get("media_files"), media_files)
+
+    chats = [str(chat).strip() for chat in target_chats if str(chat).strip()]
+
     return db.save_post_to_queue(
         {
             "source_name": source,
@@ -885,18 +1104,53 @@ def _save_post_to_queue(
             "media_files": json.dumps(media_files, ensure_ascii=False),
             "media_kind": media_kind,
             "category": (category or "").strip().lower(),
-            "target_chat": target_chat,
+            "target_chat": chats[0] if chats else "",
+            "target_chats": json.dumps(chats, ensure_ascii=False),
         }
     )
 
 
+def _queued_target_chats(post: dict) -> list[str]:
+    """Каналы, в которые нужно опубликовать пост из очереди.
+
+    Пост может уйти сразу в несколько каналов: теги совпали с маршрутами
+    нескольких каналов. Старая колонка target_chat остаётся основным
+    каналом — по ней видно, куда пост ушёл.
+    """
+    chats: list[str] = []
+    raw_list = post.get("target_chats") or "[]"
+    try:
+        parsed = json.loads(raw_list) if isinstance(raw_list, str) else raw_list
+    except (TypeError, ValueError):
+        parsed = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            chat = str(item or "").strip()
+            if chat and chat not in chats:
+                chats.append(chat)
+    main_chat = str(post.get("target_chat") or "").strip()
+    if main_chat and main_chat not in chats:
+        chats.append(main_chat)
+    return chats
+
+
 async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
     """Публикует пост из очереди. Возвращает (успех, сообщение)."""
-    target_chat = str(post.get("target_chat") or "").strip()
-    if not target_chat:
+    target_chats = _queued_target_chats(post)
+    if not target_chats:
         return False, "Не указан канал назначения."
 
     text = str(post.get("publish_text") or "")
+    # Текст поста мог править пользователь в панели: он может содержать
+    # сырые теги или быть длиннее, чем Telegram принимает.
+    text = _sanitize_telegram_html(text)
+    if len(text) > TG_MESSAGE_LIMIT:
+        original_len = len(text)
+        text = _truncate_telegram_text(text, TG_MESSAGE_LIMIT)
+        db.add_log(
+            "WARN-500",
+            f"Текст поста обрезан с {original_len} до {len(text)} символов для Telegram.",
+        )
     try:
         media_files = json.loads(post.get("media_files") or "[]")
     except (TypeError, ValueError):
@@ -905,10 +1159,22 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
         media_files = []
 
     media_dir = _queue_media_dir()
+    expected_marker = media_marker.media_marker(
+        str(post.get("source_name") or ""), str(post.get("post_id") or "")
+    )
     paths = []
     for name in media_files:
         safe_name = os.path.basename(str(name).replace("\\", "/"))
         if not safe_name or safe_name != str(name):
+            continue
+        if not media_marker.belongs_to_post(safe_name, expected_marker):
+            # Файл помечен как чужой: публиковать его вместе с этим постом
+            # нельзя, иначе картинка окажется не от того поста.
+            db.add_log(
+                "WARN-512",
+                f"Медиафайл {safe_name} принадлежит другому посту; "
+                f"в публикации {post.get('id')} пропущен.",
+            )
             continue
         full = os.path.join(media_dir, safe_name)
         if os.path.isfile(full):
@@ -916,36 +1182,77 @@ async def publish_queued_post(bot: Bot, post: dict) -> tuple[bool, str]:
 
     try:
         if not paths:
-            if text:
-                await bot.send_message(chat_id=target_chat, text=text)
-            else:
+            if not text:
                 return False, "В посте нет ни текста, ни медиа."
+            for target_chat in target_chats:
+                await _send_with_retry(
+                    bot, "send_message", chat_id=target_chat, text=text
+                )
         elif len(paths) == 1:
             kind = str(post.get("media_kind") or "document")
             # Текст длиннее подписи уходит отдельным сообщением, но не
             # делится надвое.
             fits_caption = len(text) <= TG_CAPTION_LIMIT
             caption = text if fits_caption else None
-            if kind == "photo":
-                await bot.send_photo(chat_id=target_chat, photo=FSInputFile(paths[0]), caption=caption or None)
-            elif kind == "video":
-                await bot.send_video(chat_id=target_chat, video=FSInputFile(paths[0]), caption=caption or None)
-            else:
-                await bot.send_document(chat_id=target_chat, document=FSInputFile(paths[0]), caption=caption or None)
-            if text and not fits_caption:
-                await bot.send_message(chat_id=target_chat, text=text)
+            for target_chat in target_chats:
+                if kind == "photo":
+                    await _send_with_retry(
+                        bot,
+                        "send_photo",
+                        chat_id=target_chat,
+                        photo=FSInputFile(paths[0], filename=media_marker.clean_filename(paths[0])),
+                        caption=caption or None,
+                    )
+                elif kind == "video":
+                    await _send_with_retry(
+                        bot,
+                        "send_video",
+                        chat_id=target_chat,
+                        video=FSInputFile(paths[0], filename=media_marker.clean_filename(paths[0])),
+                        caption=caption or None,
+                    )
+                else:
+                    await _send_with_retry(
+                        bot,
+                        "send_document",
+                        chat_id=target_chat,
+                        document=FSInputFile(paths[0], filename=media_marker.clean_filename(paths[0])),
+                        caption=caption or None,
+                    )
+                if text and not fits_caption:
+                    await _send_with_retry(
+                        bot, "send_message", chat_id=target_chat, text=text
+                    )
         else:
-            media = _build_album_media(paths, text)
-            try:
-                await bot.send_media_group(chat_id=target_chat, media=media)
-            except Exception:
-                # Альбом из файлов одного вида Telegram принимает не всегда.
-                # Откатываемся к документам — они принимаются всегда.
-                media = [
-                    InputMediaDocument(media=FSInputFile(path), caption=text or None)
-                    for path in paths
-                ]
-                await bot.send_media_group(chat_id=target_chat, media=media)
+            # Подпись альбома ограничена 1024 символами, а обычное
+            # сообщение вмещает 4096. Длинный текст уходит отдельным
+            # сообщением — иначе Telegram отклоняет подпись целиком и
+            # пост не публикуется никогда.
+            fits_caption = len(text) <= TG_CAPTION_LIMIT
+            caption = text if fits_caption else None
+            for target_chat in target_chats:
+                media = _build_album_media(paths, caption)
+                try:
+                    await _send_with_retry(
+                        bot, "send_media_group", chat_id=target_chat, media=media
+                    )
+                except Exception:
+                    # Альбом из файлов одного вида Telegram принимает не всегда.
+                    # Откатываемся к документам — они принимаются всегда.
+                    media = [
+                        InputMediaDocument(
+                            media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                            caption=caption or None,
+                        )
+                        for path in paths
+                    ]
+                    await _send_with_retry(
+                        bot, "send_media_group", chat_id=target_chat, media=media
+                    )
+                if text and not fits_caption:
+                    await _send_with_retry(
+                        bot, "send_message", chat_id=target_chat, text=text
+                    )
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
     return True, "Опубликовано."
@@ -962,19 +1269,22 @@ def _build_album_media(paths: list[str], caption: str | None) -> list:
     if extensions and extensions.issubset(media_convert.IMAGE_EXTENSIONS):
         return [
             InputMediaPhoto(
-                media=FSInputFile(path), caption=caption if index == 0 else None
+                media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                caption=caption if index == 0 else None
             )
             for index, path in enumerate(paths)
         ]
     if extensions and extensions.issubset(media_convert.NATIVE_VIDEO_EXTENSIONS):
         return [
             InputMediaVideo(
-                media=FSInputFile(path), caption=caption if index == 0 else None
+                media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                caption=caption if index == 0 else None
             )
             for index, path in enumerate(paths)
         ]
     return [
-        InputMediaDocument(media=FSInputFile(path), caption=caption if index == 0 else None)
+        InputMediaDocument(media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                caption=caption if index == 0 else None)
         for index, path in enumerate(paths)
     ]
 
@@ -1027,9 +1337,108 @@ async def _publish_due_scheduled_posts(bot: Bot) -> int:
             db.add_log("OK-511", f"Отложенный пост {post['id']} опубликован в {post.get('target_chat')}.")
             published += 1
         else:
-            db.update_queued_post(post["id"], {"last_error": message})
-            db.add_log("ERR-511", f"Не удалось опубликовать отложенный пост {post['id']}: {message}")
+            # Пост, который не публикуется из-за постоянной ошибки, не
+            # должен повторяться вечно: после нескольких попыток он
+            # переводится в «ошибка» и перестаёт занимать очередь.
+            attempts = _post_publish_attempts(post) + 1
+            changes: dict = {"last_error": message, "publish_attempts": attempts}
+            if attempts >= MAX_PUBLISH_ATTEMPTS:
+                changes["status"] = "failed"
+            db.update_queued_post(post["id"], changes)
+            if changes.get("status") == "failed":
+                db.add_log(
+                    "ERR-511",
+                    f"Отложенный пост {post['id']} не опубликован после {attempts} попыток: "
+                    f"{message}. Пост помечен как ошибочный.",
+                )
+            else:
+                db.add_log(
+                    "ERR-511",
+                    f"Не удалось опубликовать отложенный пост {post['id']} "
+                    f"(попытка {attempts} из {MAX_PUBLISH_ATTEMPTS}): {message}",
+                )
     return published
+
+
+def _mark_queue_entry_published(source: str, messages: list[Message]) -> None:
+    """Помечает черновик в очереди как опубликованный.
+
+    Пост мог остаться в очереди после сбоя. Когда он всё же ушёл, запись
+    должна исчезнуть из списка ожидающих: иначе пользователь отправит
+    его повторно и получит дубль в канале.
+    """
+    getter = getattr(db, "get_queued_post_by_source", None)
+    updater = getattr(db, "update_queued_post", None)
+    if not callable(getter) or not callable(updater):
+        return
+    for message in messages:
+        try:
+            row = getter(source, message.id)
+        except Exception:
+            return
+        if not row:
+            continue
+        status = str(row.get("status") or "")
+        if status in {"published", "cancelled"}:
+            continue
+        try:
+            updater(
+                row["id"],
+                {
+                    "status": "published",
+                    "published_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_error": "",
+                },
+            )
+        except Exception:
+            continue
+
+
+def _keep_post_for_manual_publish(
+    source: str,
+    messages: list[Message],
+    text: str,
+    target_chats: list[str],
+    tags: list[str],
+    reason: str,
+) -> bool:
+    """Кладёт пост в очередь, чтобы его можно было отправить вручную.
+
+    Используется, когда автоматическая отправка не удалась: контент не
+    должен пропадать. Запись в очереди пользователь увидит в разделе
+    «Посты» и сможет отправить её вручную, когда проблема исчезнет.
+    """
+    try:
+        queue_id = _save_post_to_queue(
+            source, messages, text, list(target_chats), ", ".join(tags), [], []
+        )
+        if not queue_id:
+            return False
+        db.update_queued_post(queue_id, {"last_error": reason})
+        db.add_log(
+            "WARN-408",
+            f"Пост {source}/{messages[0].id} сохранён в очереди для ручной отправки: {reason}",
+        )
+        print(
+            f"--> Пост {source}/{messages[0].id} сохранён в очереди; "
+            "отправьте его вручную в разделе «Посты»."
+        )
+        return True
+    except Exception as exc:
+        db.add_log(
+            "ERR-510",
+            f"Не удалось сохранить пост {source}/{messages[0].id} в очередь: {exc}",
+        )
+        print(f"!!! Не удалось сохранить пост {source}/{messages[0].id} в очередь: {exc}")
+        return False
+
+
+def _post_publish_attempts(post: dict) -> int:
+    """Сколько раз уже пытались опубликовать пост."""
+    try:
+        return max(0, int(post.get("publish_attempts") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 async def _queue_source_draft_after_ai_failure(
@@ -1039,17 +1448,24 @@ async def _queue_source_draft_after_ai_failure(
     cfg: dict,
     reason: str,
 ) -> bool:
-    """Keep a source post visible in the manual queue when its AI rewrite fails."""
-    if (cfg.get("publish_mode") or "auto") != "manual":
-        return False
+    """Сохраняет пост в очередь, когда отправить его сейчас не получилось.
 
-    topic = "общее"
-    target_chat = (cfg.get("topic_channels") or {}).get(topic) or ""
-    if target_chat:
+    Черновик нужен в любом режиме: пока ИИ недоступен или Telegram
+    отклоняет отправку, пост не должен пропадать. В очереди он ждёт, и
+    пользователь может отправить его вручную из панели, когда всё
+    наладится.
+    """
+    routes = _effective_tag_routes(cfg)
+    # Канал для черновика: запасной маршрут (тег «общее»). Без него
+    # пользователь укажет канал вручную в панели.
+    target_chats: list[str] = []
+    for chat in routing.fallback_channels(routes):
         try:
-            target_chat = _target_chat_id(target_chat)
+            resolved = _target_chat_id(chat)
         except Exception:
-            target_chat = ""
+            continue
+        if resolved:
+            target_chats.append(resolved)
 
     media_list: list = []
     temp_paths: list[str] = []
@@ -1064,7 +1480,7 @@ async def _queue_source_draft_after_ai_failure(
 
     try:
         queue_id = _save_post_to_queue(
-            source, messages, raw_text, target_chat, topic, media_list, temp_paths
+            source, messages, raw_text, target_chats, "общее", media_list, temp_paths
         )
         if not queue_id:
             raise RuntimeError("database returned an empty queue ID")
@@ -1091,10 +1507,87 @@ async def _queue_source_draft_after_ai_failure(
         return False
     finally:
         for path in temp_paths:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(path)
-            except OSError:
-                pass
+
+
+async def _send_post_to_channel(
+    bot: Bot,
+    target_chat: str,
+    media_list: list,
+    final_text: str,
+) -> tuple[bool, Exception | None]:
+    """Отправляет пост в один канал.
+
+    Возвращает (успех, ошибка). Ошибка при успешной отправке медиа означает,
+    что не доставился только хвост текста — медиа в канале уже есть.
+    """
+    try:
+        if media_list:
+            # Подпись у картинки ограничена 1024 символами, а обычное
+            # сообщение вмещает 4096. Если текст не влезает в подпись, но
+            # влезает в сообщение, отправляем картинку без подписи, а текст
+            # одним сообщением — иначе текст рвётся на две части.
+            text_fits_caption = len(final_text) <= TG_CAPTION_LIMIT
+            media_caption = final_text if text_fits_caption else None
+            if len(media_list) == 1:
+                single = media_list[0]
+                if isinstance(single, InputMediaPhoto):
+                    await _send_with_retry(
+                        bot,
+                        "send_photo",
+                        chat_id=target_chat,
+                        photo=single.media,
+                        caption=media_caption or None,
+                    )
+                elif isinstance(single, InputMediaVideo):
+                    await _send_with_retry(
+                        bot,
+                        "send_video",
+                        chat_id=target_chat,
+                        video=single.media,
+                        caption=media_caption or None,
+                    )
+                else:
+                    await _send_with_retry(
+                        bot,
+                        "send_document",
+                        chat_id=target_chat,
+                        document=single.media,
+                        caption=media_caption or None,
+                    )
+            else:
+                safe_media_group = _prepare_media_group(media_list)
+                if not text_fits_caption:
+                    for item in safe_media_group:
+                        item.caption = None
+                await _send_with_retry(
+                    bot,
+                    "send_media_group",
+                    chat_id=target_chat,
+                    media=safe_media_group,
+                )
+
+            # Текст, который не влез в подпись, уходит отдельным
+            # сообщением. Он не делится надвое: подпись в подписи не
+            # обрезается, хвост не отбрасывается.
+            if final_text and not text_fits_caption:
+                try:
+                    await _send_with_retry(
+                        bot,
+                        "send_message",
+                        chat_id=target_chat,
+                        text=final_text,
+                    )
+                except Exception as exc:
+                    return True, exc
+        else:
+            await _send_with_retry(
+                bot, "send_message", chat_id=target_chat, text=final_text
+            )
+    except Exception as exc:
+        return False, exc
+    return True, None
 
 
 async def _process_message_group(
@@ -1128,25 +1621,18 @@ async def _process_message_group(
         _save_skipped_group(source, messages, "ads_word")
         return
 
-    if raw_text and not _significant_words(raw_text):
-        # Подпись без единого значимого слова — обычно только эмодзи. ИИ на
-        # таком материале не пересказывает, а выдумывает новость, и она уходит
-        # в канал вместе с картинкой исходного поста. Такой пост пропускаем.
-        _save_skipped_group(source, messages, "short_text")
-        db.add_log(
-            "WARN-408",
-            f"Пост {source}/{messages[0].id} пропущен: в подписи нет ни одного "
-            "содержательного слова, переписывать нечего.",
-        )
-        return
-
     if not bot_running.is_set():
         return
 
     print(f"+++ Обработка поста из {source} (ID={messages[0].id})...")
-    if raw_text:
+    if raw_text and not _significant_words(raw_text):
+        # Подпись без единого значимого слова — обычно одни эмодзи или тег.
+        # Переписывать нечего, а ИИ на таком материале выдумывает новость.
+        # Публикуем исходный текст: он точно соответствует картинке.
+        post_tags, final_text = [], raw_text
+    elif raw_text:
         try:
-            topic, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
+            post_tags, final_text = await _ai_rewrite(raw_text, cfg, ai_session)
         except AIResponseFormatError as exc:
             db.add_log(
                 "WARN-404",
@@ -1171,42 +1657,53 @@ async def _process_message_group(
             return
     else:
         # Media-only source posts have no text to rewrite.
-        topic, final_text = "общее", ""
+        post_tags, final_text = [], ""
+
+    if isinstance(post_tags, str):
+        # Старые адаптеры отдают тему строкой, а не списком тегов.
+        post_tags = routing.parse_tag_list(post_tags)
 
     if raw_text and not _rewrite_is_about_original(raw_text, final_text):
         # Пересказ не связан с исходным постом — ИИ выдумал новость. Такая
         # «новость» уехала бы в канал вместе с картинкой исходного поста.
-        _save_skipped_group(source, messages, "rewrite_unrelated")
+        # Публикуем исходный текст: он точно соответствует картинке.
         db.add_log(
             "WARN-410",
-            f"Пост {source}/{messages[0].id} пропущен: пересказ не связан с "
-            "исходным текстом (ни одного общего значимого слова).",
+            f"Пост {source}/{messages[0].id}: пересказ не связан с исходным "
+            "текстом, опубликован исходный текст поста.",
         )
-        print(f"!!! Перескав не связан с оригиналом для {source}/{messages[0].id}; пост пропущен.")
-        return
+        print(f"!!! Пересказ не связан с оригиналом для {source}/{messages[0].id}; публикуем исходный текст.")
+        post_tags, final_text = [], raw_text
 
     if cfg["watermark"]:
         final_text = f"{final_text}\n\n{cfg['watermark']}"
-    final_text = _sanitize_telegram_html(final_text)
-
-    topic_key = (topic or "").strip().lower()
-    target_chat = (
-        cfg["topic_channels"].get(topic_key)
-        or cfg["topic_channels"].get(topic)
-        or cfg["topic_channels"].get("общее")
+    # Локальные модели часто игнорируют инструкцию по разметке и
+    # возвращают Markdown. Переводим его в HTML Telegram сами, чтобы пост
+    # выглядел одинаково независимо от послушности модели.
+    final_text = _sanitize_telegram_html(
+        text_format.markdown_to_telegram_html(final_text)
     )
-    if target_chat:
-        target_chat = _target_chat_id(target_chat)
-    if not target_chat:
-        # Missing routing is a configuration problem, not a permanent content
-        # skip. Keep the post pending so adding a topic route can recover it.
+
+
+    # Каналы определяются тегами: пост уходит во все каналы, у которых
+    # есть хотя бы один из его тегов.
+    routes = _effective_tag_routes(cfg)
+    matched_chats = routing.resolve_channels(routes, post_tags)
+    target_chats = [_target_chat_id(chat) for chat in matched_chats if chat]
+    target_chats = [chat for chat in target_chats if chat]
+    if not target_chats:
+        # Нет маршрута — это проблема настройки, а не повод выбрасывать
+        # пост. Он остаётся в ожидании: добавить маршрут и повторить.
         db.add_log(
             "WARN-400",
-            f"Для темы [{topic}] не настроен целевой канал; пост "
-            f"{source}/{messages[0].id} оставлен для повтора. Настройте категорию "
-            "или добавьте маршрут 'общее'.",
+            f"Для тегов [{', '.join(post_tags) or 'без тегов'}] не настроен целевой канал; "
+            f"пост {source}/{messages[0].id} оставлен для повтора. Настройте маршрут "
+            "с этими тегами или добавьте маршрут 'общее'.",
         )
-        print(f"!!! Целевой канал для темы [{topic}] не настроен; пост оставлен для повтора.")
+        print(
+            f"!!! Целевой канал для тегов [{', '.join(post_tags) or 'без тегов'}] "
+            "не настроен; пост оставлен для повтора."
+        )
         return
 
     if not bot_running.is_set():
@@ -1226,7 +1723,7 @@ async def _process_message_group(
         print(f"!!! Не удалось скачать вложение для {source}/{messages[0].id}; пост оставлен для повтора.")
         return
 
-    MAX_TG_LEN = 4096
+    MAX_TG_LEN = TG_MESSAGE_LIMIT
     if len(final_text) > MAX_TG_LEN:
         original_len = len(final_text)
         final_text = _truncate_telegram_text(final_text, MAX_TG_LEN)
@@ -1240,7 +1737,10 @@ async def _process_message_group(
     # где его можно поправить, отложить, отправить или отменить.
     if (cfg.get("publish_mode") or "auto") == "manual":
         try:
-            _save_post_to_queue(source, messages, final_text, target_chat, topic, media_list, temp_paths)
+            _save_post_to_queue(
+                source, messages, final_text, target_chats,
+                ", ".join(post_tags), media_list, temp_paths,
+            )
         except Exception as exc:
             db.add_log(
                 "ERR-510",
@@ -1248,165 +1748,168 @@ async def _process_message_group(
             )
             print(f"!!! Не удалось сохранить пост {source}/{messages[0].id} в очередь: {exc}")
             return
+        finally:
+            # Копии медиа уже лежат в очереди — временные файлы больше не
+            # нужны. Без этой очистки temp_media рос бы бесконечно.
+            for temp_path in temp_paths:
+                with contextlib.suppress(OSError):
+                    os.remove(temp_path)
         db.add_log(
             "OK-510",
             f"Пост {source}/{messages[0].id} добавлен в очередь и ждёт подтверждения.",
         )
-        print(f"Пост {source}/{messages[0].id} -> очередь (цель: {target_chat}).")
+        print(
+            f"Пост {source}/{messages[0].id} -> очередь (цель: {', '.join(target_chats)})."
+        )
         return
 
     retry_delay_s = 0
     secondary_send_error: Exception | None = None
     secondary_text_to_send = ""
+    published_chats: list[str] = []
     try:
-        if media_list:
-            # Подпись у картинки ограничена 1024 символами, а обычное
-            # сообщение вмещает 4096. Если текст не влезает в подпись, но
-            # влезает в сообщение, отправляем картинку без подписи, а текст
-            # одним сообщением — иначе текст рвётся на две части.
-            text_fits_caption = len(final_text) <= TG_CAPTION_LIMIT
-            media_caption = final_text if text_fits_caption else None
-            if len(media_list) == 1:
-                single = media_list[0]
-                if isinstance(single, InputMediaPhoto):
-                    await bot.send_photo(
-                        chat_id=target_chat,
-                        photo=single.media,
-                        caption=media_caption or None,
-                    )
-                elif isinstance(single, InputMediaVideo):
-                    await bot.send_video(
-                        chat_id=target_chat,
-                        video=single.media,
-                        caption=media_caption or None,
-                    )
-                else:
-                    await bot.send_document(
-                        chat_id=target_chat,
-                        document=single.media,
-                        caption=media_caption or None,
-                    )
-            else:
-                safe_media_group = _prepare_media_group(media_list)
-                if not text_fits_caption:
-                    for item in safe_media_group:
-                        item.caption = None
-                await bot.send_media_group(chat_id=target_chat, media=safe_media_group)
+        for target_chat in target_chats:
+            sent, send_error = await _send_post_to_channel(
+                bot, target_chat, media_list, final_text
+            )
+            if sent:
+                published_chats.append(target_chat)
+                if send_error is not None and secondary_send_error is None:
+                    # Медиа доставлены, не доставился только хвост текста.
+                    secondary_send_error = send_error
+                    secondary_text_to_send = final_text
+                continue
 
-            # Текст, который не влез в подпись, уходит отдельным
-            # сообщением. Он не делится надвое: подпись в подписи не
-            # обрезается, хвост не отбрасывается.
-            if final_text and not text_fits_caption:
-                secondary_text_to_send = final_text
-                try:
-                    await bot.send_message(chat_id=target_chat, text=secondary_text_to_send)
-                except Exception as exc:
-                    secondary_send_error = exc
-        else:
-            await bot.send_message(chat_id=target_chat, text=final_text)
-
-    except Exception as send_error:
-        _log_send_error(send_error, target_chat)
-        retryable = isinstance(
-            send_error,
-            (
-                asyncio.TimeoutError,
-                aiohttp.ClientError,
-                TelegramNetworkError,
-                TelegramServerError,
-                TelegramRetryAfter,
-            ),
-        )
-        if retryable:
-            retry_delay_s = max(0, int(getattr(send_error, "retry_after", 0)))
-            db.add_log(
-                "WARN-406",
-                f"Пост {source}/{messages[0].id} не отправлен из-за временной ошибки "
-                f"({type(send_error).__name__}); оставлен для повторной попытки.",
+            assert send_error is not None
+            _log_send_error(send_error, target_chat)
+            retryable = isinstance(
+                send_error,
+                (
+                    asyncio.TimeoutError,
+                    aiohttp.ClientError,
+                    TelegramNetworkError,
+                    TelegramServerError,
+                    TelegramRetryAfter,
+                ),
             )
-        else:
-            # A send rejection can be corrected (permissions, target, token, or
-            # malformed payload). Never turn a delivery failure into a permanent
-            # skip: stop the loop and leave the post pending for a deliberate retry.
-            bot_running.clear()
-            db.add_log(
-                "ERR-408",
-                f"Пост {source}/{messages[0].id} не доставлен из-за постоянной ошибки "
-                f"({type(send_error).__name__}); пост оставлен для повтора, парсер остановлен. "
-                "Исправьте токен/права/целевой канал и запустите парсер снова.",
-            )
-            print(
-                f"!!! [ERR-408] Отправка поста {source}/{messages[0].id} отклонена; "
-                "пост сохранён для повтора, парсер остановлен."
-            )
-    else:
-        failed_post_id = messages[0].id
-        followup_queued = False
-        try:
-            if secondary_send_error is not None:
-                # Media is already published. Atomically save deduplication
-                # markers and the undelivered text tail; never retry the whole
-                # source post merely because its second message failed.
-                save_with_followup = getattr(db, "save_posts_with_followup", None)
-                if not callable(save_with_followup):
-                    raise DatabaseWriteError(
-                        "database adapter cannot atomically persist a failed text follow-up"
-                    )
-                save_with_followup(
-                    source,
-                    [message.id for message in messages],
-                    target_chat,
-                    secondary_text_to_send,
+            if retryable:
+                retry_delay_s = max(
+                    retry_delay_s, int(getattr(send_error, "retry_after", 0))
                 )
-                followup_queued = True
-            else:
-                # The real DB commits album/message-group deduplication records
-                # atomically. Keep the fallback for older lightweight adapters.
-                save_group = getattr(db, "save_posts", None)
-                if callable(save_group):
-                    save_group(source, [message.id for message in messages])
-                else:
-                    for m in messages:
-                        failed_post_id = m.id
-                        db.save_post(source, m.id)
-        except DatabaseWriteError as db_error:
-            # Telegram has already accepted the send. Stop before more posts can
-            # be emitted with missing deduplication records.
-            bot_running.clear()
-            db.add_log(
-                "ERR-DB-501",
-                f"Пост {source}/{failed_post_id} уже отправлен в Telegram, "
-                f"но запись в SQLite не удалась ({db_error}); бот остановлен. "
-                "Перед перезапуском проверьте целевой канал.",
-            )
-            print(
-                f"!!! Публикация {source}/{failed_post_id} уже отправлена, "
-                "но не записана в SQLite. Бот остановлен; проверьте канал перед запуском."
-            )
-        else:
-            if followup_queued:
+                db.add_log(
+                    "WARN-406",
+                    f"Пост {source}/{messages[0].id} не отправлен в {target_chat} из-за "
+                    f"временной ошибки ({type(send_error).__name__}); оставлен для повторной попытки.",
+                )
+            elif _is_post_level_send_error(send_error):
+                # Дефект конкретного поста (например, файл больше 50 МБ).
+                # Останавливать из-за него весь парсер нельзя: лента должна
+                # продолжаться. Пост помечается пропущенным и не повторяется.
+                _save_skipped_group(source, messages, "send_failed")
                 db.add_log(
                     "WARN-407",
-                    f"Основная публикация {source}/{messages[0].id} уже отправлена в {target_chat}, "
-                    f"но остаток текста не доставлен ({type(secondary_send_error).__name__}). "
-                    "Остаток атомарно сохранён в SQLite и будет повторно отправлен без дублирования медиа.",
+                    f"Пост {source}/{messages[0].id} не доставлен в {target_chat}: Telegram "
+                    f"отклонил медиа ({type(send_error).__name__}: {send_error}). "
+                    "Пост пропущен, парсер продолжает работу.",
                 )
-            db.add_log(
-                "OK-501",
-                f"Пост {source}/{messages[0].id} успешно опубликован в {target_chat} "
-                f"(тема: {topic}).",
-            )
-            print(f"УСПЕХ: → [{topic}] -> {target_chat}")
+                print(
+                    f"!!! [WARN-407] Пост {source}/{messages[0].id} отклонён Telegram "
+                    f"({send_error}); пропущен, парсер работает дальше."
+                )
+            else:
+                # A send rejection can be corrected (permissions, target, token, or
+                # malformed payload). Never turn a delivery failure into a permanent
+                # skip: stop the loop and leave the post pending for a deliberate retry.
+                bot_running.clear()
+                # Пост не должен пропасть: сохраняем его в очередь, чтобы
+                # после исправления отправить вручную из панели.
+                _keep_post_for_manual_publish(
+                    source, messages, final_text, target_chats, post_tags,
+                    f"Telegram отклонил отправку: {type(send_error).__name__}: {send_error}",
+                )
+                db.add_log(
+                    "ERR-408",
+                    f"Пост {source}/{messages[0].id} не доставлен в {target_chat} из-за "
+                    f"постоянной ошибки ({type(send_error).__name__}); пост сохранён в очереди "
+                    "для ручной отправки, парсер остановлен. Исправьте токен/права/целевой "
+                    "канал и запустите парсер снова.",
+                )
+                print(
+                    f"!!! [ERR-408] Отправка поста {source}/{messages[0].id} отклонена; "
+                    "пост сохранён для повтора, парсер остановлен."
+                )
+                break
+
+        if published_chats:
+            failed_post_id = messages[0].id
+            followup_queued = False
+            try:
+                if secondary_send_error is not None:
+                    # Media is already published. Atomically save deduplication
+                    # markers and the undelivered text tail; never retry the whole
+                    # source post merely because its second message failed.
+                    save_with_followup = getattr(db, "save_posts_with_followup", None)
+                    if not callable(save_with_followup):
+                        raise DatabaseWriteError(
+                            "database adapter cannot atomically persist a failed text follow-up"
+                        )
+                    save_with_followup(
+                        source,
+                        [message.id for message in messages],
+                        published_chats[0],
+                        secondary_text_to_send,
+                    )
+                    followup_queued = True
+                else:
+                    # The real DB commits album/message-group deduplication records
+                    # atomically. Keep the fallback for older lightweight adapters.
+                    save_group = getattr(db, "save_posts", None)
+                    if callable(save_group):
+                        save_group(source, [message.id for message in messages])
+                    else:
+                        for m in messages:
+                            failed_post_id = m.id
+                            db.save_post(source, m.id)
+                # Пост опубликован — черновик в очереди (если он был) больше
+                # не ждёт отправки, иначе пользователь отправит его дважды.
+                _mark_queue_entry_published(source, messages)
+            except DatabaseWriteError as db_error:
+                # Telegram has already accepted the send. Stop before more posts can
+                # be emitted with missing deduplication records.
+                bot_running.clear()
+                db.add_log(
+                    "ERR-DB-501",
+                    f"Пост {source}/{failed_post_id} уже отправлен в Telegram, "
+                    f"но запись в SQLite не удалась ({db_error}); бот остановлен. "
+                    "Перед перезапуском проверьте целевой канал.",
+                )
+                print(
+                    f"!!! Публикация {source}/{failed_post_id} уже отправлена, "
+                    "но не записана в SQLite. Бот остановлен; проверьте канал перед запуском."
+                )
+            else:
+                if followup_queued:
+                    db.add_log(
+                        "WARN-407",
+                        f"Основная публикация {source}/{messages[0].id} уже отправлена в "
+                        f"{published_chats[0]}, но остаток текста не доставлен "
+                        f"({type(secondary_send_error).__name__}). Остаток атомарно сохранён "
+                        "в SQLite и будет повторно отправлен без дублирования медиа.",
+                    )
+                db.add_log(
+                    "OK-501",
+                    f"Пост {source}/{messages[0].id} успешно опубликован в "
+                    f"{', '.join(published_chats)} (теги: {', '.join(post_tags) or 'без тегов'}).",
+                )
+                print(f"УСПЕХ: → [{', '.join(post_tags) or 'общее'}] -> {', '.join(published_chats)}")
     finally:
         for p in temp_paths:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(p)
-            except OSError:
-                pass
     await asyncio.sleep(max(SLEEP_BETWEEN_POSTS_S, retry_delay_s))
 
 
-def _convert_media_for_telegram(path: str) -> str:
+async def _convert_media_for_telegram(path: str) -> str:
     """Приводит видеофайл к MP4, если Telegram не умеет проигрывать исходный.
 
     Telegram принимает в sendVideo только MP4: MOV уезжает в чат файлом, а
@@ -1416,7 +1919,7 @@ def _convert_media_for_telegram(path: str) -> str:
     """
     if not media_convert.needs_conversion(path):
         return path
-    converted = media_convert.convert_to_mp4(path)
+    converted = await asyncio.to_thread(media_convert.convert_to_mp4, path)
     if not converted:
         db.add_log(
             "WARN-409",
@@ -1426,10 +1929,8 @@ def _convert_media_for_telegram(path: str) -> str:
         )
         print(f"!!! [WARN-409] Не удалось конвертировать {os.path.basename(path)} в MP4")
         return path
-    try:
+    with contextlib.suppress(OSError):
         os.remove(path)
-    except OSError:
-        pass
     print(f"--> [МЕДИА] {os.path.basename(path)} переведён в MP4")
     return converted
 
@@ -1452,24 +1953,59 @@ async def _download_media(messages: list[Message], caption: str = "") -> tuple[l
                         f"Telethon не вернул файл для сообщения {getattr(m, 'id', '?')}"
                     )
                 continue
-            path = _convert_media_for_telegram(path)
+            path = await _convert_media_for_telegram(path)
             temp_paths.append(path)
             m_t = _classify_extension(path)
             cap = cap_text if cap_text and not caption_assigned else None
             if cap is not None:
                 caption_assigned = True
-            media_list.append(m_t(media=FSInputFile(path), caption=cap))
+            media_list.append(
+                m_t(
+                    media=FSInputFile(path, filename=media_marker.clean_filename(path)),
+                    caption=cap,
+                )
+            )
 
     except BaseException:
         # Вызывающий код не сможет убрать эти файлы, если функция не вернулась.
         for path in temp_paths:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(path)
-            except OSError:
-                pass
         raise
     print()
     return media_list, temp_paths
+
+
+#: Признаки ошибок, относящихся к конкретному посту, а не к настройкам
+#: бота: слишком большой файл, неподдерживаемый формат, битая ссылка.
+_POST_LEVEL_BAD_REQUEST_MARKERS = (
+    "request entity too large",
+    "too big",
+    "file is too large",
+    "message is too long",
+    "caption is too long",
+    "wrong file identifier",
+    "file_reference_expired",
+    "photo_invalid_dimensions",
+    "video_content_type",
+    "unsupported",
+    "wrong file",
+)
+
+
+def _is_post_level_send_error(exc: Exception) -> bool:
+    """Ошибка относится к конкретному посту, а не к настройкам бота.
+
+    Слишком большой файл или неподдерживаемый формат — это дефект одного
+    поста. Останавливать из-за него весь парсер нельзя: остальные посты
+    публикуются нормально, а пользователь увидит только обрыв ленты.
+    """
+    if isinstance(exc, TelegramEntityTooLarge):
+        return True
+    if not isinstance(exc, TelegramBadRequest):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _POST_LEVEL_BAD_REQUEST_MARKERS)
 
 
 def _log_send_error(send_error: Exception, target_chat) -> None:
@@ -1499,24 +2035,37 @@ class AIResponseFormatError(AIRewriteError):
     """Successful AI response does not contain publishable structured content."""
 
 
-async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[str, str]:
-    topics = ", ".join(cfg["topic_channels"].keys()) or "общее"
-    db_prompt = db.get_setting("system_prompt", "")
-    if db_prompt:
-        s_prompt = f"{db_prompt}\n\nДоступные темы: [{topics}]"
-    else:
-        s_prompt = (
-            "Ты — опытный SMM-редактор. Твоя задача: сделать увлекательный ПЕРЕСКАЗ новости.\n"
-            "ПРАВИЛА:\n"
-            "1. Выбери ОДНУ тему из списка: [{topics}]\n"
-            "2. Если в тексте есть прямая речь или важная фраза — ОБЯЗАТЕЛЬНО оформи "
-            "ёё тегом <blockquote>текст</blockquote>.\n"
-            "3. Придумай 2-3 релевантных хэштега.\n"
-            "ОТВЕТЬ СТРОГО ПО ШАБЛОНУ:\n"
-            "ТЕМА: [название]\n"
-            "ТЕКСТ: [твой пересказ]\n"
-            "ХЭШТЕГИ: [теги]"
-        ).format(topics=topics)
+def _effective_tag_routes(cfg: dict) -> dict[str, list[str]]:
+    """Маршруты по тегам для текущей конфигурации.
+
+    Если маршруты по тегам не заданы, используются старые настройки
+    «категория → канал»: категория становится тегом своего канала.
+    """
+    routes = cfg.get("tag_routes") or {}
+    if routes:
+        return routes
+    return routing.parse_routes(cfg.get("topic_channels") or {})
+
+
+async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSession) -> tuple[list[str], str]:
+    routes = _effective_tag_routes(cfg)
+    tags = ", ".join(cfg.get("tag_routes_tags") or routing.all_tags(routes)) or routing.FALLBACK_TAG
+    db_prompt = (db.get_setting("system_prompt", "") or "").strip()
+    # За основу берём промпт пользователя, а если его нет — рекомендуемый.
+    base_prompt = db_prompt or DEFAULT_SYSTEM_PROMPT
+    # Правила разметки Telegram добавляем всегда: без них пересказ приходит
+    # голым текстом, без цитат, ссылок и акцентов.
+    if "<blockquote>" not in base_prompt:
+        base_prompt = f"{base_prompt}\n\n{TELEGRAM_FORMATTING_RULES}"
+    s_prompt = (
+        f"{base_prompt}\n\n"
+        f"Доступные теги для маршрутизации: [{tags}]\n"
+        "В ответе обязательно должен быть раздел с тегами публикации — "
+        "ТЕГИ, ХЭШТЕГИ или ТЕМА, как требует твой формат ответа. "
+        "Теги определяют, в какие каналы уйдёт пост: он попадёт во все каналы, "
+        "у которых есть такой тег. Если ни один тег не подошёл, пост уйдёт в канал "
+        "с тегом «общее»."
+    )
 
     if cfg["ai_mode"] == "LOCAL":
         url, model = cfg["local_url"], cfg["local_model"]
@@ -1537,23 +2086,18 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
     failure_reason = "неизвестная ошибка AI"
     try:
         async with session_ai.post(url, json=payload, headers=headers,
-                                   timeout=AI_REQUEST_TIMEOUT_S) as r:
+                                   timeout=cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S) as r:
             if r.status == 200:
                 data = await r.json()
-                res = ""
-                for item in data.get("choices", []):
-                    candidate = item.get("message", {}).get("content", "")
-                    if isinstance(candidate, str) and candidate.strip():
-                        res = candidate
-                        break
+                res = _strip_reasoning_blocks(_extract_ai_content(data))
                 if not res:
                     failure_reason = "AI вернул пустой ответ"
                     db.add_log("ERR-400", failure_reason)
                     print("!!! [AI ERROR] Пустой ответ от AI endpoint")
                 else:
-                    topic, rewritten_text = _parse_ai_response(res, raw_text)
+                    ai_tags, rewritten_text = _parse_ai_response(res, raw_text)
                     if rewritten_text.strip():
-                        return topic, rewritten_text
+                        return ai_tags, rewritten_text
                     failure_reason = "AI вернул пустой текст после разбора"
                     db.add_log("ERR-400", failure_reason)
             else:
@@ -1567,6 +2111,19 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
     except aiohttp.ClientConnectorError as e:
         _log_ai_network_error(e, cfg)
         failure_reason = "AI endpoint недоступен"
+    except TimeoutError:
+
+        timeout_value = cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
+
+        failure_reason = (
+            f"модель не ответила за {timeout_value} сек (TimeoutError) — "
+            "увеличьте «Таймаут ИИ» в панели"
+        )
+
+        db.add_log("ERR-400", failure_reason)
+
+        print(f"!!! [AI ERROR] {failure_reason}")
+
     except Exception as e:
         db.add_log("ERR-400", f"Неизвестный сбой AI: {e}")
         print(f"!!! [AI ERROR] {e}")
@@ -1576,22 +2133,215 @@ async def _ai_rewrite(raw_text: str, cfg: dict, session_ai: aiohttp.ClientSessio
     raise AIRewriteError(failure_reason)
 
 
-def _parse_ai_response(res: str, raw_text: str) -> tuple[str, str]:
+def _ai_content_to_text(candidate: object) -> str:
+    """Приводит содержимое ответа модели к обычному тексту."""
+    if isinstance(candidate, str):
+        return candidate
+    if isinstance(candidate, list):
+        parts: list[str] = []
+        for item in candidate:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                chunk = item.get("text") or item.get("content") or ""
+                if isinstance(chunk, str):
+                    parts.append(chunk)
+                elif isinstance(chunk, list):
+                    parts.append(_ai_content_to_text(chunk))
+        return "".join(part for part in parts if part)
+    if isinstance(candidate, dict):
+        chunk = candidate.get("text") or candidate.get("content") or ""
+        return _ai_content_to_text(chunk)
+    return ""
+
+
+def _extract_ai_content(data: object) -> str:
+    """Достаёт текст ответа ИИ из разных форматов API.
+
+    Поддерживаются OpenAI-совместимый (``choices``), Ollama/LM Studio
+    (``message``, ``response``), Anthropic (``content``) и Responses API
+    (``output_text``, ``output``).
+    """
+    if not isinstance(data, dict):
+        return ""
+
+    choices = data.get("choices")
+    if isinstance(choices, list):
+        for item in choices:
+            if not isinstance(item, dict):
+                continue
+            message = item.get("message")
+            if isinstance(message, dict):
+                for key in ("content", "text", "output_text"):
+                    text_value = _ai_content_to_text(message.get(key))
+                    if text_value.strip():
+                        return text_value
+            for key in ("text", "content", "output_text"):
+                text_value = _ai_content_to_text(item.get(key))
+                if text_value.strip():
+                    return text_value
+
+    for key in ("output_text", "response", "text", "content"):
+        text_value = _ai_content_to_text(data.get(key))
+        if text_value.strip():
+            return text_value
+
+    message = data.get("message")
+    if isinstance(message, dict):
+        for key in ("content", "text", "output_text"):
+            text_value = _ai_content_to_text(message.get(key))
+            if text_value.strip():
+                return text_value
+
+    output = data.get("output")
+    if isinstance(output, list):
+        for item in output:
+            text_value = _ai_content_to_text(item)
+            if text_value.strip():
+                return text_value
+
+    return ""
+
+
+def _strip_reasoning_blocks(text: str) -> str:
+    """Убирает служебные блоки размышления моделей (<think>...</think>).
+
+    Модели часто не закрывают тег<think> — размышление уходит в пост
+    целиком. Незакрытый блок вырезается до конца ответа.
+    """
+    if not text:
+        return ""
+    cleaned = re.sub(
+        r"<(think|thinking|reasoning)>.*?</\1>",
+        "",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Незакрытый блок: вырезаем от тега до конца ответа.
+    cleaned = re.sub(
+        r"<(?:think|thinking|reasoning)>.*\Z",
+        "",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Вариант служебных маркеров без угловых скобок: <|thinking|>
+    cleaned = re.sub(
+        r"<\|(?:thinking|thought|reasoning)\|>.*?(?:<\|(?:thinking|thought|reasoning)\|>|\Z)",
+        "",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return cleaned.strip()
+
+
+#: Метки разделов в ответе модели. Локальные модели часто оборачивают их
+#: в Markdown-выделение: «**ТЕМА:** политика». Метка должна распознаваться
+#: в любом оформлении, иначе тема не находится и пост уходит не туда.
+_AI_SECTIONS = ("ТЕМА", "ТЕКСТ", "ХЭШТЕГИ")
+
+#: Метка, обёрнутая в выделение: **ТЕМА:**, **ТЕМА**, *ТЕМА:*, __ТЕМА__:.
+#: Между обвязкой и меткой допускаются только горизонтальные пробелы —
+#: иначе выделение текста рядом с меткой принято за метку.
+_AI_LABEL_RE = re.compile(
+    r"(?P<mark>\*\*|__|\*|_|`)[ \t]*"
+    r"(?P<label>ТЕМА|ТЕКСТ|ХЭШТЕГИ|ТЕГИ)[ \t]*"
+    r"(?::)?[ \t]*(?P=mark)(?::)?",
+    re.IGNORECASE,
+)
+
+
+def _normalize_ai_labels(res: str) -> str:
+    """Приводит метки разделов к виду «ТЕМА:», снимая Markdown-обвязку."""
+    return _AI_LABEL_RE.sub(lambda m: f"{m.group('label')}:", res)
+
+
+def _strip_emphasis(value: str) -> str:
+    """Снимает внешнее Markdown-выделение с короткого значения."""
+    return value.strip().strip("*_`").strip()
+
+
+def _extract_ai_topic(normalized: str) -> str:
+    """Достаёт тему из ответа модели.
+
+    Значение может стоять на следующей строке — тогда берём первую
+    непустую строку, которая не является следующей меткой.
+    """
+    match = re.search(r"ТЕМА[ \t]*:[ \t]*([^\n]*)", normalized, re.IGNORECASE)
+    if not match:
+        return "общее"
+
+    topic = _strip_emphasis(match.group(1))
+    if topic:
+        return topic.lower()
+
+    for line in normalized[match.end():].splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        if re.match(r"^(?:ТЕКСТ|ХЭШТЕГИ)[ \t]*:", candidate, re.IGNORECASE):
+            break
+        return _strip_emphasis(candidate).lower()
+    return "общее"
+
+
+def _parse_ai_response(res: str, raw_text: str) -> tuple[list[str], str]:
+    """Разбирает ответ модели: теги для маршрутизации и текст поста.
+
+    Теги нужны только для выбора канала — в самом посте их быть не
+    должно, поэтому они вырезаются из текста.
+    """
     if not isinstance(res, str) or not res.strip():
         raise AIResponseFormatError("пустой ответ")
-    t_m = re.search(r"ТЕМА:\s*(.*)", res, re.I)
-    c_m = re.search(r"ТЕКСТ:\s*(.*)", res, re.S | re.I)
-    h_m = re.search(r"ХЭШТЕГИ:\s*(.*)", res, re.I)
 
+    normalized = _normalize_ai_labels(res)
+    c_m = re.search(r"ТЕКСТ[ \t]*:[ \t]*(.*)", normalized, re.DOTALL | re.IGNORECASE)
     if not c_m:
         raise AIResponseFormatError("отсутствует обязательный раздел ТЕКСТ:")
-    topic = (t_m.group(1).strip().lower() if t_m else "общее").split("\n")[0].strip()
+
     full = c_m.group(1).strip()
-    clean = re.split(r"ХЭШТЕГИ\s*:", full, maxsplit=1, flags=re.I)[0].strip()
+    # Секция тегов обрывает текст: дальше идут только теги.
+    clean = re.split(
+        r"(?:ХЭШТЕГИ|ТЕГИ)[ \t]*:", full, maxsplit=1, flags=re.IGNORECASE
+    )[0].strip()
     if not clean:
         raise AIResponseFormatError("раздел ТЕКСТ: пуст")
-    tags = h_m.group(1).strip() if h_m else ""
-    return topic, f"{clean}\n\n{tags}" if tags else clean
+
+    ai_tags = _collect_ai_tags(normalized)
+
+    # Хештеги, оставшиеся в самом тексте, тоже определяют маршрут —
+    # и тоже удаляются из поста.
+    inline_tags = routing.extract_tags(clean)
+    for tag in inline_tags:
+        if tag not in ai_tags:
+            ai_tags.append(tag)
+
+    return ai_tags, routing.strip_hashtags(clean)
+
+
+def _collect_ai_tags(normalized: str) -> list[str]:
+    """Собирает теги из разделов ТЕГИ, ХЭШТЕГИ и ТЕМА.
+
+    Берутся все найденные разделы, а не только первый: старый промпт
+    отдаёт категорию в «ТЕМА:» и хештеги в «ХЭШТЕГИ:», новый — теги в
+    «ТЕГИ:». Любой из них подходит для маршрутизации.
+    """
+    tags: list[str] = []
+
+    def _add(values: list[str]) -> None:
+        for tag in values:
+            if tag and tag not in tags:
+                tags.append(tag)
+
+    for pattern in (
+        r"ТЕГИ[ \t]*:[ \t]*(.*)",
+        r"ХЭШТЕГИ[ \t]*:[ \t]*(.*)",
+        r"ТЕМА[ \t]*:[ \t]*([^\n]*)",
+    ):
+        match = re.search(pattern, normalized, re.DOTALL | re.IGNORECASE)
+        if not match:
+            continue
+        _add(routing.parse_tag_list(match.group(1)))
+    return tags
 
 
 def _log_ai_http_error(status: int, cfg: dict, body: str) -> None:
@@ -1637,13 +2387,11 @@ async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
         pending = get_due(limit)
     except Exception as exc:
         bot_running.clear()
-        try:
+        with contextlib.suppress(Exception):
             db.add_log(
                 "ERR-DB-502",
                 f"Не удалось прочитать очередь остатков текста ({type(exc).__name__}: {exc}); парсер остановлен.",
             )
-        except Exception:
-            pass
         return
 
     for item in pending:
@@ -1665,14 +2413,12 @@ async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
                 )
             except Exception as db_error:
                 bot_running.clear()
-                try:
+                with contextlib.suppress(Exception):
                     db.add_log(
                         "ERR-DB-503",
                         f"Не удалось запланировать повтор остатка текста #{followup_id} "
                         f"({db_error}); парсер остановлен.",
                     )
-                except Exception:
-                    pass
                 return
 
             db.add_log(
@@ -1689,15 +2435,13 @@ async def _retry_pending_text_followups(bot: Bot, limit: int = 20) -> None:
                 db.mark_pending_text_followup_sent(followup_id)
             except Exception as db_error:
                 bot_running.clear()
-                try:
+                with contextlib.suppress(Exception):
                     db.add_log(
                         "ERR-DB-504",
                         f"Telegram принял остаток текста #{followup_id}, но SQLite не смог "
                         f"удалить его из очереди ({db_error}). Парсер остановлен; "
                         "перед перезапуском проверьте канал, чтобы избежать возможного дубля.",
                     )
-                except Exception:
-                    pass
                 return
 
             db.add_log(
@@ -1880,12 +2624,10 @@ def _load_source_cursors() -> dict[str, int]:
         # key (for example, https://t.me/Channel/123). Runtime config now uses
         # canonical @usernames/peer IDs; keep the old cursor so upgrading does
         # not accidentally trigger the "first scan: latest ten posts" baseline.
-        try:
+        # A stale cursor for a removed/malformed source should not block
+        # unrelated channels. It simply will not match a valid configured source.
+        with contextlib.suppress(ValueError):
             source_key = normalize_target_chat(source_key) or source_key
-        except ValueError:
-            # A stale cursor for a removed/malformed source should not block
-            # unrelated channels. It simply will not match a valid configured source.
-            pass
 
         previous = normalized.get(source_key)
         # If legacy aliases collide, rewind to the earliest known cursor. Already
@@ -1998,7 +2740,7 @@ async def _process_one_source(
 
     def advance_cursor() -> None:
         nonlocal cursor, cursor_index
-        previous_cursor = cursor
+        previous_cursor = cursor if cursor is not None else 0
         while cursor_index < len(source_messages):
             message = source_messages[cursor_index]
             gid = message.grouped_id or f"single_{message.id}"
@@ -2006,15 +2748,25 @@ async def _process_one_source(
                 break
             cursor = message.id
             cursor_index += 1
-        if cursor > previous_cursor:
+        if cursor is not None and cursor > previous_cursor:
             _set_source_cursor(source, cursor)
+
+    # Очередь работает только в ручном режиме: в автоматическом пост
+    # публикуется сразу. Без этой проверки черновик, оставшийся от ручного
+    # режима, навсегда блокировал бы автопубликацию своих постов.
+    queue_marker_active = cfg.get("publish_mode") == "manual"
+
+    def post_has_pending_queue_entry(message_id: int | str) -> bool:
+        if not queue_marker_active:
+            return False
+        checker = getattr(db, "is_post_queued", None)
+        return callable(checker) and checker(source, message_id)
 
     for gid, messages in grouped.items():
         if not bot_running.is_set():
             break
 
-        is_post_queued = getattr(db, "is_post_queued", None)
-        if callable(is_post_queued) and is_post_queued(source, messages[0].id):
+        if post_has_pending_queue_entry(messages[0].id):
             completed_groups[gid] = True
             advance_cursor()
             continue
@@ -2029,8 +2781,7 @@ async def _process_one_source(
                 client, source, pending, cfg, bot, ai_session
             )
 
-        queued_check = getattr(db, "is_post_queued", None)
-        queued_group = callable(queued_check) and queued_check(source, messages[0].id)
+        queued_group = post_has_pending_queue_entry(messages[0].id)
         completed_groups[gid] = queued_group or all(
             db.is_published(source, message.id)
             or db.is_skipped(source, message.id)
@@ -2038,10 +2789,93 @@ async def _process_one_source(
         )
         advance_cursor()
         if not completed_groups[gid]:
-            # Keep this message available for retry and don't advance over newer IDs.
+            # Пост не удалось обработать. Считаем попытки: без этого он
+            # повторялся бы вечно и блокировал всю ленту источника — новые
+            # посты до него не доходили.
+            attempt_key = f"{source}:{messages[0].id}"
+            attempts = _POISON_ATTEMPTS.get(attempt_key, 0) + 1
+            _POISON_ATTEMPTS[attempt_key] = attempts
+            if attempts >= MAX_POST_ATTEMPTS:
+                _save_skipped_group(source, messages, "retries_exhausted")
+                db.add_log(
+                    "WARN-409",
+                    f"Пост {source}/{messages[0].id} не обработан после {attempts} попыток; "
+                    "помечен как пропущенный, чтобы не блокировать ленту источника.",
+                )
+                print(
+                    f"!!! [WARN-409] Пост {source}/{messages[0].id} не обработан "
+                    f"за {attempts} попыток; пропущен."
+                )
+                completed_groups[gid] = True
+                advance_cursor()
+                continue
+            # Оставляем пост доступным для повтора и не двигаем курсор
+            # дальше: новые посты пока не обрабатываем.
             return False
+        _POISON_ATTEMPTS.pop(f"{source}:{messages[0].id}", None)
     return False
 
+
+
+def _connection_signature(cfg: dict) -> tuple:
+    """Отпечаток настроек, при котором соединение нужно пересоздать.
+
+    Пока отпечаток тот же, соединение живёт: раньше клиент создавался
+    заново каждый круг, что переписывало файл сессии и лишний раз
+    беспокоило Telegram.
+    """
+    return (
+        str(cfg.get("bot_token") or ""),
+        str(cfg.get("api_id") or ""),
+        str(cfg.get("api_hash") or ""),
+        bool(cfg.get("use_proxy")),
+        str(cfg.get("proxy_type") or ""),
+        str(cfg.get("proxy_host") or ""),
+        str(cfg.get("proxy_port") or ""),
+        str(cfg.get("proxy_user") or ""),
+        str(cfg.get("proxy_pass") or ""),
+        str(cfg.get("mtproto_key") or ""),
+    )
+
+
+def _client_is_connected(client) -> bool:
+    """Живо ли соединение с Telegram."""
+    if client is None:
+        return False
+    connected = getattr(client, "is_connected", None)
+    if callable(connected):
+        try:
+            return bool(connected())
+        except Exception:
+            return False
+    return bool(getattr(client, "_connected", False))
+
+
+async def _close_clients(bot, client, ai_session, proxy) -> None:
+    """Аккуратно закрывает клиенты Telegram, бота и сессию ИИ."""
+    closers = []
+    if client is not None:
+        closers.append(
+            lambda current_client=client: current_client.disconnect()
+            if getattr(current_client, "_connected", False)
+            else None
+        )
+    if bot is not None and getattr(bot, "session", None):
+        closers.append(lambda current_bot=bot: current_bot.session.close())
+    elif proxy is not None and getattr(proxy, "bot_session", None) is not None:
+        closers.append(
+            lambda current_session=proxy.bot_session: current_session.close()
+        )
+    if ai_session is not None and not ai_session.closed:
+        closers.append(lambda current_ai=ai_session: current_ai.close())
+
+    for closer in closers:
+        try:
+            res = closer()
+            if asyncio.iscoroutine(res):
+                await res
+        except Exception as cleanup_error:
+            print(f"!!! [CLEANUP] Не удалось закрыть ресурс: {cleanup_error}")
 
 
 async def main() -> None:
@@ -2057,10 +2891,8 @@ async def main() -> None:
         os.makedirs(TEMP_DIR, exist_ok=True)
         warn_if_defaults()
     except Exception as startup_error:
-        try:
+        with contextlib.suppress(Exception):
             db.add_log("ERR-100", f"Парсер не смог подготовить окружение: {startup_error}")
-        except Exception:
-            pass
         print(f"!!! [ERR-100] Не удалось подготовить окружение парсера: {startup_error}")
         bot_running.clear()
         return
@@ -2087,68 +2919,161 @@ async def main() -> None:
             continue
 
         try:
-            telethon_proxy, mtproto_kwargs, bot_session = _setup_proxy(cfg)
+            proxy = _setup_proxy(cfg)
         except ProxyConfigurationError as proxy_error:
             db.add_log("ERR-302", f"Невозможно запустить парсер: {proxy_error}")
             print(f"!!! [ERR-302] {proxy_error}")
             await asyncio.sleep(SLEEP_NO_CONFIG_S)
             continue
 
-        bot = None
-        client = None
-        ai_session = None
-        need_reconnect = False
-        try:
-            bot = Bot(
-                token=cfg["bot_token"],
-                session=bot_session,
-                default=DefaultBotProperties(parse_mode="HTML"),
-            )
-            # Drain text tails left by a successful media send before scanning
-            # sources. A tail retry must never resend the corresponding media.
-            await _retry_pending_text_followups(bot)
-            if not bot_running.is_set():
-                continue
-            if mtproto_kwargs:
-                client = TelegramClient(
-                    SESSION_PATH,
-                    cfg["api_id"],
-                    cfg["api_hash"],
-                    **mtproto_kwargs,
-                )
-            else:
-                client = TelegramClient(
-                    SESSION_PATH,
-                    cfg["api_id"],
-                    cfg["api_hash"],
-                    proxy=telethon_proxy,
-                )
-            ai_session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=AI_REQUEST_TIMEOUT_S)
-            )
+    bot = None
+    client = None
+    ai_session = None
+    proxy = None
+    connection_signature = None
 
-            session_file = SESSION_PATH + ".session"
-            allow_interactive_login = _stdin_is_interactive()
-            if not os.path.exists(session_file) and not allow_interactive_login:
-                db.add_log(
-                    "ERR-203",
-                    "Сессия Telegram не найдена и интерактивный терминал недоступен. "
-                    "Запустите парсер из терминала для создания сессии или положите "
-                    "готовый .session в каталог приложения.",
+    while True:
+        if not bot_running.is_set():
+            # Парсер остановлен из панели: закрываем соединения и ждём
+            # запуска. Файл сессии остаётся целым.
+            await _close_clients(bot, client, ai_session, proxy)
+            bot = client = ai_session = proxy = None
+            connection_signature = None
+            await _wait_for_resume()
+            continue
+
+        try:
+            cfg = _load_config()
+        except Exception as e:
+            db.add_log("ERR-100", f"Ошибка чтения настроек из БД: {e}")
+            await _wait_for_db()
+            continue
+
+        if not cfg["bot_token"] or not cfg["api_id"] or not cfg["api_hash"]:
+            await _wait_for_settings()
+            continue
+
+        if not _is_valid_bot_token_format(cfg["bot_token"]):
+            db.add_log("ERR-202", "Неверный формат токена бота. Проверьте значение bot_token в настройках.")
+            print("!!! [ERR-202] Неверный формат токена бота — проверьте настройки и повторите.")
+            await asyncio.sleep(SLEEP_NO_CONFIG_S)
+            continue
+
+        signature = _connection_signature(cfg)
+        if (
+            client is None
+            or signature != connection_signature
+            or not _client_is_connected(client)
+        ):
+            # Соединение создаётся один раз и живёт между кругами. Пересоздаём
+            # его, только если сменились настройки или соединение отвалилось.
+            # Раньше клиент создавался заново каждый круг: файл сессии
+            # переписывался, а Telegram получал лишние переподключения.
+            await _close_clients(bot, client, ai_session, proxy)
+            bot = client = ai_session = proxy = None
+            connection_signature = None
+
+            try:
+                proxy = _setup_proxy(cfg)
+            except ProxyConfigurationError as proxy_error:
+                db.add_log("ERR-302", f"Невозможно запустить парсер: {proxy_error}")
+                print(f"!!! [ERR-302] {proxy_error}")
+                await asyncio.sleep(SLEEP_NO_CONFIG_S)
+                continue
+
+            try:
+                bot = Bot(
+                    token=cfg["bot_token"],
+                    session=proxy.bot_session,
+                    default=DefaultBotProperties(parse_mode="HTML"),
                 )
-                print("!!! [ERR-203] Нужна авторизация Telegram в интерактивном терминале.")
-                bot_running.clear()
+                # Drain text tails left by a successful media send before scanning
+                # sources. A tail retry must never resend the corresponding media.
+                await _retry_pending_text_followups(bot)
+                if not bot_running.is_set():
+                    continue
+                if proxy.mtproto_kwargs:
+                    client = TelegramClient(
+                        SESSION_PATH,
+                        cfg["api_id"],
+                        cfg["api_hash"],
+                        **proxy.mtproto_kwargs,
+                    )
+                else:
+                    client = TelegramClient(
+                        SESSION_PATH,
+                        cfg["api_id"],
+                        cfg["api_hash"],
+                        proxy=proxy.telethon_proxy,
+                    )
+                try:
+                    ai_session = _make_ai_session(
+                        proxy, cfg.get("ai_timeout") or AI_REQUEST_TIMEOUT_S
+                    )
+                except ProxyConfigurationError as ai_proxy_error:
+                    # Прокси для запросов к ИИ настроить не удалось. Это
+                    # ошибка настройки, а не сбой цикла: сообщаем и ждём.
+                    db.add_log("ERR-302", f"Невозможно настроить прокси для ИИ: {ai_proxy_error}")
+                    print(f"!!! [ERR-302] {ai_proxy_error}")
+                    await asyncio.sleep(SLEEP_NO_CONFIG_S)
+                    continue
+
+                session_file = SESSION_PATH + ".session"
+                allow_interactive_login = _stdin_is_interactive()
+                session_exists = await asyncio.to_thread(os.path.exists, session_file)
+                if not session_exists and not allow_interactive_login:
+                    db.add_log(
+                        "ERR-203",
+                        "Сессия Telegram не найдена и интерактивный терминал недоступен. "
+                        "Запустите парсер из терминала для создания сессии или положите "
+                        "готовый .session в каталог приложения.",
+                    )
+                    print("!!! [ERR-203] Нужна авторизация Telegram в интерактивном терминале.")
+                    bot_running.clear()
+                    continue
+                if not await _connect_authorized_client(
+                    client,
+                    allow_interactive=allow_interactive_login,
+                ):
+                    bot_running.clear()
+                    continue
+                connection_signature = signature
+            except ApiIdInvalidError:
+                db.add_log("ERR-201", "Неверный tg_api_id / tg_api_hash. Проверьте my.telegram.org.")
+                print("!!! [ERR-201] Критическая ошибка Telegram API.")
+                await _close_clients(bot, client, ai_session, proxy)
+                bot = client = ai_session = proxy = None
+                await asyncio.sleep(SLEEP_API_ERROR_S)
                 continue
-            if not await _connect_authorized_client(
-                client,
-                allow_interactive=allow_interactive_login,
-            ):
-                bot_running.clear()
+            except FloodWaitError as fwe:
+                db.add_log("ERR-204", f"Telegram выдал FloodWait на {fwe.seconds} сек.")
+                print(f"!!! [ERR-204] FloodWait {fwe.seconds} сек...")
+                await _close_clients(bot, client, ai_session, proxy)
+                bot = client = ai_session = proxy = None
+                for _ in range(fwe.seconds):
+                    if not bot_running.is_set():
+                        break
+                    await asyncio.sleep(SLEEP_FLOOD_POLL_S)
                 continue
+            except Exception as connect_error:
+                err_msg = str(connect_error).lower()
+                if "proxy" in err_msg or "connection" in err_msg:
+                    db.add_log("ERR-301", f"Сеть/прокси: {connect_error}")
+                    print("!!! [ERR-301] Прокси-сеть.")
+                else:
+                    db.add_log("ERR-100", f"Критический сбой подключения: {connect_error}")
+                    print(f"!!! КРИТИЧЕСКИЙ СБОЙ: {connect_error}")
+                await _close_clients(bot, client, ai_session, proxy)
+                bot = client = ai_session = proxy = None
+                await asyncio.sleep(SLEEP_API_ERROR_S)
+                continue
+
             # Вход в Telegram выполнен — консоль больше не нужна.
             print("--> [СИСТЕМА] Вход в Telegram выполнен. Окно консоли скрывается, "
                   "приложение продолжает работать.")
             _hide_console_window()
+
+        try:
             print("\n=== КРУГ ОБХОДА ИСТОЧНИКОВ НАЧАТ ===")
             # Отложенные посты публикуются независимо от наличия новых в ленте.
             try:
@@ -2168,15 +3093,16 @@ async def main() -> None:
                 except Exception as exc:
                     db.add_log("WARN-513", f"Автоочистка медиа не удалась: {exc}")
             for source in cfg["sources"]:
-                if await _process_one_source(client, source, cfg, bot, ai_session):
-                    need_reconnect = True
-                    break
+                await _process_one_source(client, source, cfg, bot, ai_session)
 
-            if bot_running.is_set() and not need_reconnect:
+            if bot_running.is_set():
                 print(f"--> Круг завершён. Засыпаю на {cfg['poll_delay']} секунд...")
         except ApiIdInvalidError:
             db.add_log("ERR-201", "Неверный tg_api_id / tg_api_hash. Проверьте my.telegram.org.")
             print("!!! [ERR-201] Критическая ошибка Telegram API.")
+            await _close_clients(bot, client, ai_session, proxy)
+            bot = client = ai_session = proxy = None
+            connection_signature = None
             await asyncio.sleep(SLEEP_API_ERROR_S)
         except FloodWaitError as fwe:
             db.add_log("ERR-204", f"Telegram выдал FloodWait на {fwe.seconds} сек.")
@@ -2185,8 +3111,7 @@ async def main() -> None:
                 if not bot_running.is_set():
                     break
                 await asyncio.sleep(SLEEP_FLOOD_POLL_S)
-            if not bot_running.is_set():
-                continue
+            continue
         except Exception as loop_error:
             err_msg = str(loop_error).lower()
             if "proxy" in err_msg or "connection" in err_msg:
@@ -2196,28 +3121,6 @@ async def main() -> None:
                 db.add_log("ERR-100", f"Критический сбой цикла: {loop_error}")
                 print(f"!!! КРИТИЧЕСКИЙ СБОЙ: {loop_error}")
             await asyncio.sleep(SLEEP_API_ERROR_S)
-        finally:
-            closers = []
-            if client is not None:
-                closers.append(
-                    lambda: client.disconnect()
-                    if getattr(client, "_connected", False)
-                    else None
-                )
-            if bot is not None and getattr(bot, "session", None):
-                closers.append(lambda: bot.session.close())
-            elif bot_session is not None:
-                closers.append(lambda: bot_session.close())
-            if ai_session is not None and not ai_session.closed:
-                closers.append(lambda: ai_session.close())
-
-            for closer in closers:
-                try:
-                    res = closer()
-                    if asyncio.iscoroutine(res):
-                        await res
-                except Exception as cleanup_error:
-                    print(f"!!! [CLEANUP] Не удалось закрыть ресурс: {cleanup_error}")
 
         if not bot_running.is_set():
             continue
@@ -2231,7 +3134,7 @@ async def main() -> None:
 # ЗАПУСК
 # ==========================================
 def start_api_server() -> None:
-    from config import API_HOST, API_PORT, API_LOG_LEVEL
+    from config import API_HOST, API_LOG_LEVEL, API_PORT
     uvicorn.run(app, host=API_HOST, port=API_PORT, log_level=API_LOG_LEVEL)
 
 
@@ -2241,10 +3144,16 @@ def open_browser_delayed() -> None:
 
 
 if __name__ == "__main__":
-    from startup import run_startup_bootstrap
+    from startup import ensure_single_instance, run_startup_bootstrap
 
     print("--> [СИСТЕМА] Инициализация графического интерфейса и API...")
     run_startup_bootstrap()
+
+    # Вторая копия закрывается: две копии делят файл сессии Telegram, и
+    # Telegram признаёт ключ использованным с двух адресов, после чего
+    # сессию приходится пересоздавать вручную.
+    if not ensure_single_instance():
+        raise SystemExit(1)
 
     threading.Thread(target=start_api_server, daemon=True).start()
     if BROWSER_OPEN_ON_START:
@@ -2257,10 +3166,8 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except BaseException as top_error:
-        try:
+        with contextlib.suppress(Exception):
             db.add_log("ERR-999", f"Необработанное исключение верхнего уровня: {top_error}")
-        except Exception:
-            pass
         print(f"!!! [ERR-999] Критический сбой верхнего уровня: {top_error}")
         import traceback
         traceback.print_exc()
