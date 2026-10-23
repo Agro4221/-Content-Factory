@@ -170,16 +170,12 @@ def _migration_v2(db: DB) -> None:
 
 
 def _migration_v3(db: DB) -> None:
-    """v3: reserved for future modules.
-
-    The modules were removed from the project, so the migration creates
-    nothing. The version number is kept so existing databases stay valid.
-    """
+    """Номер версии сохранён для совместимости с существующими базами данных."""
     return
 
 
 def _migration_v4(db: DB) -> None:
-    """v4: reserved - the reviews module was removed, schema is unchanged."""
+    """Структура базы данных не меняется; номер версии сохранён для совместимости."""
     return
 
 
@@ -197,7 +193,7 @@ def _migration_v5(db: DB) -> None:
 
 
 def _migration_v6(db: DB) -> None:
-    """v6: normalize legacy UTC post timestamps to the local convention used by stats."""
+    """Переводит старые временные метки публикаций к локальному времени для статистики."""
     if db._get_schema_version() >= 6:
         return
 
@@ -445,11 +441,11 @@ class DB:
             self.conn.execute("PRAGMA foreign_keys=ON")
 
     def _ensure_created_at_columns(self) -> None:
-        """Safely add timestamp columns before migrations touch populated legacy tables.
+        """Добавляет временные метки до запуска миграций над заполненными таблицами.
 
-        SQLite can reject ALTER TABLE ... DEFAULT CURRENT_TIMESTAMP when the
-        table already contains rows. Add the column without a default first;
-        timestamp backfill and indexes are safe to rerun.
+        SQLite может отклонить ALTER TABLE ... DEFAULT CURRENT_TIMESTAMP,
+        если таблица уже содержит строки. Сначала добавляем столбец без
+        значения по умолчанию; заполнение меток и создание индексов можно повторять.
         """
         table_indexes = {
             "published_posts": (
