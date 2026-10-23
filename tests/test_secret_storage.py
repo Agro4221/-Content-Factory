@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 import secrets_store
@@ -265,8 +267,6 @@ def test_plain_secret_with_dpapi_looking_prefix_is_still_encrypted(tmp_path) -> 
     """Похожий на оболочку DPAPI текст не пропускается без проверки шифротекста."""
     if not secrets_store.supported():
         pytest.skip("DPAPI доступен только в Windows")
-    import base64
-
     db = make_db(tmp_path)
     try:
         original = secrets_store.PREFIX + base64.b64encode(b"not-a-dpapi-blob").decode("ascii")
@@ -274,6 +274,30 @@ def test_plain_secret_with_dpapi_looking_prefix_is_still_encrypted(tmp_path) -> 
         stored = raw_value(db, "bot_token")
         assert stored != original
         assert original not in stored
+        assert db.get_setting("bot_token") == original
+    finally:
+        db.conn.close()
+
+
+def test_migration_encrypts_legacy_secret_with_dpapi_looking_prefix(tmp_path) -> None:
+    """Старый plaintext с префиксом DPAPI не должен быть пропущен миграцией."""
+    if not secrets_store.supported():
+        pytest.skip("DPAPI доступен только в Windows")
+    db = make_db(tmp_path)
+    original = secrets_store.PREFIX + base64.b64encode(b"not-a-dpapi-blob").decode("ascii")
+    try:
+        db.conn.execute(
+            "INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)",
+            ("bot_token", original),
+        )
+        assert raw_value(db, "bot_token") == original
+
+        assert db.migrate_plaintext_secrets() == 1
+
+        stored = raw_value(db, "bot_token")
+        assert stored != original
+        assert original not in stored
+        assert secrets_store.has_dpapi_blob_signature(stored)
         assert db.get_setting("bot_token") == original
     finally:
         db.conn.close()
