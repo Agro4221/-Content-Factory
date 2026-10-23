@@ -739,7 +739,7 @@ class DB:
             return ""
 
     def _encode_setting(self, key: str, value: Any) -> str:
-        """Encrypt a secret before writing it; never store the original on failure."""
+        """Шифрует секрет перед записью; при ошибке исходное значение не сохраняется."""
         text = "" if value is None else str(value)
         if key not in SECRET_SETTING_KEYS or not text:
             return text
