@@ -1,18 +1,11 @@
-"""
-SQLite-обёртка для проекта Content Factory.
+"""SQLite-хранилище и слой доступа к данным Content Factory.
 
-Особенности:
-  - Singleton через SharedDB: одна коннекция на всё приложение, не плодим
-    PRAGMA-инициализации и не держим лишние хендлы.
-  - WAL-режим + busy_timeout + threading.Lock: безопасная конкурентная запись
-    из FastAPI-потока и asyncio-цикла бота.
-  - Составной ключ поста (source:post_id) — иначе пост с одинаковым message.id
-    из разных каналов-доноров считался бы одним и тем же.
-  - **Версионированная схема через PRAGMA user_version + миграции.**
-    Каждое изменение схемы — новая запись в _MIGRATIONS с номером версии.
-    При открытии БД автоматически применяются миграции от текущей до
-    последней версии. Идемпотентно, безопасно для отката к старой версии.
-  - **Секреты шифруются** системным хранилищем ОС (см. secrets_store.py).
+Использует общий экземпляр ``SharedDB``, блокировку для конкурентного доступа,
+WAL и ``busy_timeout``. Схема версионируется через ``PRAGMA user_version``;
+миграции перечислены в ``_MIGRATIONS`` и применяются при инициализации базы.
+Посты идентифицируются парой ``source + post_id``, чтобы сообщения из разных
+каналов не конфликтовали. Секреты шифруются средствами ОС через
+``secrets_store.py``.
 """
 from __future__ import annotations
 
@@ -339,8 +332,8 @@ MIGRATIONS.append((10, _migration_v10))
 CURRENT_SCHEMA_VERSION: int = max(v for v, _ in MIGRATIONS)
 
 
-# Дефолты вынесены в константу — DRY и легче расширять.
-# Только то, что бот использует прямо сейчас.
+# Значения по умолчанию собраны в одном месте для упрощения поддержки.
+# Список используется при инициализации настроек базы данных.
 _DEFAULT_SETTINGS: dict[str, str] = {
     # --- Telegram (глобально) ---
     "tg_api_id": "",
@@ -640,8 +633,8 @@ class DB:
                     "Legacy published_posts migration failed; refusing to run with an incompatible database."
                 ) from e
 
-        # Та же история для skipped_posts — на случай, если в БД она была создана
-        # ещё до моего фикса (там post_id как PK).
+        # Аналогичная миграция для skipped_posts, если таблица была создана до
+        # введения post_key и использовала post_id как первичный ключ.
         try:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(skipped_posts)").fetchall()]
         except sqlite3.Error as exc:
