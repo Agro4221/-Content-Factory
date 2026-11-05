@@ -104,4 +104,12 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" "dist/Parser.exe" "dist/Parser.exe.sha256" --title "Content Factory $env:GITHUB_REF_NAME" --generate-notes --verify-tag
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $assets = @("dist/Parser.exe", "dist/Parser.exe.sha256")
+          gh release view "$tag" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "$tag" @assets --clobber
+          } else {
+            gh release create "$tag" @assets --title "Content Factory $tag" --generate-notes --verify-tag
+          }
